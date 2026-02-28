@@ -16,7 +16,7 @@ from session_manager import sessions
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("AngelOne Portfolio")
+mcp = FastMCP("AngelOne Portfolio", host="0.0.0.0")
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

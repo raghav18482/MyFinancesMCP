@@ -135,6 +135,7 @@ async def dashboard(request: Request):
                     holdings_list.append(row)
                     total_invested += row.qty * row.avg_price
                     current_value += row.qty * row.ltp
+                holdings_list.sort(key=lambda r: (r.qty * r.ltp) - (r.qty * r.avg_price), reverse=True)
                 total_pnl = current_value - total_invested
                 total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
         except Exception as e:
@@ -200,6 +201,8 @@ async def holdings_page(request: Request):
                 current_value += row.qty * row.ltp
     except Exception as e:
         ctx["error"] = str(e)
+
+    holdings_list.sort(key=lambda r: (r.qty * r.ltp) - (r.qty * r.avg_price), reverse=True)
 
     total_pnl = current_value - total_invested
     total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
