@@ -24,6 +24,21 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 └── .dockerignore
 ```
 
+## Getting Your Angel One API Credentials
+
+You need 4 credentials to use MyFinanceMCP. Generate them from the **Angel One SmartAPI** portal:
+
+**[https://smartapi.angelbroking.com/signin](https://smartapi.angelbroking.com/signin)**
+
+| Credential | How to get it |
+|---|---|
+| **API Key** | Sign in to SmartAPI → My Apps → Create App → copy the API Key |
+| **Client ID** | Your Angel One account ID (e.g. `AB1234`) — visible on the SmartAPI dashboard or your Angel One app |
+| **PIN** | The 4-digit trading PIN you use to log into Angel One |
+| **TOTP Secret** | SmartAPI → My Profile → Enable TOTP → copy the Base32 secret key |
+
+> **Note:** The TOTP secret is only shown once when you enable it. Save it immediately.
+
 ## Run Locally
 
 ```bash
@@ -55,17 +70,24 @@ Then call the `login` tool with your Angel One credentials to start a session.
 
 ### Claude Desktop
 
-Add to your Claude Desktop config:
+Add to your `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "angelone-portfolio": {
-      "url": "http://localhost:8000/mcp/sse"
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp/sse"]
     }
   }
 }
 ```
+
+### ChatGPT Desktop
+
+In ChatGPT Desktop, go to **Settings → Beta features → MCP Servers → Add Server** and enter:
+- **Command:** `npx`
+- **Arguments:** `-y mcp-remote http://localhost:8000/mcp/sse`
 
 ## Deploy to Railway (Recommended)
 
