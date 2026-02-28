@@ -1,0 +1,9 @@
+smartapi-python
+pyotp
+mcp
+python-dotenv
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+itsdangerous

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Holdings{% endblock %}
+{% block content %}
+<div class="container">
+  <h1 style="margin-bottom:1.25rem;font-size:1.3rem">All Holdings</h1>
+
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  {% if holdings %}
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="label">Total Invested</div>
+      <div class="value">Rs.{{ "{:,.2f}".format(total_invested) }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Current Value</div>
+      <div class="value">Rs.{{ "{:,.2f}".format(current_value) }}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Total P&amp;L</div>
+      <div class="value {{ 'positive' if total_pnl >= 0 else 'negative' }}">
+        Rs.{{ "{:,.2f}".format(total_pnl) }} ({{ "{:.2f}".format(total_pnl_pct) }}%)
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>LTP</th><th>Invested</th><th>Current</th><th>P&amp;L</th><th>P&amp;L %</th></tr>
+        </thead>
+        <tbody>
+          {% for h in holdings %}
+          {% set invested = h.qty * h.avg_price %}
+          {% set current = h.qty * h.ltp %}
+          {% set pnl = current - invested %}
+          {% set pnl_pct = (pnl / invested * 100) if invested else 0 %}
+          <tr>
+            <td>{{ h.symbol }}</td>
+            <td class="num">{{ h.qty }}</td>
+            <td class="num">{{ "{:.2f}".format(h.avg_price) }}</td>
+            <td class="num">{{ "{:.2f}".format(h.ltp) }}</td>
+            <td class="num">{{ "{:,.2f}".format(invested) }}</td>
+            <td class="num">{{ "{:,.2f}".format(current) }}</td>
+            <td class="num {{ 'positive' if pnl >= 0 else 'negative' }}">{{ "{:,.2f}".format(pnl) }}</td>
+            <td class="num {{ 'positive' if pnl_pct >= 0 else 'negative' }}">{{ "{:.2f}".format(pnl_pct) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card"><p style="color:var(--muted)">No holdings found in your portfolio.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

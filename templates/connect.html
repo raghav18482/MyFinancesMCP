@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Connect MCP{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="guide">
+    <h1>Connect MyFinanceMCP to Your AI Assistant</h1>
+    <p class="guide-intro">Follow the steps below to connect this MCP server to Claude Desktop, ChatGPT Desktop, Cursor, or any MCP-compatible client. Once connected, you can track your Angel One portfolio and even place trades through your AI assistant.</p>
+
+    <!-- Prerequisites -->
+    <div class="card guide-section">
+      <h2>Before You Start</h2>
+      <ul class="checklist">
+        <li>Your Angel One <strong>API Key</strong>, <strong>Client ID</strong>, <strong>PIN</strong>, and <strong>TOTP Secret</strong> &mdash; <a href="/setup">learn how to generate them</a></li>
+        <li><strong>Node.js</strong> installed (required for Claude Desktop &amp; ChatGPT Desktop &mdash; <a href="https://nodejs.org" target="_blank">download here</a>)</li>
+      </ul>
+    </div>
+
+    <!-- Step 1: Claude Desktop -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">1</span>
+        <h2>Claude Desktop</h2>
+      </div>
+
+      <div class="step-body">
+        <h3>Find your config file</h3>
+        <p>Open the Claude Desktop config file at:</p>
+        <div class="code-block">
+          <div class="code-label">macOS</div>
+          <pre><code>~/Library/Application Support/Claude/claude_desktop_config.json</code></pre>
+        </div>
+        <div class="code-block">
+          <div class="code-label">Windows</div>
+          <pre><code>%APPDATA%\Claude\claude_desktop_config.json</code></pre>
+        </div>
+
+        <h3>Add the MCP server</h3>
+        <p>Add the following to the <code>mcpServers</code> object in the config file:</p>
+        <div class="code-block">
+          <div class="code-label">claude_desktop_config.json</div>
+          <pre><code>{
+  "mcpServers": {
+    "angelone-portfolio": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "<span class="highlight">{{ server_url }}/mcp/sse</span>"]
+    }
+  }
+}</code></pre>
+        </div>
+        <div class="guide-note">
+          <strong>Note:</strong> Claude Desktop doesn't support SSE natively, so we use <code>mcp-remote</code> as a bridge. It is installed automatically via <code>npx</code>.
+        </div>
+
+        <h3>Restart Claude Desktop</h3>
+        <p>Quit Claude Desktop completely and reopen it. You should see a hammer icon indicating MCP tools are available.</p>
+
+        <h3>Login</h3>
+        <p>In your first message, ask Claude to log in with your credentials:</p>
+        <div class="code-block">
+          <div class="code-label">Example prompt</div>
+          <pre><code>Log in to my Angel One account with these credentials:
+- API Key: YOUR_API_KEY
+- Client ID: YOUR_CLIENT_ID
+- Password: YOUR_PIN
+- TOTP Secret: YOUR_TOTP_SECRET</code></pre>
+        </div>
+        <p>Claude will call the <code>login</code> tool, and then you can ask things like <em>"Show my portfolio summary"</em> or <em>"What are my holdings?"</em></p>
+      </div>
+    </div>
+
+    <!-- Step 2: ChatGPT Desktop -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">2</span>
+        <h2>ChatGPT Desktop</h2>
+      </div>
+
+      <div class="step-body">
+        <h3>Open ChatGPT Settings</h3>
+        <p>In ChatGPT Desktop, go to <strong>Settings &rarr; Beta features</strong> and enable <strong>MCP Servers</strong>.</p>
+
+        <h3>Add the MCP server</h3>
+        <p>Click <strong>"Add Server"</strong>, choose <strong>"Command (stdio)"</strong> and enter:</p>
+        <div class="code-block">
+          <div class="code-label">Command</div>
+          <pre><code>npx</code></pre>
+        </div>
+        <div class="code-block">
+          <div class="code-label">Arguments</div>
+          <pre><code>-y mcp-remote <span class="highlight">{{ server_url }}/mcp/sse</span></code></pre>
+        </div>
+        <div class="guide-note">
+          <strong>Note:</strong> ChatGPT Desktop uses stdio, so <code>mcp-remote</code> bridges it to the SSE server &mdash; same as Claude Desktop.
+        </div>
+
+        <h3>Login &amp; use</h3>
+        <p>Start a new chat and ask ChatGPT to log in with your Angel One credentials, then ask about your portfolio, holdings, or place trades.</p>
+      </div>
+    </div>
+
+    <!-- Step 3: Cursor IDE -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">3</span>
+        <h2>Cursor IDE</h2>
+      </div>
+
+      <div class="step-body">
+        <h3>Add the MCP config</h3>
+        <p>Create or edit <code>.cursor/mcp.json</code> in your project root:</p>
+        <div class="code-block">
+          <div class="code-label">.cursor/mcp.json</div>
+          <pre><code>{
+  "mcpServers": {
+    "angelone-portfolio": {
+      "url": "<span class="highlight">{{ server_url }}/mcp/sse</span>"
+    }
+  }
+}</code></pre>
+        </div>
+        <div class="guide-note">
+          <strong>Note:</strong> Cursor supports the <code>url</code> field directly &mdash; no bridge needed.
+        </div>
+
+        <h3>Login &amp; use</h3>
+        <p>Open Cursor's AI chat and ask it to log in with your Angel One credentials, then use any portfolio or trading tool.</p>
+      </div>
+    </div>
+
+    <!-- Step 4: Other MCP Clients -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">4</span>
+        <h2>Other MCP Clients</h2>
+      </div>
+      <div class="step-body">
+        <p>Any MCP-compatible client that supports SSE transport can connect using:</p>
+        <div class="code-block">
+          <pre><code>{{ server_url }}/mcp/sse</code></pre>
+        </div>
+        <p>If your client only supports stdio, use <code>mcp-remote</code> as a bridge:</p>
+        <div class="code-block">
+          <pre><code>npx -y mcp-remote <span class="highlight">{{ server_url }}/mcp/sse</span></code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Available Tools -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">5</span>
+        <h2>Available Tools</h2>
+      </div>
+      <div class="step-body">
+        <p>Once connected and logged in, your AI assistant can use these tools:</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Tool</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>login</code></td><td>Authenticate with Angel One (must call first)</td></tr>
+              <tr><td><code>logout</code></td><td>Discard session credentials from memory</td></tr>
+              <tr><td><code>portfolio_summary</code></td><td>Overall portfolio: invested, current value, P&amp;L</td></tr>
+              <tr><td><code>get_holdings</code></td><td>All stock holdings with P&amp;L per stock</td></tr>
+              <tr><td><code>get_positions</code></td><td>Open intraday / delivery positions</td></tr>
+              <tr><td><code>get_funds</code></td><td>Available cash, margin, and net value</td></tr>
+              <tr><td><code>get_order_book</code></td><td>Today's orders and their status</td></tr>
+              <tr><td><code>get_trade_book</code></td><td>Executed trades for today</td></tr>
+              <tr><td><code>search_scrip</code></td><td>Search stocks by name or symbol</td></tr>
+              <tr><td><code>get_ltp</code></td><td>Last traded price for a stock</td></tr>
+              <tr><td><code>get_candle_data</code></td><td>Historical OHLC candle data</td></tr>
+              <tr><td><code>place_order</code></td><td>Place a buy/sell order (real money!)</td></tr>
+              <tr><td><code>modify_order</code></td><td>Modify an existing open order</td></tr>
+              <tr><td><code>cancel_order</code></td><td>Cancel an open order</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Security -->
+    <div class="card guide-section">
+      <h2>Security</h2>
+      <ul class="checklist">
+        <li>Credentials are <strong>never stored on disk</strong> &mdash; they live only in server memory</li>
+        <li>Sessions <strong>auto-expire after 8 hours</strong></li>
+        <li>All traffic goes over <strong>HTTPS</strong> when deployed (Railway/Render provide TLS)</li>
+        <li>You can call <code>logout</code> at any time to immediately discard your session</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<div class="hero">
+  <h1>Your <span>Angel One</span> Portfolio, Anywhere</h1>
+  <p>Track your holdings, positions, and P&amp;L in real time. Connect via the web dashboard or through Claude Desktop, ChatGPT, or Cursor using MCP.</p>
+  <div class="cta">
+    <a href="/login" class="btn btn-primary" style="width:auto;padding:.7rem 2rem">Get Started</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="features">
+    <div class="feature">
+      <h3>Real-Time Portfolio</h3>
+      <p>View your holdings, positions, funds, and P&amp;L updated live from Angel One.</p>
+    </div>
+    <div class="feature">
+      <h3>MCP Compatible</h3>
+      <p>Connect from Claude Desktop, ChatGPT, Cursor, or any MCP client via SSE transport.</p>
+    </div>
+    <div class="feature">
+      <h3>Zero Storage</h3>
+      <p>Your credentials are held in memory only for the session. Nothing is saved to disk.</p>
+    </div>
+    <div class="feature">
+      <h3>Trade from AI</h3>
+      <p>Place, modify, and cancel orders directly through your AI assistant via MCP tools.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

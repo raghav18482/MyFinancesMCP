@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}MyFinance{% endblock %} — AngelOne Portfolio Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  {% block nav %}
+  <nav>
+    <div class="inner">
+      <a class="brand" href="/">MyFinance<span>MCP</span></a>
+      <div class="nav-links">
+        {% if logged_in %}
+        <a href="/dashboard" class="{{ 'active' if active == 'dashboard' }}">Dashboard</a>
+        <a href="/holdings" class="{{ 'active' if active == 'holdings' }}">Holdings</a>
+        <a href="/positions" class="{{ 'active' if active == 'positions' }}">Positions</a>
+        <a href="/orders" class="{{ 'active' if active == 'orders' }}">Orders</a>
+        <form action="/logout" method="post" style="display:inline">
+          <button type="submit" class="btn btn-sm btn-danger">Logout</button>
+        </form>
+        {% else %}
+        <a href="/setup" class="{{ 'active' if active == 'setup' }}">Setup Guide</a>
+        <a href="/connect" class="{{ 'active' if active == 'connect' }}">Connect MCP</a>
+        <a href="/login">Login</a>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+  {% endblock %}
+
+  <main>{% block content %}{% endblock %}</main>
+
+  <footer>MyFinanceMCP &mdash; Credentials are never stored. Sessions expire after 8 hours.</footer>
+</body>
+</html>

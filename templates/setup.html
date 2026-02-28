@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Setup Guide{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="guide">
+
+    <!-- Hero -->
+    <div class="setup-hero">
+      <div class="setup-hero-badge">Setup Guide</div>
+      <h1>Get Your Angel One API Credentials</h1>
+      <p>To use MyFinanceMCP &mdash; whether through the web dashboard, Claude, ChatGPT, or Cursor &mdash; you need 4 credentials from Angel One's SmartAPI portal. This guide walks you through generating each one.</p>
+    </div>
+
+    <!-- Quick overview cards -->
+    <div class="cred-overview">
+      <div class="cred-card">
+        <div class="cred-icon">1</div>
+        <div class="cred-name">API Key</div>
+        <div class="cred-desc">Identifies your app</div>
+      </div>
+      <div class="cred-card">
+        <div class="cred-icon">2</div>
+        <div class="cred-name">Client ID</div>
+        <div class="cred-desc">Your account ID</div>
+      </div>
+      <div class="cred-card">
+        <div class="cred-icon">3</div>
+        <div class="cred-name">PIN</div>
+        <div class="cred-desc">Your trading PIN</div>
+      </div>
+      <div class="cred-card">
+        <div class="cred-icon">4</div>
+        <div class="cred-name">TOTP Secret</div>
+        <div class="cred-desc">For 2FA login</div>
+      </div>
+    </div>
+
+    <!-- Step 1 -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">1</span>
+        <h2>Sign in to SmartAPI</h2>
+      </div>
+      <div class="step-body">
+        <p>Open the Angel One SmartAPI portal and log in with your Angel One trading account credentials.</p>
+        <a href="https://smartapi.angelbroking.com/signin" target="_blank" class="btn btn-primary" style="width:auto;padding:.65rem 1.5rem;margin:.75rem 0">
+          Open SmartAPI Portal &rarr;
+        </a>
+        <p>If you don't have an Angel One account yet, you'll need to <a href="https://www.angelone.in/open-demat-account" target="_blank">open a Demat account</a> first.</p>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">2</span>
+        <h2>Create an App &amp; Get Your API Key</h2>
+      </div>
+      <div class="step-body">
+        <p>Once logged in to SmartAPI:</p>
+        <div class="step-list">
+          <div class="step-item">
+            <span class="step-bullet">a</span>
+            <div>Go to <strong>"My Apps"</strong> in the left sidebar</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">b</span>
+            <div>Click <strong>"Create App"</strong></div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">c</span>
+            <div>Fill in the details:
+              <ul style="margin-top:.35rem;padding-left:1.25rem;color:var(--muted)">
+                <li><strong>App Name:</strong> anything you like (e.g. "MyFinanceMCP")</li>
+                <li><strong>App Type:</strong> select <strong>"Trading APIs"</strong></li>
+                <li><strong>Redirect URL:</strong> enter <code>https://localhost</code></li>
+              </ul>
+            </div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">d</span>
+            <div>Click <strong>Submit</strong> &mdash; your <strong>API Key</strong> will appear on the app details page. Copy it.</div>
+          </div>
+        </div>
+        <div class="cred-result">
+          <span class="cred-result-label">You now have</span>
+          <span class="cred-result-value">API Key</span>
+          <span class="cred-result-example">e.g. <code>4XDUeA4C</code></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">3</span>
+        <h2>Find Your Client ID</h2>
+      </div>
+      <div class="step-body">
+        <p>Your Client ID is your Angel One <strong>account number</strong>. You already have this &mdash; it's the ID you use to log in.</p>
+        <p>You can find it in any of these places:</p>
+        <div class="step-list">
+          <div class="step-item">
+            <span class="step-bullet">&bull;</span>
+            <div>Top-right corner of the SmartAPI dashboard after login</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">&bull;</span>
+            <div>Your Angel One mobile app &rarr; Profile section</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">&bull;</span>
+            <div>The welcome email you received when you opened your account</div>
+          </div>
+        </div>
+        <div class="cred-result">
+          <span class="cred-result-label">You now have</span>
+          <span class="cred-result-value">Client ID</span>
+          <span class="cred-result-example">e.g. <code>AB1234</code></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">4</span>
+        <h2>Your Trading PIN</h2>
+      </div>
+      <div class="step-body">
+        <p>This is the <strong>numeric PIN</strong> you use to log into the Angel One app or website. It's typically a 4-digit number that you set when you created your account.</p>
+        <div class="guide-note">
+          If you've forgotten your PIN, you can reset it from the Angel One app under <strong>Settings &rarr; Security &rarr; Change PIN</strong>.
+        </div>
+        <div class="cred-result">
+          <span class="cred-result-label">You now have</span>
+          <span class="cred-result-value">PIN</span>
+          <span class="cred-result-example">e.g. <code>1234</code></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">5</span>
+        <h2>Generate Your TOTP Secret</h2>
+      </div>
+      <div class="step-body">
+        <p>TOTP (Time-based One-Time Password) is needed for secure 2FA authentication. Here's how to enable it:</p>
+        <div class="step-list">
+          <div class="step-item">
+            <span class="step-bullet">a</span>
+            <div>In the SmartAPI portal, go to <strong>"My Profile"</strong> or click your name in the top-right</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">b</span>
+            <div>Look for <strong>"Enable TOTP"</strong> or <strong>"External TOTP"</strong> option</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">c</span>
+            <div>Click <strong>"Enable"</strong> &mdash; a <strong>Base32 secret key</strong> will be displayed (a long alphanumeric string)</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">d</span>
+            <div><strong>Copy this secret immediately</strong> and save it somewhere safe</div>
+          </div>
+        </div>
+        <div class="guide-note" style="border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.06)">
+          <strong>Important:</strong> The TOTP secret is only shown <strong>once</strong> when you enable it. If you lose it, you'll have to disable TOTP and re-enable it to get a new one. Save it now.
+        </div>
+        <div class="cred-result">
+          <span class="cred-result-label">You now have</span>
+          <span class="cred-result-value">TOTP Secret</span>
+          <span class="cred-result-example">e.g. <code>FP4O3EVUYXZ5Q3WTF6I7...</code></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summary -->
+    <div class="card guide-section">
+      <h2 style="color:var(--text)">All Set!</h2>
+      <p style="color:var(--muted);font-size:.88rem;margin-bottom:1rem">You should now have all 4 credentials. Here's a quick reference:</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Credential</th><th>Where You Got It</th><th>Looks Like</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>API Key</strong></td><td>SmartAPI &rarr; My Apps &rarr; Your App</td><td><code>4XDUeA4C</code></td></tr>
+            <tr><td><strong>Client ID</strong></td><td>Your Angel One account number</td><td><code>AB1234</code></td></tr>
+            <tr><td><strong>PIN</strong></td><td>Your trading PIN</td><td><code>1234</code></td></tr>
+            <tr><td><strong>TOTP Secret</strong></td><td>SmartAPI &rarr; Profile &rarr; Enable TOTP</td><td><code>FP4O3EVU...</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="setup-next-steps">
+        <p>Now you can use these credentials to:</p>
+        <div class="next-step-cards">
+          <a href="/login" class="next-step-card">
+            <div class="next-step-icon">&#9654;</div>
+            <div>
+              <strong>Use the Web Dashboard</strong>
+              <span>Log in and view your portfolio right here in the browser</span>
+            </div>
+          </a>
+          <a href="/connect" class="next-step-card">
+            <div class="next-step-icon">&#9881;</div>
+            <div>
+              <strong>Connect via MCP</strong>
+              <span>Set up Claude, ChatGPT, or Cursor to manage your portfolio with AI</span>
+            </div>
+          </a>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

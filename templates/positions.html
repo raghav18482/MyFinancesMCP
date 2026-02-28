@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Positions{% endblock %}
+{% block content %}
+<div class="container">
+  <h1 style="margin-bottom:1.25rem;font-size:1.3rem">Open Positions</h1>
+
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  {% if positions %}
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="label">Total Day P&amp;L</div>
+      <div class="value {{ 'positive' if total_pnl >= 0 else 'negative' }}">
+        Rs.{{ "{:,.2f}".format(total_pnl) }}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="label">Open Positions</div>
+      <div class="value">{{ positions|length }}</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Symbol</th><th>Product</th><th>Net Qty</th><th>Buy Avg</th><th>Sell Avg</th><th>LTP</th><th>P&amp;L</th></tr>
+        </thead>
+        <tbody>
+          {% for p in positions %}
+          <tr>
+            <td>{{ p.symbol }}</td>
+            <td>{{ p.product }}</td>
+            <td class="num">{{ p.net_qty }}</td>
+            <td class="num">{{ "{:.2f}".format(p.buy_avg) }}</td>
+            <td class="num">{{ "{:.2f}".format(p.sell_avg) }}</td>
+            <td class="num">{{ "{:.2f}".format(p.ltp) }}</td>
+            <td class="num {{ 'positive' if p.pnl >= 0 else 'negative' }}">{{ "{:,.2f}".format(p.pnl) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card"><p style="color:var(--muted)">No open positions today.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

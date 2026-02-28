@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Orders{% endblock %}
+{% block content %}
+<div class="container">
+  <h1 style="margin-bottom:1.25rem;font-size:1.3rem">Today's Orders</h1>
+
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  {% if orders %}
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Order ID</th><th>Symbol</th><th>Type</th><th>Qty</th><th>Price</th><th>Status</th><th>Time</th></tr>
+        </thead>
+        <tbody>
+          {% for o in orders %}
+          <tr>
+            <td>{{ o.orderid }}</td>
+            <td>{{ o.symbol }}</td>
+            <td>{{ o.txn_type }}</td>
+            <td class="num">{{ o.qty }}</td>
+            <td class="num">{{ "{:.2f}".format(o.price) }}</td>
+            <td>{{ o.status }}</td>
+            <td>{{ o.time }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card"><p style="color:var(--muted)">No orders placed today.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

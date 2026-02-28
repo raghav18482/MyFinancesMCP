@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="form-card card">
+    <h1>Connect to Angel One</h1>
+    <p class="sub">Enter your credentials to view your portfolio. They are held in memory only and discarded when you log out or the session expires.</p>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <div class="field">
+        <label for="api_key">API Key</label>
+        <input type="text" id="api_key" name="api_key" required placeholder="Your Angel One API key">
+      </div>
+      <div class="field">
+        <label for="client_id">Client ID</label>
+        <input type="text" id="client_id" name="client_id" required placeholder="e.g. AB1234">
+      </div>
+      <div class="field">
+        <label for="password">PIN / Password</label>
+        <input type="password" id="password" name="password" required placeholder="Your trading PIN">
+      </div>
+      <div class="field">
+        <label for="totp_secret">TOTP Secret</label>
+        <input type="password" id="totp_secret" name="totp_secret" required placeholder="Base32 TOTP secret from Angel One">
+      </div>
+      <button type="submit" class="btn btn-primary">Login &amp; Connect</button>
+    </form>
+
+    <div class="disclaimer">
+      <strong>Security notice:</strong> Your credentials are transmitted over HTTPS and held in server memory only for the duration of your session. They are never written to disk or shared. The session automatically expires after 8 hours.
+    </div>
+  </div>
+</div>
+{% endblock %}
