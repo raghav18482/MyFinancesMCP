@@ -1,5 +1,7 @@
 smartapi-python
 logzero
+websocket-client
+six
 pyotp
 mcp
 python-dotenv
