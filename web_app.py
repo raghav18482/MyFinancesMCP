@@ -123,28 +123,22 @@ async def dashboard(request: Request):
         holdings_list = []
 
         try:
-            all_h = client.get_all_holdings()
-            if all_h.get("status") and all_h.get("data"):
-                d = all_h["data"]
-                total_invested = float(d.get("totalholdingvalue", 0) or 0)
-                current_value = float(d.get("totalcurrentvalue", 0) or 0)
-                total_pnl = current_value - total_invested
-                total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
-        except Exception as e:
-            logger.warning("Holdings fetch error: %s", e)
-
-        try:
             h_data = client.get_holdings()
             if h_data.get("status") and h_data.get("data"):
                 for h in h_data["data"]:
-                    holdings_list.append(_HoldingRow(
+                    row = _HoldingRow(
                         symbol=h.get("tradingsymbol", "N/A"),
                         qty=int(h.get("quantity", 0) or 0),
                         avg_price=float(h.get("averageprice", 0) or 0),
                         ltp=float(h.get("ltp", 0) or 0),
-                    ))
+                    )
+                    holdings_list.append(row)
+                    total_invested += row.qty * row.avg_price
+                    current_value += row.qty * row.ltp
+                total_pnl = current_value - total_invested
+                total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
         except Exception as e:
-            logger.warning("Holdings detail error: %s", e)
+            logger.warning("Holdings fetch error: %s", e)
 
         try:
             pos = client.get_positions()
