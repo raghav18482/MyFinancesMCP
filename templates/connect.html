@@ -4,14 +4,18 @@
 <div class="container">
   <div class="guide">
     <h1>Connect MyFinanceMCP to Your AI Assistant</h1>
-    <p class="guide-intro">Follow the steps below to connect this MCP server to Claude Desktop, ChatGPT Desktop, Cursor, or any MCP-compatible client. Once connected, you can track your Angel One portfolio and even place trades through your AI assistant.</p>
+    <p class="guide-intro">Follow the steps below to connect this MCP server to Claude Desktop, ChatGPT, Cursor, or any MCP-compatible client. Once connected, you can track your Angel One portfolio and even place trades through your AI assistant.</p>
+
+    <div class="guide-note" style="margin-bottom:1.5rem">
+      <strong>Don't want to set up MCP?</strong> You can get AI-powered portfolio insights directly from the <a href="/login">web dashboard</a> &mdash; just log in and add your OpenAI API key. No MCP configuration needed.
+    </div>
 
     <!-- Prerequisites -->
     <div class="card guide-section">
       <h2>Before You Start</h2>
       <ul class="checklist">
         <li>Your Angel One <strong>API Key</strong>, <strong>Client ID</strong>, <strong>PIN</strong>, and <strong>TOTP Secret</strong> &mdash; <a href="/setup">learn how to generate them</a></li>
-        <li><strong>Node.js</strong> installed (required for Claude Desktop &amp; ChatGPT Desktop &mdash; <a href="https://nodejs.org" target="_blank">download here</a>)</li>
+        <li><strong>Node.js</strong> installed (required for Claude Desktop &mdash; <a href="https://nodejs.org" target="_blank">download here</a>). Not needed for ChatGPT or Cursor.</li>
       </ul>
     </div>
 
@@ -68,19 +72,19 @@
       </div>
     </div>
 
-    <!-- Step 2: ChatGPT Desktop -->
+    <!-- Step 2: ChatGPT -->
     <div class="card guide-section">
       <div class="step-header">
         <span class="step-number">2</span>
-        <h2>ChatGPT Desktop</h2>
+        <h2>ChatGPT</h2>
       </div>
 
       <div class="step-body">
         <h3>Open Settings</h3>
-        <p>In the ChatGPT Desktop app, go to <strong>Settings &rarr; Apps</strong>.</p>
+        <p>On <a href="https://chatgpt.com" target="_blank">chatgpt.com</a>, click your profile icon and go to <strong>Settings &rarr; Connected apps</strong>.</p>
 
-        <h3>Create a new App</h3>
-        <p>Click <strong>"Create App"</strong> and fill in the following:</p>
+        <h3>Add an MCP server</h3>
+        <p>Click <strong>"Add"</strong> and fill in the following:</p>
         <div class="step-list">
           <div class="step-item">
             <span class="step-bullet">a</span>
@@ -112,6 +116,9 @@
             <span class="step-bullet">f</span>
             <div>Click <strong>Create</strong></div>
           </div>
+        </div>
+        <div class="guide-note">
+          <strong>Note:</strong> MCP support is available on ChatGPT web (chatgpt.com). No desktop app or Node.js required.
         </div>
 
         <h3>Login &amp; use</h3>
@@ -166,10 +173,60 @@
       </div>
     </div>
 
-    <!-- Available Tools -->
+    <!-- Step 5: Run Locally -->
     <div class="card guide-section">
       <div class="step-header">
         <span class="step-number">5</span>
+        <h2>Run Locally (Self-Hosted)</h2>
+      </div>
+      <div class="step-body">
+        <p>Don't want to use our hosted server? Clone the repo and run everything on your machine &mdash; no data leaves localhost.</p>
+
+        <h3>Clone &amp; install</h3>
+        <div class="code-block">
+          <div class="code-label">Terminal</div>
+          <pre><code>git clone https://github.com/raghav18482/MyFinancesMCP.git
+cd MyFinancesMCP
+pip install -r requirements.txt
+python main.py</code></pre>
+        </div>
+        <p>The server starts on <code>http://localhost:8000</code>. Open it in your browser for the web dashboard, or connect your AI assistant using the local MCP endpoint.</p>
+
+        <h3>Claude Desktop &mdash; direct Python config (no Node.js needed)</h3>
+        <p>When running locally, you can skip <code>mcp-remote</code> entirely and point Claude Desktop straight at the Python server:</p>
+        <div class="code-block">
+          <div class="code-label">claude_desktop_config.json</div>
+          <pre><code>{
+  "mcpServers": {
+    "angelone-portfolio": {
+      "command": "<span class="highlight">python3</span>",
+      "args": ["<span class="highlight">/full/path/to/MyFinancesMCP/server.py</span>"],
+      "env": {
+        "ANGELONE_API_KEY": "YOUR_API_KEY",
+        "ANGELONE_CLIENT_ID": "YOUR_CLIENT_ID",
+        "ANGELONE_PASSWORD": "YOUR_PIN",
+        "ANGELONE_TOTP_SECRET": "YOUR_TOTP_SECRET"
+      }
+    }
+  }
+}</code></pre>
+        </div>
+        <div class="guide-note">
+          <strong>Replace</strong> the highlighted paths and credential values with your own. On macOS/Linux you can find the full Python path by running <code>which python3</code> in your terminal. This config runs the MCP server as a subprocess of Claude Desktop using stdio transport &mdash; no extra dependencies needed.
+        </div>
+
+        <h3>Cursor &amp; ChatGPT &mdash; local SSE</h3>
+        <p>With <code>python main.py</code> running, use the local URL in the configs shown in Steps 1&ndash;3 above:</p>
+        <div class="code-block">
+          <pre><code>http://localhost:8000/mcp/sse</code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Available Tools -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">6</span>
         <h2>Available Tools</h2>
       </div>
       <div class="step-body">
@@ -207,6 +264,7 @@
         <li>Credentials are <strong>never stored on disk</strong> &mdash; they live only in server memory</li>
         <li>Sessions <strong>auto-expire after 8 hours</strong></li>
         <li>All traffic goes over <strong>HTTPS</strong> when deployed (Railway/Render provide TLS)</li>
+        <li>Your OpenAI API key (for dashboard AI insights) is <strong>encrypted client-side</strong> and never stored on the server</li>
         <li>You can call <code>logout</code> at any time to immediately discard your session</li>
       </ul>
     </div>
