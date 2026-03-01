@@ -143,6 +143,40 @@ footer{text-align:center;padding:2rem;color:var(--muted);font-size:.75rem;border
 .next-step-card strong{display:block;font-size:.88rem;color:var(--text);margin-bottom:.15rem}
 .next-step-card span{font-size:.78rem;color:var(--muted);line-height:1.4}
 
+/* ── AI Insights ── */
+.ai-section{margin-top:1.5rem}
+
+.ai-key-bar{padding:1rem 1.25rem}
+.ai-key-row{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.ai-key-label{font-size:.8rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+.ai-key-input{flex:1;min-width:200px;padding:.45rem .7rem;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.85rem;outline:none;font-family:monospace;transition:border-color .15s}
+.ai-key-input:focus{border-color:var(--accent)}
+.ai-key-status{font-size:.75rem;color:var(--muted);white-space:nowrap}
+.ai-key-status.saved{color:var(--green)}
+
+.btn-accent{background:var(--accent);color:#fff}
+.btn-accent:hover{background:var(--accent-hover)}
+.btn-muted{background:var(--surface2);color:var(--muted);border:1px solid var(--border)}
+.btn-muted:hover{background:var(--border);color:var(--text)}
+
+.ai-card{margin-bottom:1.25rem}
+.ai-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+.ai-card-header h2{margin-bottom:0}
+
+.ai-response{min-height:3rem}
+.ai-placeholder{font-size:.85rem;color:var(--muted);text-align:center;padding:2rem 1rem}
+.ai-text{font-size:.85rem;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word}
+.ai-text strong{color:var(--accent);font-weight:600}
+.ai-error{font-size:.85rem;color:var(--red);padding:.5rem 0}
+
+.ai-chips{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
+.ai-chip{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:.4rem 1rem;font-size:.8rem;color:var(--muted);cursor:pointer;transition:all .15s;font-family:inherit}
+.ai-chip:hover{border-color:var(--accent);color:var(--text);background:rgba(99,102,241,.08)}
+
+.ai-ask-row{display:flex;gap:.5rem;margin-bottom:.75rem}
+.ai-ask-input{flex:1;padding:.55rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.85rem;outline:none;font-family:inherit;transition:border-color .15s}
+.ai-ask-input:focus{border-color:var(--accent)}
+
 @media(max-width:900px){
   .cred-overview{grid-template-columns:repeat(2,1fr)}
   .next-step-cards{grid-template-columns:1fr}

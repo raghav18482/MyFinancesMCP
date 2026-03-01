@@ -73,5 +73,217 @@
     {% endif %}
   </div>
   {% endif %}
+
+  <!-- ── AI Insights Section ── -->
+  <div class="ai-section">
+    <div class="ai-key-bar card">
+      <div class="ai-key-row">
+        <span class="ai-key-label">OpenAI API Key</span>
+        <input type="password" id="aiKeyInput" class="ai-key-input" placeholder="sk-...">
+        <button class="btn btn-sm btn-accent" id="aiKeySave">Save Key</button>
+        <button class="btn btn-sm btn-muted" id="aiKeyClear">Clear</button>
+        <span class="ai-key-status" id="aiKeyStatus"></span>
+      </div>
+    </div>
+
+    <div class="card ai-card" id="insightsCard">
+      <div class="ai-card-header">
+        <h2>AI Portfolio Insights</h2>
+        <button class="btn btn-sm btn-accent" id="insightsRegenerate" disabled>Regenerate</button>
+      </div>
+      <div id="insightsContent" class="ai-response">
+        <div class="ai-placeholder">Enter your OpenAI API key above to unlock AI insights.</div>
+      </div>
+    </div>
+
+    <div class="card ai-card" id="askCard">
+      <h2>Ask AI About Your Portfolio</h2>
+      <div class="ai-chips" id="questionChips">
+        <button class="ai-chip" data-q="How diversified is my portfolio?">How diversified is my portfolio?</button>
+        <button class="ai-chip" data-q="Which stocks are underperforming?">Which stocks are underperforming?</button>
+        <button class="ai-chip" data-q="What is my risk exposure?">What is my risk exposure?</button>
+        <button class="ai-chip" data-q="Suggest rebalancing strategies">Suggest rebalancing strategies</button>
+        <button class="ai-chip" data-q="Summarize my portfolio health">Summarize my portfolio health</button>
+      </div>
+      <div class="ai-ask-row">
+        <input type="text" id="aiQuestion" class="ai-ask-input" placeholder="Ask anything about your portfolio...">
+        <button class="btn btn-sm btn-accent" id="aiAskBtn">Ask</button>
+      </div>
+      <div id="askContent" class="ai-response" style="display:none"></div>
+    </div>
+  </div>
 </div>
+
+<script>
+(function(){
+  const CLIENT_ID = "{{ client_id }}";
+  const LS_KEY = "mfmcp_ai_key";
+  const HAS_SUBTLE = !!(window.crypto && window.crypto.subtle);
+
+  // ── Shared helpers ──
+  function strToBytes(s){return new TextEncoder().encode(s);}
+  function bytesToStr(buf){return new TextDecoder().decode(buf);}
+  function b64Encode(buf){
+    const bytes=new Uint8Array(buf);
+    let binary="";
+    for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+  function b64Decode(s){
+    const binary=atob(s);
+    const bytes=new Uint8Array(binary.length);
+    for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+    return bytes;
+  }
+
+  // ── AES-GCM path (secure contexts: HTTPS / localhost) ──
+  async function aesEncrypt(plaintext,clientId){
+    const salt=crypto.getRandomValues(new Uint8Array(16));
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const raw=await crypto.subtle.importKey("raw",strToBytes(clientId),"PBKDF2",false,["deriveKey"]);
+    const key=await crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:100000,hash:"SHA-256"},raw,{name:"AES-GCM",length:256},false,["encrypt"]);
+    const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,strToBytes(plaintext));
+    return JSON.stringify({v:2,s:b64Encode(salt),i:b64Encode(iv),c:b64Encode(ct)});
+  }
+  async function aesDecrypt(stored,clientId){
+    const{s,i,c}=JSON.parse(stored);
+    const salt=b64Decode(s),iv=b64Decode(i),ct=b64Decode(c);
+    const raw=await crypto.subtle.importKey("raw",strToBytes(clientId),"PBKDF2",false,["deriveKey"]);
+    const key=await crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:100000,hash:"SHA-256"},raw,{name:"AES-GCM",length:256},false,["decrypt"]);
+    const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv},key,ct);
+    return bytesToStr(pt);
+  }
+
+  // ── XOR fallback (non-secure HTTP contexts) ──
+  function xorWithKey(input,secret){
+    const out=new Uint8Array(input.length);
+    for(let i=0;i<input.length;i++) out[i]=input[i]^secret.charCodeAt(i%secret.length);
+    return out;
+  }
+  function xorEncrypt(plaintext,clientId){
+    const data=strToBytes(plaintext);
+    return JSON.stringify({v:1,d:b64Encode(xorWithKey(data,clientId))});
+  }
+  function xorDecrypt(stored,clientId){
+    const{d}=JSON.parse(stored);
+    return bytesToStr(xorWithKey(b64Decode(d),clientId));
+  }
+
+  // ── Unified encrypt / decrypt ──
+  async function encryptKey(plaintext,clientId){
+    return HAS_SUBTLE ? aesEncrypt(plaintext,clientId) : xorEncrypt(plaintext,clientId);
+  }
+  async function decryptKey(clientId){
+    const raw=localStorage.getItem(LS_KEY);
+    if(!raw) return null;
+    try{
+      const obj=JSON.parse(raw);
+      if(obj.v===2 && HAS_SUBTLE) return await aesDecrypt(raw,clientId);
+      if(obj.v===1) return xorDecrypt(raw,clientId);
+      return null;
+    }catch(e){
+      console.warn("Decrypt failed",e);
+      return null;
+    }
+  }
+
+  // ── UI refs ──
+  const $keyInput=document.getElementById("aiKeyInput");
+  const $keySave=document.getElementById("aiKeySave");
+  const $keyClear=document.getElementById("aiKeyClear");
+  const $keyStatus=document.getElementById("aiKeyStatus");
+  const $insContent=document.getElementById("insightsContent");
+  const $insRegen=document.getElementById("insightsRegenerate");
+  const $askContent=document.getElementById("askContent");
+  const $askInput=document.getElementById("aiQuestion");
+  const $askBtn=document.getElementById("aiAskBtn");
+  const $chips=document.getElementById("questionChips");
+
+  function setStatus(saved){
+    $keyStatus.textContent=saved?"\u{1f512} Key saved":"No key configured";
+    $keyStatus.className="ai-key-status "+(saved?"saved":"");
+    $insRegen.disabled=!saved;
+  }
+
+  function showSpinner(el){el.innerHTML='<div class="loading"><div class="spinner"></div></div>';}
+  function showError(el,msg){el.innerHTML='<div class="ai-error">'+msg+'</div>';}
+  function showText(el,text){
+    const escaped=text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const html=escaped
+      .replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>")
+      .replace(/\n/g,"<br>");
+    el.innerHTML='<div class="ai-text">'+html+'</div>';
+  }
+
+  async function callAI(endpoint,body,errorTarget){
+    const apiKey=await decryptKey(CLIENT_ID);
+    if(!apiKey){showError(errorTarget||$insContent,"Could not decrypt API key. Please re-save your key.");return null;}
+    body.api_key=apiKey;
+    const res=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    return res.json();
+  }
+
+  // ── Key management ──
+  $keySave.addEventListener("click",async()=>{
+    const val=$keyInput.value.trim();
+    if(!val){$keyInput.focus();return;}
+    try{
+      const enc=await encryptKey(val,CLIENT_ID);
+      localStorage.setItem(LS_KEY,enc);
+      $keyInput.value="";
+      setStatus(true);
+      loadInsights();
+    }catch(e){alert("Encryption failed: "+e.message);}
+  });
+  $keyClear.addEventListener("click",()=>{
+    localStorage.removeItem(LS_KEY);
+    setStatus(false);
+    $insContent.innerHTML='<div class="ai-placeholder">Enter your OpenAI API key above to unlock AI insights.</div>';
+    $askContent.style.display="none";
+  });
+
+  // ── Insights ──
+  async function loadInsights(){
+    showSpinner($insContent);
+    try{
+      const data=await callAI("/api/ai/insights",{},$insContent);
+      if(!data)return;
+      if(data.error){showError($insContent,data.error);return;}
+      showText($insContent,data.insight);
+    }catch(e){showError($insContent,"Request failed: "+e.message);}
+  }
+  $insRegen.addEventListener("click",loadInsights);
+
+  // ── Ask AI ──
+  async function askAI(question){
+    $askContent.style.display="block";
+    showSpinner($askContent);
+    try{
+      const data=await callAI("/api/ai/ask",{question},$askContent);
+      if(!data)return;
+      if(data.error){showError($askContent,data.error);return;}
+      showText($askContent,data.answer);
+    }catch(e){showError($askContent,"Request failed: "+e.message);}
+  }
+
+  $askBtn.addEventListener("click",()=>{
+    const q=$askInput.value.trim();
+    if(q){askAI(q);$askInput.value="";}
+  });
+  $askInput.addEventListener("keydown",(e)=>{
+    if(e.key==="Enter"){$askBtn.click();}
+  });
+  $chips.addEventListener("click",(e)=>{
+    const chip=e.target.closest(".ai-chip");
+    if(chip)askAI(chip.dataset.q);
+  });
+
+  // ── Init ──
+  (async()=>{
+    const hasKey=!!localStorage.getItem(LS_KEY);
+    setStatus(hasKey);
+    if(hasKey)loadInsights();
+  })();
+})();
+</script>
 {% endblock %}

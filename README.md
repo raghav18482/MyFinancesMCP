@@ -41,8 +41,33 @@ You need 4 credentials to use MyFinanceMCP. Generate them from the **Angel One S
 
 ## Run Locally
 
+### 1. Create a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # macOS / Linux
+# .venv\Scripts\activate         # Windows
+```
+
+### 2. Install dependencies
+
 ```bash
 pip install -r requirements.txt
+```
+
+### 3. Configure environment variables
+
+Copy the example file and fill in your Angel One credentials:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your values (see [Getting Your Angel One API Credentials](#getting-your-angel-one-api-credentials) above).
+
+### 4. Start the server
+
+```bash
 python main.py
 ```
 

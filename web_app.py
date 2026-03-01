@@ -4,10 +4,12 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+
+from ai_service import generate_insights, ask_question
 
 from session_manager import sessions
 
@@ -166,11 +168,13 @@ async def dashboard(request: Request):
             available_cash=available_cash,
             net_value=net_value,
             holdings=holdings_list,
+            client_id=client.client_id,
         )
     except Exception as e:
         ctx["error"] = str(e)
         ctx.update(total_invested=0, current_value=0, total_pnl=0, total_pnl_pct=0,
-                   day_pnl=0, available_cash="N/A", net_value="N/A", holdings=[])
+                   day_pnl=0, available_cash="N/A", net_value="N/A", holdings=[],
+                   client_id=getattr(client, "client_id", ""))
 
     return templates.TemplateResponse("dashboard.html", ctx)
 
@@ -276,6 +280,124 @@ async def orders_page(request: Request):
 
     ctx.update(orders=order_list)
     return templates.TemplateResponse("orders.html", ctx)
+
+
+# ── AI API endpoints ──────────────────────────────────────────────────────
+
+
+def _build_portfolio_data(client) -> dict:
+    """Extract holdings, positions, and funds into a dict for the LLM."""
+    data = {"holdings": [], "summary": {}, "funds": {}}
+
+    try:
+        h_data = client.get_holdings()
+        if h_data.get("status") and h_data.get("data"):
+            total_inv = 0.0
+            total_cur = 0.0
+            for h in h_data["data"]:
+                qty = int(h.get("quantity", 0) or 0)
+                avg = float(h.get("averageprice", 0) or 0)
+                ltp = float(h.get("ltp", 0) or 0)
+                inv = qty * avg
+                cur = qty * ltp
+                pnl = cur - inv
+                pnl_pct = (pnl / inv * 100) if inv else 0.0
+                total_inv += inv
+                total_cur += cur
+                data["holdings"].append({
+                    "symbol": h.get("tradingsymbol", "N/A"),
+                    "qty": qty, "avg_price": avg, "ltp": ltp,
+                    "invested": round(inv, 2), "current": round(cur, 2),
+                    "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
+                })
+            data["summary"]["total_invested"] = round(total_inv, 2)
+            data["summary"]["current_value"] = round(total_cur, 2)
+            data["summary"]["overall_pnl"] = round(total_cur - total_inv, 2)
+            data["summary"]["overall_pnl_pct"] = round(
+                ((total_cur - total_inv) / total_inv * 100) if total_inv else 0.0, 2
+            )
+    except Exception as e:
+        logger.warning("Portfolio build – holdings error: %s", e)
+
+    try:
+        pos = client.get_positions()
+        if pos.get("status") and pos.get("data"):
+            data["summary"]["day_pnl"] = round(
+                sum(float(p.get("pnl", 0) or 0) for p in pos["data"]), 2
+            )
+    except Exception as e:
+        logger.warning("Portfolio build – positions error: %s", e)
+
+    try:
+        funds = client.get_funds()
+        if funds.get("status") and funds.get("data"):
+            d = funds["data"]
+            data["funds"]["available_cash"] = d.get("availablecash", "N/A")
+            data["funds"]["net"] = d.get("net", "N/A")
+    except Exception as e:
+        logger.warning("Portfolio build – funds error: %s", e)
+
+    return data
+
+
+@web.post("/api/ai/insights")
+async def ai_insights(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    api_key = body.get("api_key", "")
+    if not api_key:
+        return JSONResponse({"error": "Please enter your OpenAI API key"}, status_code=400)
+
+    model = body.get("model", "gpt-4o-mini")
+    portfolio = _build_portfolio_data(client)
+
+    try:
+        insight = await generate_insights(api_key, portfolio, model)
+        return JSONResponse({"insight": insight})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("AI insights error")
+        return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+@web.post("/api/ai/ask")
+async def ai_ask(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    api_key = body.get("api_key", "")
+    if not api_key:
+        return JSONResponse({"error": "Please enter your OpenAI API key"}, status_code=400)
+
+    question = body.get("question", "")
+    if not question:
+        return JSONResponse({"error": "Question cannot be empty"}, status_code=400)
+
+    model = body.get("model", "gpt-4o-mini")
+    portfolio = _build_portfolio_data(client)
+
+    try:
+        answer = await ask_question(api_key, question, portfolio, model)
+        return JSONResponse({"answer": answer})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("AI ask error")
+        return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
 
 
 # ── Data classes for template rendering ────────────────────────────────────

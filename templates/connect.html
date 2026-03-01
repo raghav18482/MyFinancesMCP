@@ -76,21 +76,42 @@
       </div>
 
       <div class="step-body">
-        <h3>Open ChatGPT Settings</h3>
-        <p>In ChatGPT Desktop, go to <strong>Settings &rarr; Beta features</strong> and enable <strong>MCP Servers</strong>.</p>
+        <h3>Open Settings</h3>
+        <p>In the ChatGPT Desktop app, go to <strong>Settings &rarr; Apps</strong>.</p>
 
-        <h3>Add the MCP server</h3>
-        <p>Click <strong>"Add Server"</strong>, choose <strong>"Command (stdio)"</strong> and enter:</p>
-        <div class="code-block">
-          <div class="code-label">Command</div>
-          <pre><code>npx</code></pre>
+        <h3>Create a new App</h3>
+        <p>Click <strong>"Create App"</strong> and fill in the following:</p>
+        <div class="step-list">
+          <div class="step-item">
+            <span class="step-bullet">a</span>
+            <div><strong>Name:</strong> AngelOne Portfolio</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">b</span>
+            <div><strong>Description:</strong> Angel One portfolio tracker via MCP</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">c</span>
+            <div><strong>MCP Server URL:</strong></div>
+          </div>
         </div>
         <div class="code-block">
-          <div class="code-label">Arguments</div>
-          <pre><code>-y mcp-remote <span class="highlight">{{ server_url }}/mcp/sse</span></code></pre>
+          <div class="code-label">MCP Server URL</div>
+          <pre><code><span class="highlight">{{ server_url }}/mcp/sse</span></code></pre>
         </div>
-        <div class="guide-note">
-          <strong>Note:</strong> ChatGPT Desktop uses stdio, so <code>mcp-remote</code> bridges it to the SSE server &mdash; same as Claude Desktop.
+        <div class="step-list">
+          <div class="step-item">
+            <span class="step-bullet">d</span>
+            <div><strong>Authentication:</strong> select <strong>None</strong></div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">e</span>
+            <div>Check the <strong>"I understand and want to continue"</strong> checkbox</div>
+          </div>
+          <div class="step-item">
+            <span class="step-bullet">f</span>
+            <div>Click <strong>Create</strong></div>
+          </div>
         </div>
 
         <h3>Login &amp; use</h3>
