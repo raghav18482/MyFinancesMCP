@@ -11,3 +11,5 @@ jinja2
 python-multipart
 itsdangerous
 openai
+gnews
+requests

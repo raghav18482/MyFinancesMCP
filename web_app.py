@@ -1,13 +1,19 @@
 import os
+import json
 import uuid
+import time
+import asyncio
 import logging
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+
+from gnews import GNews
 
 from ai_service import generate_insights, ask_question
 
@@ -22,8 +28,45 @@ web.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("SESSION_SECRET", uuid.uuid4().hex),
 )
+web.mount("/static/data", StaticFiles(directory=os.path.join(_dir, "data")), name="data")
 web.mount("/static", StaticFiles(directory=os.path.join(_dir, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(_dir, "templates"))
+
+with open(os.path.join(_dir, "data", "sector_map.json")) as _f:
+    SECTOR_MAP: dict[str, str] = json.load(_f)
+
+SECTOR_QUERIES: dict[str, str] = {
+    "Banking": "Banking sector India stock market",
+    "IT": "IT sector India Infosys TCS Wipro stock",
+    "Energy": "Energy oil gas power India stock market",
+    "Pharma": "Pharma sector India drug stock market",
+    "Healthcare": "Healthcare hospital India stock market",
+    "Financial Services": "NBFC insurance mutual fund India stock",
+    "FMCG": "FMCG consumer goods India stock market",
+    "Automobile": "Automobile auto EV India stock market",
+    "Metals": "Metals steel copper India stock market",
+    "Infrastructure": "Infrastructure cement construction India stock",
+    "Real Estate": "Real estate realty India stock market",
+    "Consumer Durables": "Consumer durables electronics India stock",
+    "Chemicals": "Chemical sector India stock market",
+    "Digital / New Age": "Startup fintech e-commerce India stock",
+    "Telecom": "Telecom 5G spectrum India stock market",
+    "Travel & Tourism": "Travel tourism airline India stock",
+    "Defence": "Defence defense India stock market",
+    "PSU": "PSU public sector India stock market",
+    "ETF": "ETF index fund India stock market",
+    "ETF - Gold": "Gold ETF India market price",
+    "ETF - Silver": "Silver ETF India market price",
+    "ETF - CPSE": "CPSE ETF India PSU disinvestment",
+    "ETF - Midcap": "Midcap ETF India stock market",
+    "ETF - Smallcap": "Smallcap ETF India stock market",
+    "ETF - Nifty Next 50": "Nifty Next 50 ETF India market",
+    "ETF - PSU Bank": "PSU bank India stock market",
+    "ETF - Metals": "Metal ETF India stock market",
+    "ETF - Pharma": "Pharma ETF India stock market",
+    "ETF - Infra": "Infrastructure ETF India stock market",
+    "ETF - Global Tech": "Global tech fund India NASDAQ",
+}
 
 
 def _sid(request: Request) -> str | None:
@@ -280,6 +323,353 @@ async def orders_page(request: Request):
 
     ctx.update(orders=order_list)
     return templates.TemplateResponse("orders.html", ctx)
+
+
+@web.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("analytics.html", _ctx(request, "analytics"))
+
+
+@web.get("/news", response_class=HTMLResponse)
+async def news_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("news.html", _ctx(request, "news"))
+
+
+# ── News API (gnews) ──────────────────────────────────────────────────────
+
+_VALID_PERIODS = {"1d", "7d", "1m", "3m", "6m", "1y"}
+_MAX_SECTORS = 8
+
+
+def _gnews_to_dict(article: dict) -> dict:
+    """Normalise a gnews article dict into our frontend format."""
+    publisher = article.get("publisher") or {}
+    return {
+        "title": article.get("title", ""),
+        "link": article.get("url", "#"),
+        "date": article.get("published date", ""),
+        "description": article.get("description", ""),
+        "source": publisher.get("title", "") if isinstance(publisher, dict) else str(publisher),
+    }
+
+
+def _fetch_sector_news(query: str, period: str, max_results: int) -> list[dict]:
+    """Synchronous helper – runs in a thread. Fetches news for one sector."""
+    try:
+        gn = GNews(language="en", country="IN", period=period, max_results=max_results)
+        raw = gn.get_news(query)
+        return [_gnews_to_dict(a) for a in (raw or [])]
+    except Exception as e:
+        logger.warning("gnews query failed for %r: %s", query, e)
+        return []
+
+
+async def _build_portfolio_news(client, period: str = "7d") -> dict:
+    """Get holdings, compute sector weights, query gnews per sector."""
+    sector_invested: dict[str, float] = {}
+
+    try:
+        h_data = client.get_holdings()
+        if h_data.get("status") and h_data.get("data"):
+            for h in h_data["data"]:
+                sym = h.get("tradingsymbol", "")
+                qty = int(h.get("quantity", 0) or 0)
+                avg = float(h.get("averageprice", 0) or 0)
+                invested = qty * avg
+                sector = SECTOR_MAP.get(sym, "Other")
+                sector_invested[sector] = sector_invested.get(sector, 0) + invested
+    except Exception as e:
+        logger.warning("News – holdings fetch error: %s", e)
+
+    sector_order = sorted(
+        sector_invested.keys(), key=lambda s: sector_invested[s], reverse=True
+    )[:_MAX_SECTORS]
+
+    def _fetch_all_sectors():
+        results: dict[str, list[dict]] = {}
+        for sector in sector_order:
+            query = SECTOR_QUERIES.get(sector, f"{sector} India stock market")
+            results[sector] = _fetch_sector_news(query, period, 5)
+            time.sleep(0.5)
+        return results
+
+    grouped = await asyncio.to_thread(_fetch_all_sectors)
+
+    sectors_list = []
+    for sector in sector_order:
+        sectors_list.append({
+            "name": sector,
+            "invested": round(sector_invested.get(sector, 0), 2),
+            "news": grouped.get(sector, []),
+        })
+
+    return {"sectors": sectors_list}
+
+
+@web.get("/api/news/portfolio")
+async def api_news_portfolio(
+    request: Request,
+    period: str = Query("7d"),
+):
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if period not in _VALID_PERIODS:
+        period = "7d"
+    try:
+        result = await _build_portfolio_news(client, period)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Portfolio news API error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/news/search")
+async def api_news_search(
+    request: Request,
+    q: str = Query(""),
+    period: str = Query("7d"),
+    location: str = Query(""),
+):
+    if not q.strip():
+        return JSONResponse({"error": "Search query is required"}, status_code=400)
+    if period not in _VALID_PERIODS:
+        period = "7d"
+
+    def _do_search():
+        gn = GNews(language="en", country="IN", period=period, max_results=20)
+        if location.strip():
+            raw = gn.get_news(f"{q.strip()} {location.strip()}")
+        else:
+            raw = gn.get_news(q.strip())
+        return [_gnews_to_dict(a) for a in (raw or [])]
+
+    try:
+        articles = await asyncio.to_thread(_do_search)
+        return JSONResponse({"articles": articles})
+    except Exception as e:
+        logger.exception("Search news API error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Portfolio Data API ─────────────────────────────────────────────────────
+
+
+@web.get("/api/portfolio/analytics")
+async def api_portfolio_analytics(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    return JSONResponse(_build_portfolio_data(client))
+
+
+@web.get("/api/portfolio/candles")
+async def api_portfolio_candles(
+    request: Request,
+    symbol: str = Query(...),
+    exchange: str = Query("NSE"),
+    interval: str = Query("ONE_DAY"),
+    days: int = Query(90),
+):
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        sr = client.search_scrip(exchange, symbol.replace("-EQ", ""))
+        token = None
+        if sr.get("status") and sr.get("data"):
+            for item in sr["data"]:
+                if item.get("tradingsymbol") == symbol:
+                    token = item["symboltoken"]
+                    break
+        if not token:
+            return JSONResponse({"error": f"Could not find token for {symbol}"}, status_code=404)
+
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=days)
+        params = {
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": interval,
+            "fromdate": from_dt.strftime("%Y-%m-%d 09:15"),
+            "todate": to_dt.strftime("%Y-%m-%d 15:30"),
+        }
+        result = client.get_candle_data(params)
+        if result.get("status") and result.get("data"):
+            return JSONResponse({"candles": result["data"]})
+        return JSONResponse({"error": result.get("message", "No candle data")}, status_code=400)
+    except Exception as e:
+        logger.exception("Candle data error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/portfolio/beta")
+async def api_portfolio_beta(request: Request, days: int = Query(90)):
+    """Compute portfolio beta vs NIFTY 50 using daily returns."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        portfolio = _build_portfolio_data(client)
+        holdings = portfolio.get("holdings", [])
+        if not holdings:
+            return JSONResponse({"error": "No holdings found"}, status_code=400)
+
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=days)
+        from_str = from_dt.strftime("%Y-%m-%d 09:15")
+        to_str = to_dt.strftime("%Y-%m-%d 15:30")
+
+        nifty_token = "99926000"
+        nifty_candles = _fetch_candles_safe(
+            client, "NSE", nifty_token, "ONE_DAY", from_str, to_str
+        )
+        if not nifty_candles or len(nifty_candles) < 10:
+            return JSONResponse({"error": "Could not fetch NIFTY 50 data"}, status_code=400)
+
+        nifty_closes = {c[0].split("T")[0]: c[4] for c in nifty_candles}
+        nifty_dates = sorted(nifty_closes.keys())
+        nifty_returns = {}
+        for i in range(1, len(nifty_dates)):
+            prev = nifty_closes[nifty_dates[i - 1]]
+            curr = nifty_closes[nifty_dates[i]]
+            if prev > 0:
+                nifty_returns[nifty_dates[i]] = (curr - prev) / prev
+
+        sorted_holdings = sorted(holdings, key=lambda h: h["current"], reverse=True)
+        top_holdings = sorted_holdings[:6]
+
+        stock_daily = {}
+        stock_betas = []
+        total_weight = sum(h["current"] for h in top_holdings)
+
+        for h in top_holdings:
+            sym = h["symbol"]
+            time.sleep(0.35)
+            try:
+                sr = client.search_scrip("NSE", sym.replace("-EQ", ""))
+                token = None
+                if sr and sr.get("status") and sr.get("data"):
+                    for item in sr["data"]:
+                        if item.get("tradingsymbol") == sym:
+                            token = item["symboltoken"]
+                            break
+                if not token:
+                    continue
+
+                time.sleep(0.35)
+                candles = _fetch_candles_safe(
+                    client, "NSE", token, "ONE_DAY", from_str, to_str
+                )
+                if not candles or len(candles) < 10:
+                    continue
+
+                closes = {c[0].split("T")[0]: c[4] for c in candles}
+                returns = {}
+                dates = sorted(closes.keys())
+                for i in range(1, len(dates)):
+                    prev = closes[dates[i - 1]]
+                    curr = closes[dates[i]]
+                    if prev > 0:
+                        returns[dates[i]] = (curr - prev) / prev
+
+                weight = h["current"] / total_weight if total_weight else 0
+                stock_daily[sym] = {"returns": returns, "weight": weight}
+
+                common = set(returns.keys()) & set(nifty_returns.keys())
+                if len(common) >= 10:
+                    sb = _compute_beta(
+                        [nifty_returns[d] for d in sorted(common)],
+                        [returns[d] for d in sorted(common)],
+                    )
+                    stock_betas.append({"symbol": sym, "beta": sb["beta"]})
+            except Exception as e:
+                logger.warning("Beta calc – skip %s: %s", sym, e)
+                continue
+
+        common_dates = set(nifty_returns.keys())
+        for sd in stock_daily.values():
+            common_dates &= set(sd["returns"].keys())
+        common_dates = sorted(common_dates)
+
+        if len(common_dates) < 10:
+            return JSONResponse({"error": "Not enough overlapping trading days"}, status_code=400)
+
+        port_returns = []
+        nifty_ret_list = []
+        for d in common_dates:
+            pr = sum(
+                sd["returns"].get(d, 0) * sd["weight"]
+                for sd in stock_daily.values()
+            )
+            port_returns.append(pr)
+            nifty_ret_list.append(nifty_returns[d])
+
+        result = _compute_beta(nifty_ret_list, port_returns)
+        result["stock_betas"] = sorted(stock_betas, key=lambda x: x["beta"], reverse=True)
+        result["days_used"] = len(common_dates)
+
+        nifty_cum = []
+        port_cum = []
+        n_acc = 1.0
+        p_acc = 1.0
+        for i in range(len(common_dates)):
+            n_acc *= (1 + nifty_ret_list[i])
+            p_acc *= (1 + port_returns[i])
+            nifty_cum.append(round((n_acc - 1) * 100, 4))
+            port_cum.append(round((p_acc - 1) * 100, 4))
+
+        result["dates"] = common_dates
+        result["nifty_cumulative"] = nifty_cum
+        result["portfolio_cumulative"] = port_cum
+
+        return JSONResponse(result)
+
+    except Exception as e:
+        logger.exception("Beta computation error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def _fetch_candles_safe(client, exchange, token, interval, from_str, to_str):
+    try:
+        result = client.get_candle_data({
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": interval,
+            "fromdate": from_str,
+            "todate": to_str,
+        })
+        if result and result.get("status") and result.get("data"):
+            return result["data"]
+    except Exception as e:
+        logger.warning("Candle fetch failed for token %s: %s", token, e)
+    return None
+
+
+def _compute_beta(x_returns, y_returns):
+    n = len(x_returns)
+    mean_x = sum(x_returns) / n
+    mean_y = sum(y_returns) / n
+
+    cov = sum((x_returns[i] - mean_x) * (y_returns[i] - mean_y) for i in range(n)) / n
+    var_x = sum((x_returns[i] - mean_x) ** 2 for i in range(n)) / n
+
+    beta = cov / var_x if var_x > 0 else 1.0
+    alpha = mean_y - beta * mean_x
+
+    ss_res = sum((y_returns[i] - (alpha + beta * x_returns[i])) ** 2 for i in range(n))
+    ss_tot = sum((y_returns[i] - mean_y) ** 2 for i in range(n))
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+    return {"beta": round(beta, 4), "alpha": round(alpha, 6), "r_squared": round(r_squared, 4)}
 
 
 # ── AI API endpoints ──────────────────────────────────────────────────────

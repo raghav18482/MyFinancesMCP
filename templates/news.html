@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}News{% endblock %}
+{% block content %}
+<div class="container news-page">
+  <div class="news-header">
+    <h1>Market News</h1>
+    <p class="news-sub">Stay updated with news that matters to your portfolio</p>
+  </div>
+
+  <!-- Tab switcher -->
+  <div class="news-tabs">
+    <button class="news-tab active" data-tab="portfolio">Portfolio News</button>
+    <button class="news-tab" data-tab="explore">Explore News</button>
+  </div>
+
+  <!-- ═══ Tab 1: Portfolio News ═══ -->
+  <div id="tab-portfolio" class="news-tab-content active">
+    <div class="news-controls">
+      <span class="news-controls-label">Time period:</span>
+      <div class="news-period-group" id="portfolio-period">
+        <button class="news-period-btn" data-period="1d">24h</button>
+        <button class="news-period-btn active" data-period="7d">7 days</button>
+        <button class="news-period-btn" data-period="1m">1 month</button>
+        <button class="news-period-btn" data-period="3m">3 months</button>
+      </div>
+    </div>
+
+    <div id="portfolio-loading" class="news-loading">
+      <div class="spinner"></div>
+      <span>Fetching portfolio news&hellip;</span>
+    </div>
+    <div id="portfolio-error" class="alert alert-error" style="display:none"></div>
+    <div id="portfolio-container"></div>
+  </div>
+
+  <!-- ═══ Tab 2: Explore News ═══ -->
+  <div id="tab-explore" class="news-tab-content">
+    <div class="news-controls">
+      <div class="news-search-bar">
+        <input type="text" id="search-input" class="news-search-input" placeholder="Search market news&hellip;">
+        <select id="search-location" class="news-search-select">
+          <option value="">All India</option>
+          <option value="Mumbai">Mumbai</option>
+          <option value="Delhi">Delhi</option>
+          <option value="Bangalore">Bangalore</option>
+          <option value="Chennai">Chennai</option>
+          <option value="Hyderabad">Hyderabad</option>
+          <option value="Kolkata">Kolkata</option>
+          <option value="Pune">Pune</option>
+        </select>
+        <div class="news-period-group" id="search-period">
+          <button class="news-period-btn" data-period="1d">24h</button>
+          <button class="news-period-btn active" data-period="7d">7d</button>
+          <button class="news-period-btn" data-period="1m">1m</button>
+          <button class="news-period-btn" data-period="3m">3m</button>
+        </div>
+        <button id="search-btn" class="btn btn-primary news-search-btn">Search</button>
+      </div>
+    </div>
+
+    <div id="search-loading" class="news-loading" style="display:none">
+      <div class="spinner"></div>
+      <span>Searching&hellip;</span>
+    </div>
+    <div id="search-error" class="alert alert-error" style="display:none"></div>
+    <div id="search-placeholder" class="news-explore-placeholder">
+      Search for any market topic &mdash; e.g. &ldquo;Reliance Q4 results&rdquo;, &ldquo;RBI rate cut&rdquo;, &ldquo;IPO 2026&rdquo;
+    </div>
+    <div id="search-container"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  /* ── Helpers ── */
+  function fmtCurrency(v) {
+    if (v >= 1e7) return '\u20B9' + (v / 1e7).toFixed(2) + ' Cr';
+    if (v >= 1e5) return '\u20B9' + (v / 1e5).toFixed(2) + ' L';
+    return '\u20B9' + v.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  }
+
+  function renderCard(item) {
+    const desc = item.description
+      ? `<p class="news-card-desc">${item.description}</p>` : '';
+    return `
+      <a class="news-card" href="${item.link}" target="_blank" rel="noopener">
+        <span class="news-type-tag">${item.source || 'News'}</span>
+        <h3 class="news-card-title">${item.title}</h3>
+        ${desc}
+        <span class="news-card-date">${item.date || ''}</span>
+      </a>`;
+  }
+
+  function renderSector(sector, collapsed) {
+    const count = sector.news.length;
+    const cards = count
+      ? sector.news.map(renderCard).join('')
+      : '<p class="news-empty">No recent news for this sector</p>';
+    return `
+      <div class="news-sector${collapsed ? ' collapsed' : ''}">
+        <div class="news-sector-head" onclick="this.parentElement.classList.toggle('collapsed')">
+          <div class="news-sector-left">
+            <h2>${sector.name}</h2>
+            <span class="news-badge">${fmtCurrency(sector.invested)} invested</span>
+            <span class="news-count">${count} article${count !== 1 ? 's' : ''}</span>
+          </div>
+          <span class="news-chevron"></span>
+        </div>
+        <div class="news-sector-body">
+          <div class="news-grid">${cards}</div>
+        </div>
+      </div>`;
+  }
+
+  function getActivePeriod(groupId) {
+    const btn = document.querySelector(`#${groupId} .news-period-btn.active`);
+    return btn ? btn.dataset.period : '7d';
+  }
+
+  /* ── Tab switching ── */
+  document.querySelectorAll('.news-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.news-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.news-tab-content').forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    });
+  });
+
+  /* ── Period button switching ── */
+  document.querySelectorAll('.news-period-group').forEach(group => {
+    group.querySelectorAll('.news-period-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        group.querySelectorAll('.news-period-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (group.id === 'portfolio-period') loadPortfolioNews();
+      });
+    });
+  });
+
+  /* ── Portfolio News ── */
+  const pLoading = document.getElementById('portfolio-loading');
+  const pError = document.getElementById('portfolio-error');
+  const pContainer = document.getElementById('portfolio-container');
+
+  async function loadPortfolioNews() {
+    const period = getActivePeriod('portfolio-period');
+    pLoading.style.display = 'flex';
+    pError.style.display = 'none';
+    pContainer.innerHTML = '';
+
+    try {
+      const res = await fetch(`/api/news/portfolio?period=${period}`);
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      pLoading.style.display = 'none';
+
+      let html = '';
+      if (data.sectors && data.sectors.length) {
+        data.sectors.forEach((s, i) => { html += renderSector(s, i >= 3); });
+      }
+      if (!html) {
+        html = '<p class="news-empty" style="text-align:center;padding:3rem">No portfolio news found. Try a longer time period.</p>';
+      }
+      pContainer.innerHTML = html;
+    } catch (e) {
+      pLoading.style.display = 'none';
+      pError.textContent = 'Failed to load portfolio news: ' + e.message;
+      pError.style.display = 'block';
+    }
+  }
+
+  loadPortfolioNews();
+
+  /* ── Explore / Search News ── */
+  const sInput = document.getElementById('search-input');
+  const sLocation = document.getElementById('search-location');
+  const sBtn = document.getElementById('search-btn');
+  const sLoading = document.getElementById('search-loading');
+  const sError = document.getElementById('search-error');
+  const sPlaceholder = document.getElementById('search-placeholder');
+  const sContainer = document.getElementById('search-container');
+
+  async function doSearch() {
+    const q = sInput.value.trim();
+    if (!q) return;
+    const period = getActivePeriod('search-period');
+    const location = sLocation.value;
+
+    sPlaceholder.style.display = 'none';
+    sLoading.style.display = 'flex';
+    sError.style.display = 'none';
+    sContainer.innerHTML = '';
+
+    try {
+      const params = new URLSearchParams({ q, period });
+      if (location) params.set('location', location);
+      const res = await fetch(`/api/news/search?${params}`);
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      sLoading.style.display = 'none';
+
+      if (!data.articles || !data.articles.length) {
+        sContainer.innerHTML = '<p class="news-empty" style="text-align:center;padding:3rem">No results found. Try different keywords or a longer time period.</p>';
+        return;
+      }
+      sContainer.innerHTML = '<div class="news-grid">' + data.articles.map(renderCard).join('') + '</div>';
+    } catch (e) {
+      sLoading.style.display = 'none';
+      sError.textContent = 'Search failed: ' + e.message;
+      sError.style.display = 'block';
+    }
+  }
+
+  sBtn.addEventListener('click', doSearch);
+  sInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+})();
+</script>
+{% endblock %}

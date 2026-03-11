@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Analytics{% endblock %}
+{% block content %}
+<div class="container analytics-page">
+  <div class="analytics-header">
+    <h1>Portfolio Analytics</h1>
+    <p class="analytics-sub">Visual breakdown of your portfolio performance, allocation, and what-if scenarios</p>
+  </div>
+
+  <!-- Row 1: P&L Treemap (hero) -->
+  <div class="chart-card chart-card-full">
+    <div class="chart-card-head">
+      <h2>P&L Heatmap</h2>
+      <span class="chart-tag">Size = Current Value &nbsp;&bull;&nbsp; Color = Profit / Loss</span>
+    </div>
+    <div id="chart-treemap" class="chart-box chart-tall"></div>
+  </div>
+
+  <!-- Row 2: Sector Allocation + Cash Gauge -->
+  <div class="chart-row">
+    <div class="chart-card chart-card-half">
+      <div class="chart-card-head">
+        <h2>Sector Allocation</h2>
+        <span class="chart-tag">By current value</span>
+      </div>
+      <div id="chart-allocation" class="chart-box chart-medium"></div>
+    </div>
+    <div class="chart-card chart-card-half">
+      <div class="chart-card-head">
+        <h2>Cash vs Invested</h2>
+        <span class="chart-tag">Capital deployment</span>
+      </div>
+      <div id="chart-gauge" class="chart-box chart-medium"></div>
+    </div>
+  </div>
+
+  <!-- Row 3: Top Gainers & Losers -->
+  <div class="chart-card chart-card-full">
+    <div class="chart-card-head">
+      <h2>Top Gainers &amp; Losers</h2>
+      <span class="chart-tag">Absolute P&L with percentage labels</span>
+    </div>
+    <div id="chart-gainers" class="chart-box chart-tall"></div>
+  </div>
+
+  <!-- Row 4: Candlestick -->
+  <div class="chart-card chart-card-full">
+    <div class="chart-card-head">
+      <h2>Stock Price Chart</h2>
+      <div class="chart-head-actions">
+        <select id="stock-picker" class="chart-select">
+          <option value="">Select a holding...</option>
+        </select>
+        <span class="chart-tag">90-day OHLC &nbsp;&bull;&nbsp; Yellow line = your avg buy price</span>
+      </div>
+    </div>
+    <div id="chart-candle" class="chart-box chart-xtall"></div>
+  </div>
+
+  <!-- Row 5: Portfolio Beta -->
+  <div class="chart-card chart-card-full">
+    <div class="chart-card-head">
+      <h2>Portfolio vs NIFTY 50</h2>
+      <span class="chart-tag">Cumulative returns &nbsp;&bull;&nbsp; <span style="color:#eab308">&#9644; NIFTY 50</span> &nbsp;&bull;&nbsp; <span style="color:#22c55e">&#9644; My Portfolio</span> &nbsp;&bull;&nbsp; 90 days</span>
+    </div>
+    <div id="chart-beta" class="chart-box chart-tall"></div>
+  </div>
+
+  <!-- Row 6: What-If Rebalancer -->
+  <div class="chart-card chart-card-full">
+    <div class="chart-card-head">
+      <h2>What-If Rebalancer</h2>
+      <span class="chart-tag">Simulate selling & reinvesting &mdash; drag the sliders</span>
+    </div>
+    <div id="chart-rebalancer" class="chart-box chart-rebalancer-box"></div>
+  </div>
+</div>
+
+<script type="module" src="/static/js/analytics.js"></script>
+{% endblock %}

@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
 <body>
   {% block nav %}
@@ -19,6 +20,8 @@
         <a href="/holdings" class="{{ 'active' if active == 'holdings' }}">Holdings</a>
         <a href="/positions" class="{{ 'active' if active == 'positions' }}">Positions</a>
         <a href="/orders" class="{{ 'active' if active == 'orders' }}">Orders</a>
+        <a href="/analytics" class="{{ 'active' if active == 'analytics' }}">Analytics</a>
+        <a href="/news" class="{{ 'active' if active == 'news' }}">News</a>
         <form action="/logout" method="post" style="display:inline">
           <button type="submit" class="btn btn-sm btn-danger">Logout</button>
         </form>
