@@ -1,38 +1,90 @@
 {% extends "base.html" %}
-{% block title %}Orders{% endblock %}
+{% block title %}Orders & Trades{% endblock %}
 {% block content %}
 <div class="container">
-  <h1 style="margin-bottom:1.25rem;font-size:1.3rem">Today's Orders</h1>
+  <h1 style="margin-bottom:1.25rem;font-size:1.3rem">Orders & Trades</h1>
 
   {% if error %}
   <div class="alert alert-error">{{ error }}</div>
   {% endif %}
-
-  {% if orders %}
-  <div class="card">
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>Order ID</th><th>Symbol</th><th>Type</th><th>Qty</th><th>Price</th><th>Status</th><th>Time</th></tr>
-        </thead>
-        <tbody>
-          {% for o in orders %}
-          <tr>
-            <td>{{ o.orderid }}</td>
-            <td>{{ o.symbol }}</td>
-            <td>{{ o.txn_type }}</td>
-            <td class="num">{{ o.qty }}</td>
-            <td class="num">{{ "{:.2f}".format(o.price) }}</td>
-            <td>{{ o.status }}</td>
-            <td>{{ o.time }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% else %}
-  <div class="card"><p style="color:var(--muted)">No orders placed today.</p></div>
+  {% if trade_error %}
+  <div class="alert alert-error">Trade book: {{ trade_error }}</div>
   {% endif %}
+
+  <div class="news-tabs" style="margin-bottom:1.25rem">
+    <button class="news-tab active" onclick="switchOTTab('orders')">Orders <span style="opacity:.6;font-size:.75rem">({{ orders|length }})</span></button>
+    <button class="news-tab" onclick="switchOTTab('trades')">Executed Trades <span style="opacity:.6;font-size:.75rem">({{ trades|length }})</span></button>
+  </div>
+
+  <!-- Orders tab -->
+  <div id="ot-orders" class="ot-panel">
+    {% if orders %}
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Order ID</th><th>Symbol</th><th>Type</th><th>Qty</th><th>Price</th><th>Status</th><th>Time</th></tr>
+          </thead>
+          <tbody>
+            {% for o in orders %}
+            <tr>
+              <td>{{ o.orderid }}</td>
+              <td>{{ o.symbol }}</td>
+              <td class="{{ 'positive' if o.txn_type == 'BUY' else 'negative' if o.txn_type == 'SELL' else '' }}">{{ o.txn_type }}</td>
+              <td class="num">{{ o.qty }}</td>
+              <td class="num">{{ "{:.2f}".format(o.price) }}</td>
+              <td>{{ o.status }}</td>
+              <td>{{ o.time }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="card"><p style="color:var(--muted)">No orders placed today.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Trades tab -->
+  <div id="ot-trades" class="ot-panel" style="display:none">
+    {% if trades %}
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Trade ID</th><th>Order ID</th><th>Symbol</th><th>Exchange</th><th>Type</th><th>Product</th><th>Qty</th><th>Fill Price</th><th>Time</th></tr>
+          </thead>
+          <tbody>
+            {% for t in trades %}
+            <tr>
+              <td>{{ t.tradeid }}</td>
+              <td>{{ t.orderid }}</td>
+              <td>{{ t.symbol }}</td>
+              <td>{{ t.exchange }}</td>
+              <td class="{{ 'positive' if t.txn_type == 'BUY' else 'negative' if t.txn_type == 'SELL' else '' }}">{{ t.txn_type }}</td>
+              <td>{{ t.product }}</td>
+              <td class="num">{{ t.qty }}</td>
+              <td class="num">{{ "{:.2f}".format(t.price) }}</td>
+              <td>{{ t.time }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="card"><p style="color:var(--muted)">No executed trades today.</p></div>
+    {% endif %}
+  </div>
 </div>
+
+<script>
+function switchOTTab(tab) {
+  document.querySelectorAll('.ot-panel').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.news-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('ot-' + tab).style.display = 'block';
+  event.currentTarget.classList.add('active');
+}
+</script>
 {% endblock %}

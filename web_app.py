@@ -16,6 +16,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from gnews import GNews
 
 from ai_service import generate_insights, ask_question
+from fundamental_service import get_stock_fundamentals
+from technical_service import compute_technical_indicators
+from sector_service import get_sector_overview, get_market_breadth
+from sentiment_service import analyze_articles, compute_sector_sentiment
 
 from session_manager import sessions
 
@@ -304,6 +308,7 @@ async def orders_page(request: Request):
 
     ctx = _ctx(request, "orders")
     order_list = []
+    trade_list = []
 
     try:
         data = client.get_order_book()
@@ -321,7 +326,25 @@ async def orders_page(request: Request):
     except Exception as e:
         ctx["error"] = str(e)
 
-    ctx.update(orders=order_list)
+    try:
+        tdata = client.get_trade_book()
+        if tdata.get("status") and tdata.get("data"):
+            for t in tdata["data"]:
+                trade_list.append(_TradeRow(
+                    tradeid=t.get("tradeid", "N/A"),
+                    orderid=t.get("orderid", "N/A"),
+                    symbol=t.get("tradingsymbol", "N/A"),
+                    txn_type=t.get("transactiontype", "N/A"),
+                    qty=int(t.get("fillsize", 0) or t.get("quantity", 0) or 0),
+                    price=float(t.get("fillprice", 0) or t.get("price", 0) or 0),
+                    time=t.get("filltime", t.get("updatetime", "N/A")),
+                    exchange=t.get("exchange", "N/A"),
+                    product=t.get("producttype", "N/A"),
+                ))
+    except Exception as e:
+        ctx["trade_error"] = str(e)
+
+    ctx.update(orders=order_list, trades=trade_list)
     return templates.TemplateResponse("orders.html", ctx)
 
 
@@ -331,6 +354,22 @@ async def analytics_page(request: Request):
     if client is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse("analytics.html", _ctx(request, "analytics"))
+
+
+@web.get("/research", response_class=HTMLResponse)
+async def research_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("research.html", _ctx(request, "research"))
+
+
+@web.get("/sectors", response_class=HTMLResponse)
+async def sectors_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("sectors.html", _ctx(request, "sectors"))
 
 
 @web.get("/news", response_class=HTMLResponse)
@@ -455,6 +494,92 @@ async def api_news_search(
         return JSONResponse({"articles": articles})
     except Exception as e:
         logger.exception("Search news API error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.post("/api/news/sentiment")
+async def api_news_sentiment(request: Request):
+    """
+    Run FinBERT sentiment analysis on portfolio news.
+    Body: {"sectors": [{"name": str, "invested": float, "news": [...]}]}
+    Returns same structure with sentiment added per article and per sector.
+    """
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    sectors = body.get("sectors", [])
+    if not sectors:
+        return JSONResponse({
+            "sectors": [],
+            "portfolio_sentiment": {
+                "label": "neutral",
+                "score": 0.0,
+                "bullish": 0,
+                "bearish": 0,
+                "neutral": 0,
+                "total_articles": 0,
+            },
+        })
+
+    def _run_sentiment():
+        enriched_sectors = []
+        overall_bullish = 0
+        overall_bearish = 0
+        overall_neutral = 0
+
+        for sector in sectors:
+            articles = sector.get("news", [])
+            analyzed = analyze_articles(articles)
+            sector_agg = compute_sector_sentiment(analyzed)
+
+            enriched_sectors.append({
+                "name": sector.get("name", ""),
+                "invested": sector.get("invested", 0),
+                "news": analyzed,
+                "sentiment_summary": sector_agg,
+            })
+            overall_bullish += sector_agg["bullish"]
+            overall_bearish += sector_agg["bearish"]
+            overall_neutral += sector_agg["neutral"]
+
+        total = overall_bullish + overall_bearish + overall_neutral
+        overall_score = (overall_bullish - overall_bearish) / total if total else 0.0
+        if overall_score > 0.2:
+            overall_label = "bullish"
+        elif overall_score < -0.2:
+            overall_label = "bearish"
+        else:
+            overall_label = "neutral"
+
+        return {
+            "sectors": enriched_sectors,
+            "portfolio_sentiment": {
+                "label": overall_label,
+                "score": round(overall_score, 3),
+                "bullish": overall_bullish,
+                "bearish": overall_bearish,
+                "neutral": overall_neutral,
+                "total_articles": total,
+            },
+        }
+
+    try:
+        result = await asyncio.to_thread(_run_sentiment)
+        return JSONResponse(result)
+    except ImportError as e:
+        logger.warning("Sentiment analysis unavailable: %s", e)
+        return JSONResponse(
+            {"error": "Sentiment analysis requires transformers and torch. Install with: pip install transformers torch"},
+            status_code=503,
+        )
+    except Exception as e:
+        logger.exception("Sentiment API error")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -635,6 +760,119 @@ async def api_portfolio_beta(request: Request, days: int = Query(90)):
 
     except Exception as e:
         logger.exception("Beta computation error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Research & Sector API endpoints ───────────────────────────────────────
+
+
+@web.get("/api/research/fundamental")
+async def api_research_fundamental(
+    request: Request,
+    symbol: str = Query(...),
+):
+    """Fetch fundamental analysis for a single stock."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        result = await asyncio.to_thread(get_stock_fundamentals, symbol)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Fundamental API error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/research/technical")
+async def api_research_technical(
+    request: Request,
+    symbol: str = Query(...),
+    exchange: str = Query("NSE"),
+    days: int = Query(365),
+):
+    """Fetch technical indicators for a single stock using Angel One candle data."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        base_sym = symbol.replace("-EQ", "")
+        sr = client.search_scrip(exchange, base_sym)
+        token = None
+        if sr.get("status") and sr.get("data"):
+            for item in sr["data"]:
+                if item.get("tradingsymbol") == symbol:
+                    token = item["symboltoken"]
+                    break
+            if not token:
+                token = sr["data"][0]["symboltoken"]
+
+        if not token:
+            return JSONResponse({"error": f"Could not find token for {symbol}"}, status_code=404)
+
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=min(days, 365))
+        candles = _fetch_candles_safe(
+            client, exchange, token, "ONE_DAY",
+            from_dt.strftime("%Y-%m-%d 09:15"),
+            to_dt.strftime("%Y-%m-%d 15:30"),
+        )
+
+        if not candles:
+            return JSONResponse({"error": f"No candle data for {symbol}"}, status_code=400)
+
+        # Find avg buy price from holdings
+        avg_price = None
+        try:
+            h_data = client.get_holdings()
+            if h_data.get("status") and h_data.get("data"):
+                for h in h_data["data"]:
+                    if h.get("tradingsymbol") == symbol:
+                        avg_price = float(h.get("averageprice", 0) or 0)
+                        break
+        except Exception:
+            pass
+
+        result = compute_technical_indicators(candles, symbol, avg_price)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Technical API error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/sectors/overview")
+async def api_sectors_overview(request: Request):
+    """Get sector-level analysis for the user's portfolio."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        portfolio = _build_portfolio_data(client)
+        holdings = portfolio.get("holdings", [])
+        if not holdings:
+            return JSONResponse({"error": "No holdings found"}, status_code=400)
+
+        result = await asyncio.to_thread(get_sector_overview, holdings, SECTOR_MAP)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Sectors overview API error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/sectors/breadth")
+async def api_sectors_breadth(request: Request):
+    """Get market breadth indicators."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        result = await asyncio.to_thread(get_market_breadth)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Market breadth API error")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -821,3 +1059,16 @@ class _OrderRow:
     price: float
     status: str
     time: str
+
+
+@dataclass
+class _TradeRow:
+    tradeid: str
+    orderid: str
+    symbol: str
+    txn_type: str
+    qty: int
+    price: float
+    time: str
+    exchange: str
+    product: str

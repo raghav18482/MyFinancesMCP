@@ -13,3 +13,9 @@ itsdangerous
 openai
 gnews
 requests
+yfinance
+nselib
+pandas
+ta
+transformers
+torch

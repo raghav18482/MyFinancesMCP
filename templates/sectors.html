@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Sectoral Intelligence{% endblock %}
+{% block content %}
+<div class="container sectors-page">
+  <div class="sectors-header">
+    <h1>Sectoral Intelligence</h1>
+    <p class="sectors-sub">How your sectors are performing and what drives them</p>
+  </div>
+
+  <!-- Market Breadth Overview -->
+  <div class="card" id="breadth-card">
+    <h2>Market Breadth</h2>
+    <div id="breadth-loading" class="loading"><div class="spinner"></div></div>
+    <div id="breadth-content" style="display:none">
+      <div class="stat-grid" id="breadth-stats"></div>
+
+      <!-- FII/DII Activity -->
+      <div id="fii-dii-section" style="display:none">
+        <h3 style="font-size:.85rem;color:var(--muted);margin:1rem 0 .5rem;font-weight:600">FII / DII Activity (Last 7 days)</h3>
+        <div class="table-wrap">
+          <table id="fii-dii-table">
+            <thead><tr></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div id="breadth-error" class="alert alert-error" style="display:none"></div>
+  </div>
+
+  <!-- Sector Heatmap -->
+  <div class="chart-card chart-card-full">
+    <div class="chart-card-head">
+      <h2>Index Performance Heatmap</h2>
+      <span class="chart-tag">Live % change from NSE indices</span>
+    </div>
+    <div id="chart-heatmap" class="chart-box" style="height:420px">
+      <div class="chart-loading"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- Per-Sector Cards -->
+  <div id="sectors-loading" class="loading"><div class="spinner"></div></div>
+  <div id="sectors-error" class="alert alert-error" style="display:none"></div>
+  <div id="sectors-container"></div>
+</div>
+
+<script type="module" src="/static/js/sectors.js"></script>
+{% endblock %}

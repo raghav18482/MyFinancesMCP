@@ -23,6 +23,44 @@
         <button class="news-period-btn" data-period="1m">1 month</button>
         <button class="news-period-btn" data-period="3m">3 months</button>
       </div>
+      <button type="button" id="analyze-sentiment-btn" class="btn btn-accent news-sentiment-btn">
+        &#128202; Analyze Sentiment
+      </button>
+    </div>
+
+    <div id="sentiment-summary-card" class="sentiment-summary-card" style="display:none">
+      <div class="sentiment-summary-header">
+        <span class="sentiment-summary-title">&#128200; Portfolio Sentiment Pulse</span>
+      </div>
+      <div class="sentiment-summary-body">
+        <div class="sentiment-overall">
+          <span id="sentiment-overall-label" class="sentiment-overall-label">—</span>
+          <span id="sentiment-overall-desc" class="sentiment-overall-desc"></span>
+        </div>
+        <div class="sentiment-bars">
+          <div class="sentiment-bar-row">
+            <span class="sentiment-bar-label bullish">Bullish</span>
+            <div class="sentiment-bar-track"><div id="sentiment-bar-bullish" class="sentiment-bar-fill bullish" style="width:0%"></div></div>
+            <span id="sentiment-count-bullish" class="sentiment-count">0</span>
+          </div>
+          <div class="sentiment-bar-row">
+            <span class="sentiment-bar-label bearish">Bearish</span>
+            <div class="sentiment-bar-track"><div id="sentiment-bar-bearish" class="sentiment-bar-fill bearish" style="width:0%"></div></div>
+            <span id="sentiment-count-bearish" class="sentiment-count">0</span>
+          </div>
+          <div class="sentiment-bar-row">
+            <span class="sentiment-bar-label neutral">Neutral</span>
+            <div class="sentiment-bar-track"><div id="sentiment-bar-neutral" class="sentiment-bar-fill neutral" style="width:0%"></div></div>
+            <span id="sentiment-count-neutral" class="sentiment-count">0</span>
+          </div>
+        </div>
+        <p id="sentiment-extremes" class="sentiment-extremes"></p>
+      </div>
+    </div>
+
+    <div id="sentiment-loading" class="news-loading" style="display:none">
+      <div class="spinner"></div>
+      <span>Analyzing sentiment with FinBERT&hellip;</span>
     </div>
 
     <div id="portfolio-loading" class="news-loading">
@@ -79,16 +117,37 @@
     return '\u20B9' + v.toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
 
+  function sentimentBadge(sentiment) {
+    if (!sentiment || !sentiment.label) return '';
+    const label = sentiment.label;
+    const display = label === 'positive' ? 'Bullish' : label === 'negative' ? 'Bearish' : 'Neutral';
+    const pct = sentiment.confidence != null ? Math.round(sentiment.confidence * 100) : '';
+    const cls = 'sentiment-pill ' + (label === 'positive' ? 'bullish' : label === 'negative' ? 'bearish' : 'neutral');
+    return `<span class="${cls}">${display}${pct ? ' ' + pct + '%' : ''}</span>`;
+  }
+
   function renderCard(item) {
     const desc = item.description
       ? `<p class="news-card-desc">${item.description}</p>` : '';
+    const badge = item.sentiment ? sentimentBadge(item.sentiment) : '';
     return `
-      <a class="news-card" href="${item.link}" target="_blank" rel="noopener">
-        <span class="news-type-tag">${item.source || 'News'}</span>
+      <a class="news-card" href="${item.link || '#'}" target="_blank" rel="noopener">
+        <div class="news-card-top">
+          <span class="news-type-tag">${item.source || 'News'}</span>
+          ${badge}
+        </div>
         <h3 class="news-card-title">${item.title}</h3>
         ${desc}
         <span class="news-card-date">${item.date || ''}</span>
       </a>`;
+  }
+
+  function sectorGauge(summary) {
+    if (!summary || summary.bullish + summary.bearish + summary.neutral === 0) return '';
+    const total = summary.bullish + summary.bearish + summary.neutral;
+    const pctBull = Math.round((summary.bullish / total) * 100);
+    const label = summary.label === 'bullish' ? 'Bullish' : summary.label === 'bearish' ? 'Bearish' : 'Neutral';
+    return `<span class="news-sector-gauge ${summary.label}">${pctBull}% ${label}</span>`;
   }
 
   function renderSector(sector, collapsed) {
@@ -96,13 +155,15 @@
     const cards = count
       ? sector.news.map(renderCard).join('')
       : '<p class="news-empty">No recent news for this sector</p>';
+    const gauge = sector.sentiment_summary ? sectorGauge(sector.sentiment_summary) : '';
     return `
-      <div class="news-sector${collapsed ? ' collapsed' : ''}">
+      <div class="news-sector${collapsed ? ' collapsed' : ''}" data-sector="${sector.name}">
         <div class="news-sector-head" onclick="this.parentElement.classList.toggle('collapsed')">
           <div class="news-sector-left">
             <h2>${sector.name}</h2>
             <span class="news-badge">${fmtCurrency(sector.invested)} invested</span>
             <span class="news-count">${count} article${count !== 1 ? 's' : ''}</span>
+            ${gauge}
           </div>
           <span class="news-chevron"></span>
         </div>
@@ -142,11 +203,15 @@
   const pLoading = document.getElementById('portfolio-loading');
   const pError = document.getElementById('portfolio-error');
   const pContainer = document.getElementById('portfolio-container');
+  const sentimentSummaryCard = document.getElementById('sentiment-summary-card');
+  const sentimentLoading = document.getElementById('sentiment-loading');
+  let lastPortfolioData = null;
 
   async function loadPortfolioNews() {
     const period = getActivePeriod('portfolio-period');
     pLoading.style.display = 'flex';
     pError.style.display = 'none';
+    sentimentSummaryCard.style.display = 'none';
     pContainer.innerHTML = '';
 
     try {
@@ -156,6 +221,7 @@
         throw new Error(d.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
+      lastPortfolioData = data;
       pLoading.style.display = 'none';
 
       let html = '';
@@ -172,6 +238,78 @@
       pError.style.display = 'block';
     }
   }
+
+  function renderPortfolioWithSentiment(data) {
+    let html = '';
+    if (data.sectors && data.sectors.length) {
+      data.sectors.forEach((s, i) => { html += renderSector(s, i >= 3); });
+    }
+    pContainer.innerHTML = html || pContainer.innerHTML;
+  }
+
+  function showSentimentSummary(ps, sectors) {
+    if (!ps || ps.total_articles === 0) return;
+    const total = ps.total_articles;
+    const pctB = Math.round((ps.bullish / total) * 100);
+    const pctR = Math.round((ps.bearish / total) * 100);
+    const pctN = Math.round((ps.neutral / total) * 100);
+
+    document.getElementById('sentiment-overall-label').textContent =
+      ps.label === 'bullish' ? 'Moderately Bullish' : ps.label === 'bearish' ? 'Moderately Bearish' : 'Neutral';
+    document.getElementById('sentiment-overall-label').className = 'sentiment-overall-label ' + (ps.label || '');
+    document.getElementById('sentiment-overall-desc').textContent = total + ' article' + (total !== 1 ? 's' : '') + ' analyzed';
+
+    document.getElementById('sentiment-bar-bullish').style.width = pctB + '%';
+    document.getElementById('sentiment-bar-bearish').style.width = pctR + '%';
+    document.getElementById('sentiment-bar-neutral').style.width = pctN + '%';
+    document.getElementById('sentiment-count-bullish').textContent = ps.bullish;
+    document.getElementById('sentiment-count-bearish').textContent = ps.bearish;
+    document.getElementById('sentiment-count-neutral').textContent = ps.neutral;
+
+    let extremes = '';
+    if (sectors && sectors.length) {
+      const bullishFirst = sectors.filter(s => (s.sentiment_summary && s.sentiment_summary.bullish > 0)).sort((a, b) => (b.sentiment_summary.bullish - b.sentiment_summary.bearish) - (a.sentiment_summary.bullish - a.sentiment_summary.bearish));
+      const bearishFirst = sectors.filter(s => (s.sentiment_summary && s.sentiment_summary.bearish > 0)).sort((a, b) => (b.sentiment_summary.bearish - b.sentiment_summary.bullish) - (a.sentiment_summary.bearish - a.sentiment_summary.bullish));
+      if (bullishFirst.length) extremes = 'Most Bullish: ' + bullishFirst[0].name;
+      if (bearishFirst.length) extremes += (extremes ? '  ·  ' : '') + 'Most Bearish: ' + bearishFirst[0].name;
+    }
+    document.getElementById('sentiment-extremes').textContent = extremes;
+    sentimentSummaryCard.style.display = 'block';
+  }
+
+  async function analyzeSentiment() {
+    if (!lastPortfolioData || !lastPortfolioData.sectors || !lastPortfolioData.sectors.length) {
+      pError.textContent = 'Load portfolio news first, then run sentiment analysis.';
+      pError.style.display = 'block';
+      return;
+    }
+    sentimentLoading.style.display = 'flex';
+    pError.style.display = 'none';
+
+    try {
+      const res = await fetch('/api/news/sentiment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lastPortfolioData),
+      });
+      const data = await res.json();
+      sentimentLoading.style.display = 'none';
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Sentiment analysis failed');
+      }
+
+      showSentimentSummary(data.portfolio_sentiment, data.sectors);
+      renderPortfolioWithSentiment(data);
+      lastPortfolioData = data;
+    } catch (e) {
+      sentimentLoading.style.display = 'none';
+      pError.textContent = 'Sentiment analysis failed: ' + e.message;
+      pError.style.display = 'block';
+    }
+  }
+
+  document.getElementById('analyze-sentiment-btn').addEventListener('click', analyzeSentiment);
 
   loadPortfolioNews();
 

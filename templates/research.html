@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Stock Research{% endblock %}
+{% block content %}
+<div class="container research-page" style="max-width:1440px">
+  <div class="research-header">
+    <h1>Stock Research</h1>
+    <p class="research-sub">Fundamental &amp; technical analysis for your portfolio holdings</p>
+  </div>
+
+  <!-- Stock Picker Pills -->
+  <div class="stock-pills" id="stock-pills">
+    <div class="loading"><div class="spinner"></div></div>
+  </div>
+
+  <!-- Stock Info Bar -->
+  <div id="stock-bar" class="stock-bar card" style="display:none">
+    <div class="stock-bar-left">
+      <h2 id="bar-name"></h2>
+      <span id="bar-meta" class="stock-bar-meta"></span>
+    </div>
+    <div class="stock-bar-right">
+      <div class="stock-bar-price" id="bar-price"></div>
+      <div class="stock-bar-pnl" id="bar-pnl"></div>
+    </div>
+  </div>
+
+  <!-- Tab Switcher -->
+  <div class="research-tabs" id="research-tabs" style="display:none">
+    <button class="research-tab active" data-tab="fundamental">Fundamental</button>
+    <button class="research-tab" data-tab="technical">Technical</button>
+  </div>
+
+  <!-- ═══ Fundamental Tab ═══ -->
+  <div id="tab-fundamental" class="research-tab-content active">
+    <div id="fundamental-loading" class="loading" style="display:none"><div class="spinner"></div></div>
+    <div id="fundamental-error" class="alert alert-error" style="display:none"></div>
+    <div id="fundamental-content" style="display:none">
+
+      <div class="research-grid">
+        <!-- Valuation Metrics -->
+        <div class="card research-card">
+          <h2>Valuation Metrics</h2>
+          <div class="metric-list" id="valuation-metrics"></div>
+        </div>
+
+        <!-- Financial Health -->
+        <div class="card research-card">
+          <h2>Financial Health</h2>
+          <div class="metric-list" id="health-metrics"></div>
+        </div>
+      </div>
+
+      <!-- Revenue & Profit Trend Chart -->
+      <div class="chart-card chart-card-full">
+        <div class="chart-card-head">
+          <h2>Revenue &amp; Profit Trend</h2>
+          <span class="chart-tag">Annual financials from Yahoo Finance</span>
+        </div>
+        <div id="chart-financials" class="chart-box" style="height:340px"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ═══ Technical Tab ═══ -->
+  <div id="tab-technical" class="research-tab-content">
+    <div id="technical-loading" class="loading" style="display:none"><div class="spinner"></div></div>
+    <div id="technical-error" class="alert alert-error" style="display:none"></div>
+    <div id="technical-content" style="display:none">
+
+      <div class="research-grid">
+        <!-- Key Indicators -->
+        <div class="card research-card">
+          <h2>Key Indicators</h2>
+          <div class="metric-list" id="tech-indicators"></div>
+        </div>
+
+        <!-- Signal Summary -->
+        <div class="card research-card">
+          <h2>Signal Summary</h2>
+          <div id="signal-list" class="signal-list"></div>
+        </div>
+      </div>
+
+      <!-- Support & Resistance -->
+      <div class="card">
+        <h2>Support &amp; Resistance (Pivot Points)</h2>
+        <div class="sr-levels" id="sr-levels"></div>
+      </div>
+
+      <!-- Price Chart with DMA + Volume -->
+      <div class="chart-card chart-card-full">
+        <div class="chart-card-head">
+          <h2>Price Chart</h2>
+          <span class="chart-tag">Candlestick &bull; 50 DMA (blue) &bull; 200 DMA (orange) &bull; Volume</span>
+        </div>
+        <div id="chart-price" class="chart-box" style="height:500px"></div>
+      </div>
+
+      <!-- RSI Chart -->
+      <div class="chart-card chart-card-full">
+        <div class="chart-card-head">
+          <h2>RSI (14)</h2>
+          <span class="chart-tag">Above 70 = Overbought &bull; Below 30 = Oversold</span>
+        </div>
+        <div id="chart-rsi" class="chart-box" style="height:280px"></div>
+      </div>
+
+      <!-- MACD Chart -->
+      <div class="chart-card chart-card-full">
+        <div class="chart-card-head">
+          <h2>MACD</h2>
+          <span class="chart-tag">MACD line (blue) &bull; Signal line (orange) &bull; Histogram</span>
+        </div>
+        <div id="chart-macd" class="chart-box" style="height:300px"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/static/js/research.js"></script>
+{% endblock %}
