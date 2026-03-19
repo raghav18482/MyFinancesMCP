@@ -78,12 +78,20 @@
   <div class="ai-section">
     <div class="ai-key-bar card">
       <div class="ai-key-row">
-        <span class="ai-key-label">OpenAI API Key</span>
-        <input type="password" id="aiKeyInput" class="ai-key-input" placeholder="sk-...">
+        <span class="ai-key-label">Provider</span>
+        <select id="aiProvider" class="ai-select" title="LLM provider">
+          <option value="openai">OpenAI</option>
+          <option value="gemini">Google Gemini</option>
+        </select>
+        <span class="ai-key-label">Model</span>
+        <select id="aiModel" class="ai-select" title="Model name"></select>
+        <span class="ai-key-label">API key</span>
+        <input type="password" id="aiKeyInput" class="ai-key-input" placeholder="OpenAI sk-… or Google AI key">
         <button class="btn btn-sm btn-accent" id="aiKeySave">Save Key</button>
         <button class="btn btn-sm btn-muted" id="aiKeyClear">Clear</button>
         <span class="ai-key-status" id="aiKeyStatus"></span>
       </div>
+      <p class="ai-agent-hint" style="margin:.5rem 0 0;font-size:.8rem">Key is encrypted in your browser only; choose OpenAI or Gemini and a matching model. <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI keys</a></p>
     </div>
 
     <div class="card ai-card" id="insightsCard">
@@ -92,7 +100,7 @@
         <button class="btn btn-sm btn-accent" id="insightsRegenerate" disabled>Regenerate</button>
       </div>
       <div id="insightsContent" class="ai-response">
-        <div class="ai-placeholder">Enter your OpenAI API key above to unlock AI insights.</div>
+        <div class="ai-placeholder">Enter your API key above and pick provider/model to unlock AI insights.</div>
       </div>
     </div>
 
@@ -111,6 +119,20 @@
       </div>
       <div id="askContent" class="ai-response" style="display:none"></div>
     </div>
+
+    <div class="card ai-card" id="langgraphCard">
+      <div class="ai-card-header">
+        <h2>LangGraph Agent</h2>
+        <button type="button" class="btn btn-sm btn-muted" id="lgResetThread" title="Start a new conversation">New chat</button>
+      </div>
+      <p class="ai-agent-hint">Uses your portfolio tools, Chroma RAG (run <code>python -m rag.ingest --rebuild</code> once), optional Tavily/SerpAPI web search, and saved preferences.</p>
+      <div id="lgChatLog" class="ai-response lg-chat-log" style="min-height:8rem"></div>
+      <div class="ai-ask-row" style="margin-top:.75rem">
+        <input type="text" id="lgMessage" class="ai-ask-input" placeholder="e.g. Should I buy more RELIANCE today?">
+        <button class="btn btn-sm btn-accent" id="lgSendBtn">Send</button>
+      </div>
+      <div id="lgStatus" class="ai-key-status"></div>
+    </div>
   </div>
 </div>
 
@@ -118,6 +140,22 @@
 (function(){
   const CLIENT_ID = "{{ client_id }}";
   const LS_KEY = "mfmcp_ai_key";
+  const LS_PROVIDER = "mfmcp_ai_provider";
+  const LS_MODEL_PREFIX = "mfmcp_ai_model_";
+  const MODEL_OPTIONS = {
+    openai: [
+      {v:"gpt-4o-mini", l:"gpt-4o-mini"},
+      {v:"gpt-4o", l:"gpt-4o"},
+      {v:"gpt-4-turbo", l:"gpt-4-turbo"},
+      {v:"gpt-3.5-turbo", l:"gpt-3.5-turbo"},
+    ],
+    gemini: [
+      {v:"gemini-2.0-flash", l:"gemini-2.0-flash"},
+      {v:"gemini-2.0-flash-lite", l:"gemini-2.0-flash-lite"},
+      {v:"gemini-1.5-flash", l:"gemini-1.5-flash"},
+      {v:"gemini-1.5-pro", l:"gemini-1.5-pro"},
+    ],
+  };
   const HAS_SUBTLE = !!(window.crypto && window.crypto.subtle);
 
   // ── Shared helpers ──
@@ -188,10 +226,31 @@
   }
 
   // ── UI refs ──
+  const $aiProvider=document.getElementById("aiProvider");
+  const $aiModel=document.getElementById("aiModel");
   const $keyInput=document.getElementById("aiKeyInput");
   const $keySave=document.getElementById("aiKeySave");
   const $keyClear=document.getElementById("aiKeyClear");
   const $keyStatus=document.getElementById("aiKeyStatus");
+
+  function rebuildModelOptions(){
+    const p=$aiProvider.value||"openai";
+    const list=MODEL_OPTIONS[p]||MODEL_OPTIONS.openai;
+    const saved=localStorage.getItem(LS_MODEL_PREFIX+p);
+    $aiModel.innerHTML=list.map(o=>'<option value="'+o.v+'">'+o.l+"</option>").join("");
+    const pick=(saved&&list.some(x=>x.v===saved))?saved:list[0].v;
+    $aiModel.value=pick;
+  }
+  function getLLMSettings(){
+    return{provider:$aiProvider.value,model:$aiModel.value};
+  }
+  $aiProvider.addEventListener("change",()=>{
+    localStorage.setItem(LS_PROVIDER,$aiProvider.value);
+    rebuildModelOptions();
+  });
+  $aiModel.addEventListener("change",()=>{
+    localStorage.setItem(LS_MODEL_PREFIX+$aiProvider.value,$aiModel.value);
+  });
   const $insContent=document.getElementById("insightsContent");
   const $insRegen=document.getElementById("insightsRegenerate");
   const $askContent=document.getElementById("askContent");
@@ -219,6 +278,7 @@
     const apiKey=await decryptKey(CLIENT_ID);
     if(!apiKey){showError(errorTarget||$insContent,"Could not decrypt API key. Please re-save your key.");return null;}
     body.api_key=apiKey;
+    Object.assign(body,getLLMSettings());
     const res=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     return res.json();
   }
@@ -238,7 +298,7 @@
   $keyClear.addEventListener("click",()=>{
     localStorage.removeItem(LS_KEY);
     setStatus(false);
-    $insContent.innerHTML='<div class="ai-placeholder">Enter your OpenAI API key above to unlock AI insights.</div>';
+    $insContent.innerHTML='<div class="ai-placeholder">Enter your API key above and pick provider/model to unlock AI insights.</div>';
     $askContent.style.display="none";
   });
 
@@ -278,8 +338,74 @@
     if(chip)askAI(chip.dataset.q);
   });
 
+  // ── LangGraph agent ──
+  const LG_THREAD_KEY="mfmcp_lg_thread_"+CLIENT_ID;
+  const $lgLog=document.getElementById("lgChatLog");
+  const $lgMsg=document.getElementById("lgMessage");
+  const $lgSend=document.getElementById("lgSendBtn");
+  const $lgReset=document.getElementById("lgResetThread");
+  const $lgStatus=document.getElementById("lgStatus");
+
+  function lgGetThreadId(){
+    return localStorage.getItem(LG_THREAD_KEY)||"";
+  }
+  function lgSetThreadId(id){
+    if(id)localStorage.setItem(LG_THREAD_KEY,id);
+    else localStorage.removeItem(LG_THREAD_KEY);
+  }
+  function lgAppend(role,text){
+    const row=document.createElement("div");
+    row.className="lg-chat-turn "+role;
+    const escaped=text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
+    row.innerHTML="<strong>"+(role==="user"?"You":"Agent")+"</strong><br>"+escaped;
+    $lgLog.appendChild(row);
+    $lgLog.scrollTop=$lgLog.scrollHeight;
+  }
+
+  $lgReset.addEventListener("click",()=>{
+    lgSetThreadId("");
+    $lgLog.innerHTML="";
+    $lgStatus.textContent="New thread — next message starts fresh.";
+  });
+
+  async function lgSend(){
+    const text=$lgMsg.value.trim();
+    if(!text)return;
+    const apiKey=await decryptKey(CLIENT_ID);
+    if(!apiKey){$lgStatus.textContent="Save your API key above first.";return;}
+    let tid=lgGetThreadId();
+    $lgStatus.textContent="Thinking…";
+    $lgSend.disabled=true;
+    lgAppend("user",text);
+    $lgMsg.value="";
+    try{
+      const res=await fetch("/api/agent/langgraph/chat",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(Object.assign({api_key:apiKey,message:text,thread_id:tid||undefined},getLLMSettings()))
+      });
+      const data=await res.json();
+      if(data.error){$lgStatus.textContent=data.error;lgAppend("assistant","Error: "+data.error);return;}
+      if(data.thread_id)lgSetThreadId(data.thread_id);
+      lgAppend("assistant",data.answer||"(empty)");
+      $lgStatus.textContent="";
+    }catch(e){
+      $lgStatus.textContent=e.message;
+      lgAppend("assistant","Request failed: "+e.message);
+    }finally{
+      $lgSend.disabled=false;
+    }
+  }
+  $lgSend.addEventListener("click",lgSend);
+  $lgMsg.addEventListener("keydown",(e)=>{if(e.key==="Enter")lgSend();});
+
   // ── Init ──
   (async()=>{
+    const sp=localStorage.getItem(LS_PROVIDER);
+    if(sp==="openai"||sp==="gemini")$aiProvider.value=sp;
+    rebuildModelOptions();
+    const sm=localStorage.getItem(LS_MODEL_PREFIX+$aiProvider.value);
+    if(sm&&Array.from($aiModel.options).some(o=>o.value===sm))$aiModel.value=sm;
     const hasKey=!!localStorage.getItem(LS_KEY);
     setStatus(hasKey);
     if(hasKey)loadInsights();

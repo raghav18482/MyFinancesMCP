@@ -16,12 +16,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from gnews import GNews
 
 from ai_service import generate_insights, ask_question
+from llm_providers import default_model_for_provider, normalize_provider
 from fundamental_service import get_stock_fundamentals
 from technical_service import compute_technical_indicators
 from sector_service import get_sector_overview, get_market_breadth
 from sentiment_service import analyze_articles, compute_sector_sentiment
 
 from session_manager import sessions
+from portfolio_snapshot import build_portfolio_data as _build_portfolio_data
 
 logger = logging.getLogger(__name__)
 
@@ -913,61 +915,6 @@ def _compute_beta(x_returns, y_returns):
 # ── AI API endpoints ──────────────────────────────────────────────────────
 
 
-def _build_portfolio_data(client) -> dict:
-    """Extract holdings, positions, and funds into a dict for the LLM."""
-    data = {"holdings": [], "summary": {}, "funds": {}}
-
-    try:
-        h_data = client.get_holdings()
-        if h_data.get("status") and h_data.get("data"):
-            total_inv = 0.0
-            total_cur = 0.0
-            for h in h_data["data"]:
-                qty = int(h.get("quantity", 0) or 0)
-                avg = float(h.get("averageprice", 0) or 0)
-                ltp = float(h.get("ltp", 0) or 0)
-                inv = qty * avg
-                cur = qty * ltp
-                pnl = cur - inv
-                pnl_pct = (pnl / inv * 100) if inv else 0.0
-                total_inv += inv
-                total_cur += cur
-                data["holdings"].append({
-                    "symbol": h.get("tradingsymbol", "N/A"),
-                    "qty": qty, "avg_price": avg, "ltp": ltp,
-                    "invested": round(inv, 2), "current": round(cur, 2),
-                    "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
-                })
-            data["summary"]["total_invested"] = round(total_inv, 2)
-            data["summary"]["current_value"] = round(total_cur, 2)
-            data["summary"]["overall_pnl"] = round(total_cur - total_inv, 2)
-            data["summary"]["overall_pnl_pct"] = round(
-                ((total_cur - total_inv) / total_inv * 100) if total_inv else 0.0, 2
-            )
-    except Exception as e:
-        logger.warning("Portfolio build – holdings error: %s", e)
-
-    try:
-        pos = client.get_positions()
-        if pos.get("status") and pos.get("data"):
-            data["summary"]["day_pnl"] = round(
-                sum(float(p.get("pnl", 0) or 0) for p in pos["data"]), 2
-            )
-    except Exception as e:
-        logger.warning("Portfolio build – positions error: %s", e)
-
-    try:
-        funds = client.get_funds()
-        if funds.get("status") and funds.get("data"):
-            d = funds["data"]
-            data["funds"]["available_cash"] = d.get("availablecash", "N/A")
-            data["funds"]["net"] = d.get("net", "N/A")
-    except Exception as e:
-        logger.warning("Portfolio build – funds error: %s", e)
-
-    return data
-
-
 @web.post("/api/ai/insights")
 async def ai_insights(request: Request):
     client = _require_login(request)
@@ -981,13 +928,21 @@ async def ai_insights(request: Request):
 
     api_key = body.get("api_key", "")
     if not api_key:
-        return JSONResponse({"error": "Please enter your OpenAI API key"}, status_code=400)
+        return JSONResponse(
+            {"error": "Please enter your OpenAI or Google AI (Gemini) API key"},
+            status_code=400,
+        )
 
-    model = body.get("model", "gpt-4o-mini")
+    provider = normalize_provider(body.get("provider"))
+    raw_model = body.get("model")
+    model = (
+        (raw_model.strip() if isinstance(raw_model, str) else "")
+        or default_model_for_provider(provider)
+    )
     portfolio = _build_portfolio_data(client)
 
     try:
-        insight = await generate_insights(api_key, portfolio, model)
+        insight = await generate_insights(api_key, portfolio, model, provider=provider)
         return JSONResponse({"insight": insight})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -1009,23 +964,93 @@ async def ai_ask(request: Request):
 
     api_key = body.get("api_key", "")
     if not api_key:
-        return JSONResponse({"error": "Please enter your OpenAI API key"}, status_code=400)
+        return JSONResponse(
+            {"error": "Please enter your OpenAI or Google AI (Gemini) API key"},
+            status_code=400,
+        )
 
     question = body.get("question", "")
     if not question:
         return JSONResponse({"error": "Question cannot be empty"}, status_code=400)
 
-    model = body.get("model", "gpt-4o-mini")
+    provider = normalize_provider(body.get("provider"))
+    raw_model = body.get("model")
+    model = (
+        (raw_model.strip() if isinstance(raw_model, str) else "")
+        or default_model_for_provider(provider)
+    )
     portfolio = _build_portfolio_data(client)
 
     try:
-        answer = await ask_question(api_key, question, portfolio, model)
+        answer = await ask_question(api_key, question, portfolio, model, provider=provider)
         return JSONResponse({"answer": answer})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.exception("AI ask error")
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+@web.post("/api/agent/langgraph/chat")
+async def langgraph_agent_chat(request: Request):
+    """LangGraph ReAct agent: broker tools, Chroma RAG, web search, SQLite memory."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    api_key = body.get("api_key", "")
+    if not api_key:
+        return JSONResponse(
+            {"error": "LLM API key required (OpenAI or Google AI / Gemini)"},
+            status_code=400,
+        )
+
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "message is required"}, status_code=400)
+
+    raw_tid = body.get("thread_id")
+    thread_id = (raw_tid.strip() if isinstance(raw_tid, str) and raw_tid.strip() else None) or str(
+        uuid.uuid4()
+    )
+    provider = normalize_provider(body.get("provider"))
+    raw_model = body.get("model")
+    model = (
+        (raw_model.strip() if isinstance(raw_model, str) else "")
+        or default_model_for_provider(provider)
+    )
+    sid = _sid(request)
+
+    try:
+        from agent_langgraph.runner import resolve_user_key, run_langgraph_agent
+
+        user_key = resolve_user_key(client, sid)
+        answer = await run_langgraph_agent(
+            client=client,
+            user_key=user_key,
+            message=message,
+            thread_id=thread_id,
+            api_key=api_key,
+            model=model,
+            llm_provider=provider,
+        )
+        return JSONResponse({"answer": answer, "thread_id": thread_id})
+    except ImportError as e:
+        logger.error("LangGraph agent dependencies missing: %s", e)
+        return JSONResponse(
+            {
+                "error": "Agent not available: install langgraph and related deps (see requirements.txt).",
+            },
+            status_code=503,
+        )
+    except Exception as e:
+        logger.exception("LangGraph agent error")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Data classes for template rendering ────────────────────────────────────

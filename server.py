@@ -13,6 +13,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP, Context
 
 from session_manager import sessions
+from portfolio_snapshot import build_portfolio_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -336,6 +337,22 @@ def portfolio_summary(ctx: Context = None) -> str:
         summary_parts.append(f"Funds error: {e}")
 
     return "\n".join(summary_parts) if summary_parts else "Could not fetch portfolio summary."
+
+
+@mcp.tool()
+def get_agent_portfolio_json(ctx: Context = None) -> str:
+    """Return a JSON snapshot of holdings, summary P&L, funds, and day P&L for AI agents.
+
+    Same structure as the web dashboard uses for insights. Use for precise numeric answers;
+    do not guess portfolio numbers without calling this or related tools.
+    """
+    client = _require_client(ctx)
+    try:
+        snap = build_portfolio_data(client)
+        return json.dumps(snap, indent=2, default=str)
+    except Exception as e:
+        logger.exception("get_agent_portfolio_json failed")
+        return json.dumps({"error": str(e)})
 
 
 @mcp.tool()

@@ -1,6 +1,9 @@
 import logging
+from typing import Optional
 
-from openai import AsyncOpenAI, AuthenticationError, APIError
+from openai import APIError, AsyncOpenAI, AuthenticationError
+
+from llm_providers import GEMINI, default_model_for_provider, normalize_provider
 
 logger = logging.getLogger(__name__)
 
@@ -39,30 +42,25 @@ Answer based only on the data above. Be specific and concise.
 """
 
 
-async def generate_insights(
+async def _openai_chat(
     api_key: str,
-    portfolio_data: dict,
-    model: str = "gpt-4o-mini",
+    model: str,
+    system: str,
+    user: str,
+    *,
+    max_tokens: int,
+    temperature: float,
 ) -> str:
-    """Generate a structured portfolio insight from holdings data."""
-    if not api_key or not api_key.strip():
-        raise ValueError("API key is required.")
-
-    import json
-    portfolio_json = json.dumps(portfolio_data, indent=2, default=str)
-
     client = AsyncOpenAI(api_key=api_key.strip())
     try:
         resp = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": INSIGHTS_USER_TEMPLATE.format(
-                    portfolio_json=portfolio_json,
-                )},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
             ],
-            temperature=0.4,
-            max_tokens=600,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         return resp.choices[0].message.content or "No response generated."
     except AuthenticationError:
@@ -72,11 +70,94 @@ async def generate_insights(
         raise ValueError(f"OpenAI API error: {e.message}")
 
 
+async def _gemini_chat(
+    api_key: str,
+    model: str,
+    system: str,
+    user: str,
+    *,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    import google.generativeai as genai
+    from google.api_core import exceptions as google_exceptions
+
+    genai.configure(api_key=api_key.strip())
+    try:
+        m = genai.GenerativeModel(
+            model_name=model,
+            system_instruction=system,
+        )
+        resp = await m.generate_content_async(
+            user,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            ),
+        )
+    except google_exceptions.PermissionDenied as e:
+        raise ValueError("Invalid or unauthorized Google API key. Please check and try again.") from e
+    except google_exceptions.InvalidArgument as e:
+        raise ValueError(f"Gemini request error: {e}") from e
+    except Exception as e:
+        logger.warning("Gemini API error: %s", e)
+        msg = str(e) or type(e).__name__
+        raise ValueError(f"Gemini API error: {msg}") from e
+
+    if not resp.candidates:
+        return "No response generated."
+    try:
+        text = resp.text
+    except ValueError:
+        # Blocked or empty finish reason
+        return "No response generated."
+    return (text or "").strip() or "No response generated."
+
+
+async def generate_insights(
+    api_key: str,
+    portfolio_data: dict,
+    model: Optional[str] = None,
+    *,
+    provider: Optional[str] = None,
+) -> str:
+    """Generate a structured portfolio insight from holdings data."""
+    if not api_key or not api_key.strip():
+        raise ValueError("API key is required.")
+
+    import json
+
+    prov = normalize_provider(provider)
+    mdl = (model or "").strip() or default_model_for_provider(prov)
+    portfolio_json = json.dumps(portfolio_data, indent=2, default=str)
+    user_content = INSIGHTS_USER_TEMPLATE.format(portfolio_json=portfolio_json)
+
+    if prov == GEMINI:
+        return await _gemini_chat(
+            api_key,
+            mdl,
+            SYSTEM_PROMPT,
+            user_content,
+            max_tokens=600,
+            temperature=0.4,
+        )
+    return await _openai_chat(
+        api_key,
+        mdl,
+        SYSTEM_PROMPT,
+        user_content,
+        max_tokens=600,
+        temperature=0.4,
+    )
+
+
 async def ask_question(
     api_key: str,
     question: str,
     portfolio_data: dict,
-    model: str = "gpt-4o-mini",
+    model: Optional[str] = None,
+    *,
+    provider: Optional[str] = None,
 ) -> str:
     """Answer a user question with portfolio context."""
     if not api_key or not api_key.strip():
@@ -85,25 +166,29 @@ async def ask_question(
         raise ValueError("Question cannot be empty.")
 
     import json
-    portfolio_json = json.dumps(portfolio_data, indent=2, default=str)
 
-    client = AsyncOpenAI(api_key=api_key.strip())
-    try:
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": QA_USER_TEMPLATE.format(
-                    portfolio_json=portfolio_json,
-                    question=question.strip(),
-                )},
-            ],
-            temperature=0.4,
+    prov = normalize_provider(provider)
+    mdl = (model or "").strip() or default_model_for_provider(prov)
+    portfolio_json = json.dumps(portfolio_data, indent=2, default=str)
+    user_content = QA_USER_TEMPLATE.format(
+        portfolio_json=portfolio_json,
+        question=question.strip(),
+    )
+
+    if prov == GEMINI:
+        return await _gemini_chat(
+            api_key,
+            mdl,
+            SYSTEM_PROMPT,
+            user_content,
             max_tokens=500,
+            temperature=0.4,
         )
-        return resp.choices[0].message.content or "No response generated."
-    except AuthenticationError:
-        raise ValueError("Invalid OpenAI API key. Please check and try again.")
-    except APIError as e:
-        logger.warning("OpenAI API error: %s", e)
-        raise ValueError(f"OpenAI API error: {e.message}")
+    return await _openai_chat(
+        api_key,
+        mdl,
+        SYSTEM_PROMPT,
+        user_content,
+        max_tokens=500,
+        temperature=0.4,
+    )

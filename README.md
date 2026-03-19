@@ -163,6 +163,7 @@ In ChatGPT Desktop, go to **Settings → Beta features → MCP Servers → Add S
 | `get_ltp` | Last traded price |
 | `search_scrip` | Search stocks by name |
 | `portfolio_summary` | High-level portfolio summary |
+| `get_agent_portfolio_json` | JSON snapshot of holdings, P&L, funds (for AI/agents) |
 | `get_candle_data` | Historical OHLC data |
 | `place_order` | Place a new order |
 | `modify_order` | Modify an existing order |
@@ -174,6 +175,14 @@ In ChatGPT Desktop, go to **Settings → Beta features → MCP Servers → Add S
 - Sessions expire automatically after **8 hours**
 - All traffic should go over **HTTPS** (provided by Railway/Render by default)
 - The web dashboard uses encrypted session cookies
+
+## LangGraph agent (dashboard)
+
+The dashboard includes a **LangGraph** agent with broker tools, Chroma RAG, optional web search (Tavily/SerpAPI), and SQLite preference memory. See [docs/langgraph-agent.md](docs/langgraph-agent.md). After installing deps, build the vector index:
+
+```bash
+python -m rag.ingest --rebuild
+```
 
 ## License
 

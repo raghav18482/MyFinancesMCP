@@ -1,0 +1,28 @@
+{
+  "description": "Optional future collections for user-specific RAG. Prefer SQLite user_memory for exact preferences.",
+  "collections": {
+    "user_trades_outcomes": {
+      "purpose": "Anonymized trade snippets + outcome labels for pattern hints",
+      "prerequisites": [
+        "ETL from Angel trade book API",
+        "PII scrubbing",
+        "Versioned export JSON under data/exports/"
+      ],
+      "document_schema": {
+        "symbol": "string",
+        "side": "BUY|SELL",
+        "date": "ISO date",
+        "outcome_note": "short text",
+        "pnl_realized": "optional number"
+      }
+    },
+    "uploaded_pdfs": {
+      "purpose": "Analyst reports and notes the user uploaded",
+      "ingestion": "Extract text (pypdf/pdfplumber), chunk, embed with file_hash metadata"
+    },
+    "user_rules": {
+      "purpose": "Semantic recall of natural-language preference summaries",
+      "note": "Mirror structured keys from SQLite user_memory; rebuild ingest after updates"
+    }
+  }
+}

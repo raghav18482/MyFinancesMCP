@@ -8,3 +8,5 @@ dist/
 *.egg-info/
 .DS_Store
 logs/
+data/chroma/
+data/agent_memory.db
