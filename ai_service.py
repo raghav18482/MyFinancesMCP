@@ -1,8 +1,40 @@
+import json
 import logging
+import os
 
-from openai import AsyncOpenAI, AuthenticationError, APIError
+from openai import APIError, AsyncOpenAI, AuthenticationError
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _openrouter_base_url() -> str:
+    return os.environ.get("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL).rstrip("/")
+
+
+def _openrouter_default_headers() -> dict[str, str] | None:
+    headers: dict[str, str] = {}
+    referer = os.environ.get("OPENROUTER_HTTP_REFERER")
+    if referer:
+        headers["HTTP-Referer"] = referer
+    title = os.environ.get("OPENROUTER_APP_NAME")
+    if title:
+        headers["X-Title"] = title
+    return headers or None
+
+
+def _make_client(api_key: str) -> AsyncOpenAI:
+    kwargs: dict = {
+        "api_key": api_key.strip(),
+        "base_url": _openrouter_base_url(),
+    }
+    dh = _openrouter_default_headers()
+    if dh:
+        kwargs["default_headers"] = dh
+    return AsyncOpenAI(**kwargs)
+
 
 SYSTEM_PROMPT = """\
 You are a concise portfolio analyst. You will receive a JSON snapshot of the \
@@ -39,19 +71,23 @@ Answer based only on the data above. Be specific and concise.
 """
 
 
+def _api_error_message(e: APIError) -> str:
+    msg = getattr(e, "message", None) or str(e)
+    return msg
+
+
 async def generate_insights(
     api_key: str,
     portfolio_data: dict,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_OPENROUTER_MODEL,
 ) -> str:
     """Generate a structured portfolio insight from holdings data."""
     if not api_key or not api_key.strip():
         raise ValueError("API key is required.")
 
-    import json
     portfolio_json = json.dumps(portfolio_data, indent=2, default=str)
 
-    client = AsyncOpenAI(api_key=api_key.strip())
+    client = _make_client(api_key)
     try:
         resp = await client.chat.completions.create(
             model=model,
@@ -66,17 +102,19 @@ async def generate_insights(
         )
         return resp.choices[0].message.content or "No response generated."
     except AuthenticationError:
-        raise ValueError("Invalid OpenAI API key. Please check and try again.")
+        raise ValueError(
+            "Invalid OpenRouter API key. Please check and try again."
+        ) from None
     except APIError as e:
-        logger.warning("OpenAI API error: %s", e)
-        raise ValueError(f"OpenAI API error: {e.message}")
+        logger.warning("OpenRouter API error: %s", e)
+        raise ValueError(f"OpenRouter API error: {_api_error_message(e)}") from None
 
 
 async def ask_question(
     api_key: str,
     question: str,
     portfolio_data: dict,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_OPENROUTER_MODEL,
 ) -> str:
     """Answer a user question with portfolio context."""
     if not api_key or not api_key.strip():
@@ -84,10 +122,9 @@ async def ask_question(
     if not question or not question.strip():
         raise ValueError("Question cannot be empty.")
 
-    import json
     portfolio_json = json.dumps(portfolio_data, indent=2, default=str)
 
-    client = AsyncOpenAI(api_key=api_key.strip())
+    client = _make_client(api_key)
     try:
         resp = await client.chat.completions.create(
             model=model,
@@ -103,7 +140,9 @@ async def ask_question(
         )
         return resp.choices[0].message.content or "No response generated."
     except AuthenticationError:
-        raise ValueError("Invalid OpenAI API key. Please check and try again.")
+        raise ValueError(
+            "Invalid OpenRouter API key. Please check and try again."
+        ) from None
     except APIError as e:
-        logger.warning("OpenAI API error: %s", e)
-        raise ValueError(f"OpenAI API error: {e.message}")
+        logger.warning("OpenRouter API error: %s", e)
+        raise ValueError(f"OpenRouter API error: {_api_error_message(e)}") from None

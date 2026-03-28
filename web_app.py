@@ -15,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from gnews import GNews
 
-from ai_service import generate_insights, ask_question
+from ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
 from fundamental_service import get_stock_fundamentals
 from technical_service import compute_technical_indicators
 from sector_service import get_sector_overview, get_market_breadth
@@ -224,48 +224,6 @@ async def dashboard(request: Request):
                    client_id=getattr(client, "client_id", ""))
 
     return templates.TemplateResponse("dashboard.html", ctx)
-
-
-@web.get("/holdings", response_class=HTMLResponse)
-async def holdings_page(request: Request):
-    client = _require_login(request)
-    if client is None:
-        return RedirectResponse("/login", status_code=302)
-
-    ctx = _ctx(request, "holdings")
-    holdings_list = []
-    total_invested = 0.0
-    current_value = 0.0
-
-    try:
-        data = client.get_holdings()
-        if data.get("status") and data.get("data"):
-            for h in data["data"]:
-                row = _HoldingRow(
-                    symbol=h.get("tradingsymbol", "N/A"),
-                    qty=int(h.get("quantity", 0) or 0),
-                    avg_price=float(h.get("averageprice", 0) or 0),
-                    ltp=float(h.get("ltp", 0) or 0),
-                )
-                holdings_list.append(row)
-                total_invested += row.qty * row.avg_price
-                current_value += row.qty * row.ltp
-    except Exception as e:
-        ctx["error"] = str(e)
-
-    holdings_list.sort(key=lambda r: (r.qty * r.ltp) - (r.qty * r.avg_price), reverse=True)
-
-    total_pnl = current_value - total_invested
-    total_pnl_pct = (total_pnl / total_invested * 100) if total_invested else 0.0
-
-    ctx.update(
-        holdings=holdings_list,
-        total_invested=total_invested,
-        current_value=current_value,
-        total_pnl=total_pnl,
-        total_pnl_pct=total_pnl_pct,
-    )
-    return templates.TemplateResponse("holdings.html", ctx)
 
 
 @web.get("/positions", response_class=HTMLResponse)
@@ -981,9 +939,11 @@ async def ai_insights(request: Request):
 
     api_key = body.get("api_key", "")
     if not api_key:
-        return JSONResponse({"error": "Please enter your OpenAI API key"}, status_code=400)
+        return JSONResponse(
+            {"error": "Please enter your OpenRouter API key"}, status_code=400
+        )
 
-    model = body.get("model", "gpt-4o-mini")
+    model = body.get("model", DEFAULT_OPENROUTER_MODEL)
     portfolio = _build_portfolio_data(client)
 
     try:
@@ -1009,13 +969,15 @@ async def ai_ask(request: Request):
 
     api_key = body.get("api_key", "")
     if not api_key:
-        return JSONResponse({"error": "Please enter your OpenAI API key"}, status_code=400)
+        return JSONResponse(
+            {"error": "Please enter your OpenRouter API key"}, status_code=400
+        )
 
     question = body.get("question", "")
     if not question:
         return JSONResponse({"error": "Question cannot be empty"}, status_code=400)
 
-    model = body.get("model", "gpt-4o-mini")
+    model = body.get("model", DEFAULT_OPENROUTER_MODEL)
     portfolio = _build_portfolio_data(client)
 
     try:

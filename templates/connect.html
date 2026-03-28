@@ -7,7 +7,7 @@
     <p class="guide-intro">Follow the steps below to connect this MCP server to Claude Desktop, ChatGPT, Cursor, or any MCP-compatible client. Once connected, you can track your Angel One portfolio and even place trades through your AI assistant.</p>
 
     <div class="guide-note" style="margin-bottom:1.5rem">
-      <strong>Don't want to set up MCP?</strong> You can get AI-powered portfolio insights directly from the <a href="/login">web dashboard</a> &mdash; just log in and add your OpenAI API key. No MCP configuration needed.
+      <strong>Don't want to set up MCP?</strong> You can get AI-powered portfolio insights directly from the <a href="/login">web dashboard</a> &mdash; just log in and add your OpenRouter API key. No MCP configuration needed.
     </div>
 
     <!-- Prerequisites -->
@@ -264,7 +264,7 @@ python main.py</code></pre>
         <li>Credentials are <strong>never stored on disk</strong> &mdash; they live only in server memory</li>
         <li>Sessions <strong>auto-expire after 8 hours</strong></li>
         <li>All traffic goes over <strong>HTTPS</strong> when deployed (Railway/Render provide TLS)</li>
-        <li>Your OpenAI API key (for dashboard AI insights) is <strong>encrypted client-side</strong> and never stored on the server</li>
+        <li>Your OpenRouter API key (for dashboard AI insights) is <strong>encrypted client-side</strong> and never stored on the server</li>
         <li>You can call <code>logout</code> at any time to immediately discard your session</li>
       </ul>
     </div>

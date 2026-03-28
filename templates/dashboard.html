@@ -44,14 +44,14 @@
 
   {% if holdings %}
   <div class="card">
-    <h2>Top Holdings</h2>
+    <h2>Holdings</h2>
     <div class="table-wrap">
       <table>
         <thead>
           <tr><th>Symbol</th><th>Qty</th><th>Avg Price</th><th>LTP</th><th>P&amp;L</th><th>P&amp;L %</th></tr>
         </thead>
         <tbody>
-          {% for h in holdings[:10] %}
+          {% for h in holdings %}
           {% set invested = h.qty * h.avg_price %}
           {% set current = h.qty * h.ltp %}
           {% set pnl = current - invested %}
@@ -68,9 +68,6 @@
         </tbody>
       </table>
     </div>
-    {% if holdings|length > 10 %}
-    <div style="text-align:center;margin-top:.75rem"><a href="/holdings">View all {{ holdings|length }} holdings &rarr;</a></div>
-    {% endif %}
   </div>
   {% endif %}
 
@@ -78,11 +75,22 @@
   <div class="ai-section">
     <div class="ai-key-bar card">
       <div class="ai-key-row">
-        <span class="ai-key-label">OpenAI API Key</span>
-        <input type="password" id="aiKeyInput" class="ai-key-input" placeholder="sk-...">
+        <span class="ai-key-label">OpenRouter API Key</span>
+        <input type="password" id="aiKeyInput" class="ai-key-input" placeholder="sk-or-v1-...">
         <button class="btn btn-sm btn-accent" id="aiKeySave">Save Key</button>
         <button class="btn btn-sm btn-muted" id="aiKeyClear">Clear</button>
         <span class="ai-key-status" id="aiKeyStatus"></span>
+      </div>
+      <div class="ai-key-row" style="margin-top:.75rem;flex-wrap:wrap">
+        <span class="ai-key-label">Model</span>
+        <select id="aiModelSelect" class="ai-key-input" style="max-width:16rem">
+          <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+          <option value="openai/gpt-4o">openai/gpt-4o</option>
+          <option value="anthropic/claude-3.5-haiku">anthropic/claude-3.5-haiku</option>
+          <option value="google/gemini-2.0-flash-001">google/gemini-2.0-flash-001</option>
+          <option value="__custom__">Other (enter ID)</option>
+        </select>
+        <input type="text" id="aiModelCustom" class="ai-key-input" placeholder="provider/model-id" style="display:none;flex:1;min-width:12rem;max-width:24rem">
       </div>
     </div>
 
@@ -92,7 +100,7 @@
         <button class="btn btn-sm btn-accent" id="insightsRegenerate" disabled>Regenerate</button>
       </div>
       <div id="insightsContent" class="ai-response">
-        <div class="ai-placeholder">Enter your OpenAI API key above to unlock AI insights.</div>
+        <div class="ai-placeholder">Enter your OpenRouter API key above to unlock AI insights.</div>
       </div>
     </div>
 
@@ -118,6 +126,8 @@
 (function(){
   const CLIENT_ID = "{{ client_id }}";
   const LS_KEY = "mfmcp_ai_key";
+  const MODEL_LS_KEY = "mfmcp_ai_model";
+  const PRESET_MODELS = ["openai/gpt-4o-mini","openai/gpt-4o","anthropic/claude-3.5-haiku","google/gemini-2.0-flash-001"];
   const HAS_SUBTLE = !!(window.crypto && window.crypto.subtle);
 
   // ── Shared helpers ──
@@ -198,6 +208,41 @@
   const $askInput=document.getElementById("aiQuestion");
   const $askBtn=document.getElementById("aiAskBtn");
   const $chips=document.getElementById("questionChips");
+  const $modelSelect=document.getElementById("aiModelSelect");
+  const $modelCustom=document.getElementById("aiModelCustom");
+
+  function getEffectiveModel(){
+    if($modelSelect.value==="__custom__"){
+      const c=$modelCustom.value.trim();
+      return c||PRESET_MODELS[0];
+    }
+    return $modelSelect.value;
+  }
+  function persistModelChoice(){
+    localStorage.setItem(MODEL_LS_KEY,getEffectiveModel());
+  }
+  function applyStoredModel(){
+    const stored=localStorage.getItem(MODEL_LS_KEY)||PRESET_MODELS[0];
+    if(PRESET_MODELS.includes(stored)){
+      $modelSelect.value=stored;
+      $modelCustom.style.display="none";
+    }else{
+      $modelSelect.value="__custom__";
+      $modelCustom.value=stored;
+      $modelCustom.style.display="";
+    }
+  }
+  $modelSelect.addEventListener("change",()=>{
+    if($modelSelect.value==="__custom__"){
+      $modelCustom.style.display="";
+      if(!$modelCustom.value.trim()) $modelCustom.focus();
+    }else{
+      $modelCustom.style.display="none";
+      persistModelChoice();
+    }
+  });
+  $modelCustom.addEventListener("change",persistModelChoice);
+  $modelCustom.addEventListener("blur",persistModelChoice);
 
   function setStatus(saved){
     $keyStatus.textContent=saved?"\u{1f512} Key saved":"No key configured";
@@ -219,6 +264,7 @@
     const apiKey=await decryptKey(CLIENT_ID);
     if(!apiKey){showError(errorTarget||$insContent,"Could not decrypt API key. Please re-save your key.");return null;}
     body.api_key=apiKey;
+    body.model=getEffectiveModel();
     const res=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     return res.json();
   }
@@ -238,7 +284,7 @@
   $keyClear.addEventListener("click",()=>{
     localStorage.removeItem(LS_KEY);
     setStatus(false);
-    $insContent.innerHTML='<div class="ai-placeholder">Enter your OpenAI API key above to unlock AI insights.</div>';
+    $insContent.innerHTML='<div class="ai-placeholder">Enter your OpenRouter API key above to unlock AI insights.</div>';
     $askContent.style.display="none";
   });
 
@@ -280,6 +326,7 @@
 
   // ── Init ──
   (async()=>{
+    applyStoredModel();
     const hasKey=!!localStorage.getItem(LS_KEY);
     setStatus(hasKey);
     if(hasKey)loadInsights();
