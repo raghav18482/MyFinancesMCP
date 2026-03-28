@@ -10,6 +10,7 @@ import os
 import sys
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
 from starlette.applications import Starlette
@@ -34,21 +35,30 @@ async def _cleanup_loop():
         sessions.cleanup_expired()
 
 
+@asynccontextmanager
+async def _lifespan(_app: Starlette):
+    """Starlette 0.37+ removed on_event; use lifespan for startup/shutdown."""
+    task = asyncio.create_task(_cleanup_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 def create_app() -> Starlette:
     mcp_starlette = mcp.sse_app()
 
-    app = Starlette(
+    return Starlette(
+        lifespan=_lifespan,
         routes=[
             Mount("/mcp", app=mcp_starlette),
             Mount("/", app=web),
         ],
     )
-
-    @app.on_event("startup")
-    async def on_startup():
-        asyncio.create_task(_cleanup_loop())
-
-    return app
 
 
 app = create_app()
