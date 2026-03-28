@@ -92,12 +92,12 @@ def _ctx(request: Request, active: str = "") -> dict:
 async def landing(request: Request):
     if _sid(request) and sessions.get_client(_sid(request)):
         return RedirectResponse("/dashboard", status_code=302)
-    return templates.TemplateResponse("landing.html", _ctx(request))
+    return templates.TemplateResponse(request, "landing.html", _ctx(request))
 
 
 @web.get("/setup", response_class=HTMLResponse)
 async def setup_page(request: Request):
-    return templates.TemplateResponse("setup.html", _ctx(request, "setup"))
+    return templates.TemplateResponse(request, "setup.html", _ctx(request, "setup"))
 
 
 @web.get("/connect", response_class=HTMLResponse)
@@ -105,14 +105,14 @@ async def connect_page(request: Request):
     server_url = str(request.base_url).rstrip("/")
     ctx = _ctx(request, "connect")
     ctx["server_url"] = server_url
-    return templates.TemplateResponse("connect.html", ctx)
+    return templates.TemplateResponse(request, "connect.html", ctx)
 
 
 @web.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     if _sid(request) and sessions.get_client(_sid(request)):
         return RedirectResponse("/dashboard", status_code=302)
-    return templates.TemplateResponse("login.html", _ctx(request))
+    return templates.TemplateResponse(request, "login.html", _ctx(request))
 
 
 @web.post("/login")
@@ -132,7 +132,7 @@ async def login_submit(
         logger.exception("Web login failed")
         ctx = _ctx(request)
         ctx["error"] = f"Login failed: {e}"
-        return templates.TemplateResponse("login.html", ctx)
+        return templates.TemplateResponse(request, "login.html", ctx)
 
 
 @web.post("/logout")
@@ -223,7 +223,7 @@ async def dashboard(request: Request):
                    day_pnl=0, available_cash="N/A", net_value="N/A", holdings=[],
                    client_id=getattr(client, "client_id", ""))
 
-    return templates.TemplateResponse("dashboard.html", ctx)
+    return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @web.get("/positions", response_class=HTMLResponse)
@@ -255,7 +255,7 @@ async def positions_page(request: Request):
         ctx["error"] = str(e)
 
     ctx.update(positions=pos_list, total_pnl=total_pnl)
-    return templates.TemplateResponse("positions.html", ctx)
+    return templates.TemplateResponse(request, "positions.html", ctx)
 
 
 @web.get("/orders", response_class=HTMLResponse)
@@ -303,7 +303,7 @@ async def orders_page(request: Request):
         ctx["trade_error"] = str(e)
 
     ctx.update(orders=order_list, trades=trade_list)
-    return templates.TemplateResponse("orders.html", ctx)
+    return templates.TemplateResponse(request, "orders.html", ctx)
 
 
 @web.get("/analytics", response_class=HTMLResponse)
@@ -311,7 +311,7 @@ async def analytics_page(request: Request):
     client = _require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("analytics.html", _ctx(request, "analytics"))
+    return templates.TemplateResponse(request, "analytics.html", _ctx(request, "analytics"))
 
 
 @web.get("/research", response_class=HTMLResponse)
@@ -319,7 +319,7 @@ async def research_page(request: Request):
     client = _require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("research.html", _ctx(request, "research"))
+    return templates.TemplateResponse(request, "research.html", _ctx(request, "research"))
 
 
 @web.get("/sectors", response_class=HTMLResponse)
@@ -327,7 +327,7 @@ async def sectors_page(request: Request):
     client = _require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("sectors.html", _ctx(request, "sectors"))
+    return templates.TemplateResponse(request, "sectors.html", _ctx(request, "sectors"))
 
 
 @web.get("/news", response_class=HTMLResponse)
@@ -335,7 +335,7 @@ async def news_page(request: Request):
     client = _require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("news.html", _ctx(request, "news"))
+    return templates.TemplateResponse(request, "news.html", _ctx(request, "news"))
 
 
 # ── News API (gnews) ──────────────────────────────────────────────────────
