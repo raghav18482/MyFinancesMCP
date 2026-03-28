@@ -10,7 +10,7 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_dir = os.path.dirname(os.path.abspath(__file__))
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _cache: dict[str, dict] = {}
 _CACHE_TTL_SECTOR = 6 * 3600   # 6 hours
@@ -33,7 +33,7 @@ SECTOR_INDEX_MAP = {
 }
 
 try:
-    with open(os.path.join(_dir, "data", "sector_cycles.json")) as f:
+    with open(os.path.join(_repo_root, "data", "sector_cycles.json")) as f:
         SECTOR_CYCLES: dict[str, str] = json.load(f)
 except Exception:
     SECTOR_CYCLES = {}

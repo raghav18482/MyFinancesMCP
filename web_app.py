@@ -15,17 +15,18 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from gnews import GNews
 
-from ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
-from fundamental_service import get_stock_fundamentals
-from technical_service import compute_technical_indicators
-from sector_service import get_sector_overview, get_market_breadth
-from sentiment_service import analyze_articles, compute_sector_sentiment
+from services.ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
+from services.fundamental_service import get_stock_fundamentals
+from services.technical_service import compute_technical_indicators
+from services.sector_service import get_sector_overview, get_market_breadth
+from services.sentiment_service import analyze_articles, compute_sector_sentiment
 
 from session_manager import sessions
 
 logger = logging.getLogger(__name__)
 
 _dir = os.path.dirname(os.path.abspath(__file__))
+_frontend_dir = os.path.join(_dir, "frontend")
 
 web = FastAPI(docs_url=None, redoc_url=None)
 web.add_middleware(
@@ -33,8 +34,8 @@ web.add_middleware(
     secret_key=os.environ.get("SESSION_SECRET", uuid.uuid4().hex),
 )
 web.mount("/static/data", StaticFiles(directory=os.path.join(_dir, "data")), name="data")
-web.mount("/static", StaticFiles(directory=os.path.join(_dir, "static")), name="static")
-templates = Jinja2Templates(directory=os.path.join(_dir, "templates"))
+web.mount("/static", StaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
+templates = Jinja2Templates(directory=os.path.join(_frontend_dir, "templates"))
 
 with open(os.path.join(_dir, "data", "sector_map.json")) as _f:
     SECTOR_MAP: dict[str, str] = json.load(_f)

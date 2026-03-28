@@ -14,11 +14,13 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 ```
 ├── main.py              # Combined entry point (MCP + Web on one port)
 ├── server.py            # MCP server with all tools (login, portfolio, trading)
+├── mcp_server.py        # Alternate MCP entry (if used)
 ├── web_app.py           # FastAPI web dashboard
 ├── angel_client.py      # Angel One SmartAPI client wrapper
 ├── session_manager.py   # Per-session client management
-├── templates/           # Jinja2 HTML templates
-├── static/              # CSS
+├── services/            # Domain logic (AI, fundamentals, technicals, sectors, sentiment)
+├── frontend/            # Jinja2 templates and static assets (CSS, JS)
+├── data/                # JSON data files served under /static/data
 ├── requirements.txt     # Python dependencies
 ├── Dockerfile           # Container definition
 └── .dockerignore
