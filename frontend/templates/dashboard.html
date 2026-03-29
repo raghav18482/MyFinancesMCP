@@ -1,8 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<div class="container">
-  <h1 style="margin-bottom:1.25rem;font-size:1.3rem">Portfolio Dashboard</h1>
+<div class="container page-dashboard">
+  <header class="dashboard-hero">
+    <div class="dashboard-hero-text">
+      <p class="page-kicker">Live from Angel One</p>
+      <h1 class="page-title">Portfolio dashboard</h1>
+      <p class="page-sub">Holdings, cash, and P&amp;L at a glance — plus AI when you add your key.</p>
+    </div>
+    <div class="dashboard-hero-glow" aria-hidden="true"></div>
+  </header>
 
   {% if error %}
   <div class="alert alert-error">{{ error }}</div>

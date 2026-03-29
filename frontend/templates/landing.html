@@ -1,44 +1,50 @@
 {% extends "base.html" %}
 {% block title %}Home{% endblock %}
 {% block content %}
-<div class="hero">
-  <h1>Your <span>Angel One</span> Portfolio, Anywhere</h1>
-  <p>Track your holdings, positions, and P&amp;L in real time. Get AI-powered insights on your dashboard, or connect through Claude, ChatGPT, or Cursor using MCP.</p>
+<section class="hero hero-landing" aria-labelledby="hero-title">
+  <div class="hero-bg" aria-hidden="true">
+    <div class="hero-orb hero-orb-a"></div>
+    <div class="hero-orb hero-orb-b"></div>
+    <div class="hero-grid"></div>
+  </div>
+  <p class="hero-kicker">Portfolio intelligence · MCP-ready</p>
+  <h1 id="hero-title">Your <span class="hero-gradient">Angel One</span> portfolio, elevated</h1>
+  <p class="hero-lede">Track holdings, positions, and P&amp;L in real time. Get AI-powered insights on your dashboard, or connect through Claude, ChatGPT, or Cursor using MCP.</p>
   <div class="cta">
-    <a href="/login" class="btn btn-primary" style="width:auto;padding:.7rem 2rem">Get Started</a>
-    <a href="/connect" class="btn btn-outline" style="width:auto;padding:.7rem 2rem">Connect via MCP</a>
+    <a href="/login" class="btn btn-primary btn-glow">Get started</a>
+    <a href="/connect" class="btn btn-outline">Connect via MCP</a>
   </div>
-</div>
+</section>
 
-<div class="container">
-  <div class="features">
-    <div class="feature">
-      <h3>Real-Time Portfolio</h3>
-      <p>View your holdings, positions, funds, and P&amp;L updated live from Angel One.</p>
-    </div>
-    <div class="feature">
-      <h3>AI Insight Dashboard</h3>
-      <p>Get portfolio analysis, risk assessment, and answers to your questions using your own OpenRouter API key and any model they support.</p>
-    </div>
-    <div class="feature">
-      <h3>MCP Compatible</h3>
-      <p>Connect from Claude Desktop, ChatGPT, Cursor, or any MCP client via SSE transport.</p>
-    </div>
-    <div class="feature">
-      <h3>Zero Storage</h3>
-      <p>Credentials stay in memory only. Your OpenRouter key is encrypted client-side. Nothing is saved to disk.</p>
-    </div>
-    <div class="feature">
-      <h3>Trade from AI</h3>
-      <p>Place, modify, and cancel orders directly through your AI assistant via MCP tools.</p>
+{% set feature_items = [
+  ('◈', 'Real-time portfolio', 'Holdings, positions, funds, and P&L updated live from Angel One.'),
+  ('✦', 'AI insight dashboard', 'Analysis, risk cues, and Q&A using your OpenRouter key and the models you choose.'),
+  ('⚡', 'MCP compatible', 'Claude Desktop, ChatGPT, Cursor, or any MCP client over SSE transport.'),
+  ('◇', 'Zero disk storage', 'Credentials stay in memory. Your OpenRouter key is encrypted client-side.'),
+  ('→', 'Trade from AI', 'Place, modify, and cancel orders through your assistant via MCP tools.'),
+] %}
+<section class="features-marquee-section" aria-label="Product features">
+  <div class="features-marquee-viewport">
+    <div class="features-marquee-track">
+      {% for _ in [1, 2] %}
+        {% for icon, title, desc in feature_items %}
+        <article class="feature feature-marquee-card">
+          <span class="feature-icon" aria-hidden="true">{{ icon }}</span>
+          <h3>{{ title }}</h3>
+          <p>{{ desc }}</p>
+        </article>
+        {% endfor %}
+      {% endfor %}
     </div>
   </div>
-</div>
+</section>
 
-<div class="container" style="text-align:center;padding:2rem 1rem 3rem">
-  <p style="font-size:1.05rem;color:var(--muted);margin-bottom:.75rem">New to Angel One? Open a free Demat account in minutes.</p>
-  <a href="https://angel-one.onelink.me/Wjgr/bnic9p8w" target="_blank" rel="noopener" class="btn btn-primary" style="width:auto;padding:.7rem 2rem;display:inline-block">
-    Open Free Demat Account &rarr;
-  </a>
+<div class="container landing-cta-band">
+  <div class="landing-cta-inner">
+    <p class="landing-cta-copy">New to Angel One? Open a free Demat account in minutes.</p>
+    <a href="https://angel-one.onelink.me/Wjgr/bnic9p8w" target="_blank" rel="noopener" class="btn btn-primary btn-glow landing-cta-btn">
+      Open free Demat account
+    </a>
+  </div>
 </div>
 {% endblock %}
