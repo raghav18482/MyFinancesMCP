@@ -12,6 +12,13 @@ from typing import Any, Callable
 from session_manager import sessions
 from services.broker_service import fetch_stock_history_candles, holdings_for_sector_analysis
 from services.fundamental_service import get_stock_fundamentals
+from services.news_service import (
+    build_portfolio_news_with_sentiment,
+    build_portfolio_sector_news,
+    enrich_sectors_news_with_sentiment,
+    normalize_period as normalize_news_period,
+    search_news_articles,
+)
 from services.sector_service import get_market_breadth, get_sector_overview
 from services.sentiment_service import analyze_text
 from services.technical_service import compute_technical_indicators
@@ -76,10 +83,61 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
             pass
         return compute_technical_indicators(candles, sym, avg_price)
 
+    def research_portfolio_sector_news(period: str = "7d") -> dict[str, Any]:
+        """Fetch Google News headlines grouped by portfolio sector (top sectors by invested value)."""
+        client = sessions.get_client(session_id)
+        if client is None:
+            return {"error": "No Angel session; required for holdings-based sector news."}
+        p = normalize_news_period(period)
+        return build_portfolio_sector_news(client, p)
+
+    def research_portfolio_news_with_sentiment(period: str = "7d") -> dict[str, Any]:
+        """Same as sector portfolio news plus FinBERT sentiment per article and sector aggregates."""
+        client = sessions.get_client(session_id)
+        if client is None:
+            return {"error": "No Angel session; required for holdings-based news."}
+        p = normalize_news_period(period)
+        try:
+            return build_portfolio_news_with_sentiment(client, p)
+        except ImportError as e:
+            return {"error": str(e), "hint": "Install transformers and torch for FinBERT sentiment."}
+
+    def research_news_search(
+        query: str,
+        period: str = "7d",
+        location: str = "",
+    ) -> dict[str, Any]:
+        """Search Google News (India). Optional location string appended to the query."""
+        q = (query or "").strip()
+        if not q:
+            return {"error": "query is required", "articles": []}
+        p = normalize_news_period(period)
+        articles = search_news_articles(q, p, location, 20)
+        return {"articles": articles, "count": len(articles)}
+
+    def research_enrich_sector_news_with_sentiment(
+        sectors: list,
+    ) -> dict[str, Any]:
+        """
+        Run FinBERT on pre-fetched sector news bundles.
+        Each sector dict should include: name, invested (optional), news (list of articles with title/description).
+        Use after research_portfolio_sector_news or with your own article lists.
+        """
+        if not isinstance(sectors, list):
+            return {"error": "sectors must be a list of objects", "sectors": []}
+        try:
+            return enrich_sectors_news_with_sentiment(sectors)
+        except ImportError as e:
+            return {"error": str(e), "hint": "Install transformers and torch for FinBERT sentiment."}
+
     return [
         research_stock_fundamentals,
         research_market_breadth,
         research_sector_portfolio_overview,
         research_financial_text_sentiment,
         research_technical_indicators,
+        research_portfolio_sector_news,
+        research_portfolio_news_with_sentiment,
+        research_news_search,
+        research_enrich_sector_news_with_sentiment,
     ]
