@@ -13,8 +13,7 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 
 ```
 ├── main.py              # Combined entry point (MCP + Web on one port)
-├── server.py            # MCP server with all tools (login, portfolio, trading)
-├── mcp_server.py        # Alternate MCP entry (if used)
+├── mcp_server.py        # MCP FastMCP app (tools: login, portfolio, trading)
 ├── web_app.py           # FastAPI web dashboard
 ├── angel_client.py      # Angel One SmartAPI client wrapper
 ├── session_manager.py   # Per-session client management

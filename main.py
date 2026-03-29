@@ -23,7 +23,7 @@ sys.path.insert(0, _project_dir)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from server import mcp          # noqa: E402  — MCP FastMCP instance
+from mcp_server import mcp     # noqa: E402  — MCP FastMCP instance
 from web_app import web         # noqa: E402  — FastAPI web dashboard
 from session_manager import sessions  # noqa: E402
 
