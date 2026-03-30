@@ -13,17 +13,25 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-from gnews import GNews
-
 from services.ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
 from services.fundamental_service import get_stock_fundamentals
+from services.news_service import (
+    build_portfolio_sector_news,
+    enrich_sectors_news_with_sentiment,
+    get_sector_map,
+    normalize_period as normalize_news_period,
+    search_news_articles,
+)
 from services.technical_service import compute_technical_indicators
 from services.sector_service import get_sector_overview, get_market_breadth
-from services.sentiment_service import analyze_articles, compute_sector_sentiment
 
 from session_manager import sessions
+from services.adk_runner_registry import registry
 
 logger = logging.getLogger(__name__)
+
+# Starlette session key: ADK multi-turn chat id (per browser session).
+_ADK_CHAT_SESSION_KEY = "adk_chat_session_id"
 
 _dir = os.path.dirname(os.path.abspath(__file__))
 _frontend_dir = os.path.join(_dir, "frontend")
@@ -37,45 +45,19 @@ web.mount("/static/data", StaticFiles(directory=os.path.join(_dir, "data")), nam
 web.mount("/static", StaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(_frontend_dir, "templates"))
 
-with open(os.path.join(_dir, "data", "sector_map.json")) as _f:
-    SECTOR_MAP: dict[str, str] = json.load(_f)
-
-SECTOR_QUERIES: dict[str, str] = {
-    "Banking": "Banking sector India stock market",
-    "IT": "IT sector India Infosys TCS Wipro stock",
-    "Energy": "Energy oil gas power India stock market",
-    "Pharma": "Pharma sector India drug stock market",
-    "Healthcare": "Healthcare hospital India stock market",
-    "Financial Services": "NBFC insurance mutual fund India stock",
-    "FMCG": "FMCG consumer goods India stock market",
-    "Automobile": "Automobile auto EV India stock market",
-    "Metals": "Metals steel copper India stock market",
-    "Infrastructure": "Infrastructure cement construction India stock",
-    "Real Estate": "Real estate realty India stock market",
-    "Consumer Durables": "Consumer durables electronics India stock",
-    "Chemicals": "Chemical sector India stock market",
-    "Digital / New Age": "Startup fintech e-commerce India stock",
-    "Telecom": "Telecom 5G spectrum India stock market",
-    "Travel & Tourism": "Travel tourism airline India stock",
-    "Defence": "Defence defense India stock market",
-    "PSU": "PSU public sector India stock market",
-    "ETF": "ETF index fund India stock market",
-    "ETF - Gold": "Gold ETF India market price",
-    "ETF - Silver": "Silver ETF India market price",
-    "ETF - CPSE": "CPSE ETF India PSU disinvestment",
-    "ETF - Midcap": "Midcap ETF India stock market",
-    "ETF - Smallcap": "Smallcap ETF India stock market",
-    "ETF - Nifty Next 50": "Nifty Next 50 ETF India market",
-    "ETF - PSU Bank": "PSU bank India stock market",
-    "ETF - Metals": "Metal ETF India stock market",
-    "ETF - Pharma": "Pharma ETF India stock market",
-    "ETF - Infra": "Infrastructure ETF India stock market",
-    "ETF - Global Tech": "Global tech fund India NASDAQ",
-}
+SECTOR_MAP: dict[str, str] = get_sector_map()
 
 
 def _sid(request: Request) -> str | None:
     return request.session.get("sid")
+
+
+def _ensure_adk_chat_session_id(request: Request) -> str:
+    raw = request.session.get(_ADK_CHAT_SESSION_KEY)
+    if not raw:
+        raw = uuid.uuid4().hex
+        request.session[_ADK_CHAT_SESSION_KEY] = raw
+    return str(raw)
 
 
 def _ctx(request: Request, active: str = "") -> dict:
@@ -339,75 +321,16 @@ async def news_page(request: Request):
     return templates.TemplateResponse(request, "news.html", _ctx(request, "news"))
 
 
+@web.get("/agent", response_class=HTMLResponse)
+async def agent_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    _ensure_adk_chat_session_id(request)
+    return templates.TemplateResponse(request, "agent.html", _ctx(request, "agent"))
+
+
 # ── News API (gnews) ──────────────────────────────────────────────────────
-
-_VALID_PERIODS = {"1d", "7d", "1m", "3m", "6m", "1y"}
-_MAX_SECTORS = 8
-
-
-def _gnews_to_dict(article: dict) -> dict:
-    """Normalise a gnews article dict into our frontend format."""
-    publisher = article.get("publisher") or {}
-    return {
-        "title": article.get("title", ""),
-        "link": article.get("url", "#"),
-        "date": article.get("published date", ""),
-        "description": article.get("description", ""),
-        "source": publisher.get("title", "") if isinstance(publisher, dict) else str(publisher),
-    }
-
-
-def _fetch_sector_news(query: str, period: str, max_results: int) -> list[dict]:
-    """Synchronous helper – runs in a thread. Fetches news for one sector."""
-    try:
-        gn = GNews(language="en", country="IN", period=period, max_results=max_results)
-        raw = gn.get_news(query)
-        return [_gnews_to_dict(a) for a in (raw or [])]
-    except Exception as e:
-        logger.warning("gnews query failed for %r: %s", query, e)
-        return []
-
-
-async def _build_portfolio_news(client, period: str = "7d") -> dict:
-    """Get holdings, compute sector weights, query gnews per sector."""
-    sector_invested: dict[str, float] = {}
-
-    try:
-        h_data = client.get_holdings()
-        if h_data.get("status") and h_data.get("data"):
-            for h in h_data["data"]:
-                sym = h.get("tradingsymbol", "")
-                qty = int(h.get("quantity", 0) or 0)
-                avg = float(h.get("averageprice", 0) or 0)
-                invested = qty * avg
-                sector = SECTOR_MAP.get(sym, "Other")
-                sector_invested[sector] = sector_invested.get(sector, 0) + invested
-    except Exception as e:
-        logger.warning("News – holdings fetch error: %s", e)
-
-    sector_order = sorted(
-        sector_invested.keys(), key=lambda s: sector_invested[s], reverse=True
-    )[:_MAX_SECTORS]
-
-    def _fetch_all_sectors():
-        results: dict[str, list[dict]] = {}
-        for sector in sector_order:
-            query = SECTOR_QUERIES.get(sector, f"{sector} India stock market")
-            results[sector] = _fetch_sector_news(query, period, 5)
-            time.sleep(0.5)
-        return results
-
-    grouped = await asyncio.to_thread(_fetch_all_sectors)
-
-    sectors_list = []
-    for sector in sector_order:
-        sectors_list.append({
-            "name": sector,
-            "invested": round(sector_invested.get(sector, 0), 2),
-            "news": grouped.get(sector, []),
-        })
-
-    return {"sectors": sectors_list}
 
 
 @web.get("/api/news/portfolio")
@@ -418,10 +341,9 @@ async def api_news_portfolio(
     client = _require_login(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    if period not in _VALID_PERIODS:
-        period = "7d"
+    period = normalize_news_period(period)
     try:
-        result = await _build_portfolio_news(client, period)
+        result = await asyncio.to_thread(build_portfolio_sector_news, client, period)
         return JSONResponse(result)
     except Exception as e:
         logger.exception("Portfolio news API error")
@@ -437,19 +359,12 @@ async def api_news_search(
 ):
     if not q.strip():
         return JSONResponse({"error": "Search query is required"}, status_code=400)
-    if period not in _VALID_PERIODS:
-        period = "7d"
-
-    def _do_search():
-        gn = GNews(language="en", country="IN", period=period, max_results=20)
-        if location.strip():
-            raw = gn.get_news(f"{q.strip()} {location.strip()}")
-        else:
-            raw = gn.get_news(q.strip())
-        return [_gnews_to_dict(a) for a in (raw or [])]
+    period = normalize_news_period(period)
 
     try:
-        articles = await asyncio.to_thread(_do_search)
+        articles = await asyncio.to_thread(
+            search_news_articles, q.strip(), period, location, 20
+        )
         return JSONResponse({"articles": articles})
     except Exception as e:
         logger.exception("Search news API error")
@@ -486,50 +401,8 @@ async def api_news_sentiment(request: Request):
             },
         })
 
-    def _run_sentiment():
-        enriched_sectors = []
-        overall_bullish = 0
-        overall_bearish = 0
-        overall_neutral = 0
-
-        for sector in sectors:
-            articles = sector.get("news", [])
-            analyzed = analyze_articles(articles)
-            sector_agg = compute_sector_sentiment(analyzed)
-
-            enriched_sectors.append({
-                "name": sector.get("name", ""),
-                "invested": sector.get("invested", 0),
-                "news": analyzed,
-                "sentiment_summary": sector_agg,
-            })
-            overall_bullish += sector_agg["bullish"]
-            overall_bearish += sector_agg["bearish"]
-            overall_neutral += sector_agg["neutral"]
-
-        total = overall_bullish + overall_bearish + overall_neutral
-        overall_score = (overall_bullish - overall_bearish) / total if total else 0.0
-        if overall_score > 0.2:
-            overall_label = "bullish"
-        elif overall_score < -0.2:
-            overall_label = "bearish"
-        else:
-            overall_label = "neutral"
-
-        return {
-            "sectors": enriched_sectors,
-            "portfolio_sentiment": {
-                "label": overall_label,
-                "score": round(overall_score, 3),
-                "bullish": overall_bullish,
-                "bearish": overall_bearish,
-                "neutral": overall_neutral,
-                "total_articles": total,
-            },
-        }
-
     try:
-        result = await asyncio.to_thread(_run_sentiment)
+        result = await asyncio.to_thread(enrich_sectors_news_with_sentiment, sectors)
         return JSONResponse(result)
     except ImportError as e:
         logger.warning("Sentiment analysis unavailable: %s", e)
@@ -955,6 +828,43 @@ async def ai_insights(request: Request):
     except Exception as e:
         logger.exception("AI insights error")
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+@web.post("/api/agent/chat")
+async def api_agent_chat(request: Request):
+    """Run the finance ADK agent (server OPENROUTER_API_KEY); uses Angel session from web login."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
+
+    debug = bool(body.get("debug"))
+    adk_session_id = _ensure_adk_chat_session_id(request)
+
+    try:
+        result = await registry.chat(
+            angel_sid=sid,
+            adk_session_id=adk_session_id,
+            message=message,
+            debug=debug,
+        )
+        return JSONResponse(result)
+    except ValueError as e:
+        err = str(e)
+        if "OPENROUTER_API_KEY" in err:
+            return JSONResponse({"error": err}, status_code=503)
+        return JSONResponse({"error": err}, status_code=400)
+    except Exception as e:
+        logger.exception("ADK agent chat error")
+        return JSONResponse({"error": f"Agent error: {e}"}, status_code=500)
 
 
 @web.post("/api/ai/ask")

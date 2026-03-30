@@ -7,12 +7,19 @@ sys.path.insert(0, _project_dir)
 
 import json
 import logging
-from datetime import datetime, timedelta
-from typing import Optional
 
 from mcp.server.fastmcp import FastMCP, Context
 
 from session_manager import sessions
+from services.broker_service import (
+    calculate_symbol_pnl,
+    cancel_order_result,
+    fetch_market_depth,
+    fetch_stock_history_candles,
+    modify_order_result,
+    place_order_result,
+    portfolio_summary_as_dict,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -144,6 +151,137 @@ def _format_order_book(data: dict) -> str:
             f"{o.get('updatetime','N/A'):<10}"
         )
 
+    return "\n".join(lines)
+
+
+def _format_portfolio_summary_from_dict(d: dict) -> str:
+    parts = []
+    hs = d.get("holdings_summary")
+    if hs:
+        parts.append("=== Holdings Summary ===")
+        parts.append(f"Total Investment: Rs.{hs['total_investment']:,.2f}")
+        parts.append(f"Current Value:    Rs.{hs['current_value']:,.2f}")
+        parts.append(f"Overall P&L %:    {hs['overall_pnl_percent']:.2f}%")
+    for err in d.get("errors", []):
+        if err.get("section") == "holdings" and not hs:
+            parts.append(f"Holdings error: {err.get('message', '')}")
+
+    dp = d.get("day_positions")
+    if dp:
+        parts.append("\n=== Day Positions P&L ===")
+        if dp.get("note") == "no_open_positions":
+            parts.append("No open positions today.")
+        else:
+            parts.append(f"Day P&L: Rs.{dp['day_pnl']:,.2f}")
+    for err in d.get("errors", []):
+        if err.get("section") == "positions":
+            parts.append(f"Positions error: {err.get('message', '')}")
+
+    fd = d.get("funds")
+    if fd:
+        parts.append("\n=== Funds ===")
+        parts.append(f"Available Cash: Rs.{fd.get('available_cash', 'N/A')}")
+        parts.append(f"Net Value:      Rs.{fd.get('net', 'N/A')}")
+    for err in d.get("errors", []):
+        if err.get("section") == "funds" and not fd:
+            parts.append(f"Funds error: {err.get('message', '')}")
+
+    return "\n".join(parts) if parts else "Could not fetch portfolio summary."
+
+
+def _format_pnl_from_dict(d: dict) -> str:
+    symbol_upper = d["symbol"]
+    lines = [f"=== P&L Report: {symbol_upper} ===", ""]
+    hb = d.get("holding")
+    if hb:
+        lines.append("── Holdings ──")
+        lines.append(f"  Symbol:        {hb['tradingsymbol']}")
+        lines.append(f"  Quantity:      {hb['quantity']}")
+        lines.append(f"  Avg Price:     Rs.{hb['average_price']:,.2f}")
+        lines.append(f"  LTP:           Rs.{hb['ltp']:,.2f}")
+        lines.append(f"  Invested:      Rs.{hb['invested']:,.2f}")
+        lines.append(f"  Current Value: Rs.{hb['current_value']:,.2f}")
+        lines.append(
+            f"  Unrealized P&L: Rs.{hb['unrealized_pnl']:,.2f} ({hb['unrealized_pnl_percent']:+.2f}%)"
+        )
+        lines.append("")
+    pblocks = d.get("positions") or []
+    if pblocks:
+        lines.append("── Day Positions ──")
+        total_day = 0.0
+        for p in pblocks:
+            pnl = p["day_pnl"]
+            total_day += pnl
+            lines.append(f"  {p['tradingsymbol']} ({p['producttype']})")
+            lines.append(
+                f"    Net Qty: {p['netqty']}, Buy Avg: Rs.{p['buyavgprice']:,.2f}, "
+                f"Sell Avg: Rs.{p['sellavgprice']:,.2f}"
+            )
+            lines.append(f"    LTP: Rs.{p['ltp']:,.2f}, Day P&L: Rs.{pnl:,.2f}")
+        if len(pblocks) > 1:
+            lines.append(f"  Total Day P&L: Rs.{total_day:,.2f}")
+        lines.append("")
+    lines.append(f"── Combined P&L: Rs.{d['combined_pnl_estimate']:,.2f} ──")
+    return "\n".join(lines)
+
+
+def _format_stock_history_from_candles(d: dict) -> str:
+    if not d.get("ok"):
+        return d.get("error", "Unknown error")
+    tradingsymbol = d["tradingsymbol"]
+    exchange = d["exchange"]
+    days = d["days"]
+    interval = d["interval"]
+    candles = d["candles"]
+    lines = [
+        f"=== {tradingsymbol} ({exchange}) — Last {days} days ({interval}) ===",
+        "",
+    ]
+    lines.append(f"{'Date':<22} {'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Volume':>12}")
+    lines.append("-" * 78)
+    for c in candles:
+        ts = c[0] if isinstance(c[0], str) else str(c[0])
+        date_str = ts[:19] if len(ts) >= 19 else ts
+        lines.append(
+            f"{date_str:<22} {c[1]:>10.2f} {c[2]:>10.2f} {c[3]:>10.2f} {c[4]:>10.2f} {c[5]:>12}"
+        )
+    summ = d.get("summary")
+    if summ:
+        lines.append("-" * 78)
+        lines.append(
+            f"Period Change: Rs.{summ['period_change']:,.2f} ({summ['period_change_percent']:+.2f}%)"
+        )
+    return "\n".join(lines)
+
+
+def _format_market_depth_from_dict(d: dict) -> str:
+    if not d.get("ok"):
+        return d.get("error", "Unknown error")
+    tradingsymbol = d["tradingsymbol"]
+    exchange = d["exchange"]
+    lines = [f"=== {tradingsymbol} ({exchange}) Market Depth ===", ""]
+    lines.append(
+        f"LTP: Rs.{d.get('ltp')}  |  Open: {d.get('open')}  |  High: {d.get('high')}  "
+        f"|  Low: {d.get('low')}  |  Prev Close: {d.get('close')}"
+    )
+    lines.append("")
+    depth = d.get("depth") or {}
+    bids = depth.get("buy", [])
+    asks = depth.get("sell", [])
+    lines.append(f"{'':>5} {'BID':^32}  |  {'ASK':^32}")
+    lines.append(f"{'Lvl':>5} {'Price':>10} {'Qty':>10} {'Orders':>8}  |  {'Price':>10} {'Qty':>10} {'Orders':>8}")
+    lines.append("-" * 73)
+    max_levels = max(len(bids), len(asks), 5)
+    for i in range(max_levels):
+        bid_price = f"{bids[i].get('price', 0):>10.2f}" if i < len(bids) else f"{'—':>10}"
+        bid_qty = f"{bids[i].get('quantity', 0):>10}" if i < len(bids) else f"{'—':>10}"
+        bid_ord = f"{bids[i].get('orders', 0):>8}" if i < len(bids) else f"{'—':>8}"
+        ask_price = f"{asks[i].get('price', 0):>10.2f}" if i < len(asks) else f"{'—':>10}"
+        ask_qty = f"{asks[i].get('quantity', 0):>10}" if i < len(asks) else f"{'—':>10}"
+        ask_ord = f"{asks[i].get('orders', 0):>8}" if i < len(asks) else f"{'—':>8}"
+        lines.append(f"{i+1:>5} {bid_price} {bid_qty} {bid_ord}  |  {ask_price} {ask_qty} {ask_ord}")
+    lines.append("-" * 73)
+    lines.append(f"Total Buy Qty: {d.get('tot_buy_qty')}  |  Total Sell Qty: {d.get('tot_sell_qty')}")
     return "\n".join(lines)
 
 
@@ -297,45 +435,7 @@ def search_scrip(exchange: str, search_text: str, ctx: Context = None) -> str:
 def portfolio_summary(ctx: Context = None) -> str:
     """Get a high-level summary of your entire portfolio: total invested, current value, overall P&L, and day's P&L."""
     client = _require_client(ctx)
-
-    summary_parts = []
-
-    try:
-        all_h = client.get_all_holdings()
-        if all_h.get("status") and all_h.get("data"):
-            d = all_h["data"]
-            total_inv = float(d.get("totalholdingvalue", 0) or 0)
-            total_cur = float(d.get("totalcurrentvalue", 0) or 0)
-            total_pnl = float(d.get("totalpnlpercentage", 0) or 0)
-            summary_parts.append("=== Holdings Summary ===")
-            summary_parts.append(f"Total Investment: Rs.{total_inv:,.2f}")
-            summary_parts.append(f"Current Value:    Rs.{total_cur:,.2f}")
-            summary_parts.append(f"Overall P&L %:    {total_pnl:.2f}%")
-    except Exception as e:
-        summary_parts.append(f"Holdings error: {e}")
-
-    try:
-        positions = client.get_positions()
-        if positions.get("status") and positions.get("data"):
-            day_pnl = sum(float(p.get("pnl", 0) or 0) for p in positions["data"])
-            summary_parts.append(f"\n=== Day Positions P&L ===")
-            summary_parts.append(f"Day P&L: Rs.{day_pnl:,.2f}")
-        else:
-            summary_parts.append("\nNo open positions today.")
-    except Exception as e:
-        summary_parts.append(f"Positions error: {e}")
-
-    try:
-        funds = client.get_funds()
-        if funds.get("status") and funds.get("data"):
-            d = funds["data"]
-            summary_parts.append(f"\n=== Funds ===")
-            summary_parts.append(f"Available Cash: Rs.{d.get('availablecash', 'N/A')}")
-            summary_parts.append(f"Net Value:      Rs.{d.get('net', 'N/A')}")
-    except Exception as e:
-        summary_parts.append(f"Funds error: {e}")
-
-    return "\n".join(summary_parts) if summary_parts else "Could not fetch portfolio summary."
+    return _format_portfolio_summary_from_dict(portfolio_summary_as_dict(client))
 
 
 @mcp.tool()
@@ -382,52 +482,13 @@ def get_stock_history(symbol: str, days: int = 30, interval: str = "ONE_DAY", ct
         interval: Candle interval - ONE_MINUTE, FIVE_MINUTE, FIFTEEN_MINUTE, THIRTY_MINUTE, ONE_HOUR, ONE_DAY (default ONE_DAY)
     """
     client = _require_client(ctx)
-
-    days = max(1, min(days, 365))
-
-    scrip = client.search_scrip("NSE", symbol)
-    if not scrip.get("status") or not scrip.get("data"):
-        return f"Could not find symbol '{symbol}' on NSE. Try a different name."
-
-    match = scrip["data"][0]
-    token = match["symboltoken"]
-    tradingsymbol = match["tradingsymbol"]
-    exchange = match["exchange"]
-
-    todate = datetime.now()
-    fromdate = todate - timedelta(days=days)
-
-    params = {
-        "exchange": exchange,
-        "symboltoken": token,
-        "interval": interval,
-        "fromdate": fromdate.strftime("%Y-%m-%d %H:%M"),
-        "todate": todate.strftime("%Y-%m-%d %H:%M"),
-    }
-
-    result = client.get_candle_data(params)
-    if not result.get("status") or not result.get("data"):
-        return f"No candle data returned for {tradingsymbol}. API message: {result.get('message', 'unknown')}"
-
-    candles = result["data"]
-    lines = [f"=== {tradingsymbol} ({exchange}) — Last {days} days ({interval}) ===", ""]
-    lines.append(f"{'Date':<22} {'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Volume':>12}")
-    lines.append("-" * 78)
-
-    for c in candles:
-        ts = c[0] if isinstance(c[0], str) else str(c[0])
-        date_str = ts[:19] if len(ts) >= 19 else ts
-        lines.append(f"{date_str:<22} {c[1]:>10.2f} {c[2]:>10.2f} {c[3]:>10.2f} {c[4]:>10.2f} {c[5]:>12}")
-
-    if len(candles) >= 2:
-        first_close = candles[0][4]
-        last_close = candles[-1][4]
-        change = last_close - first_close
-        change_pct = (change / first_close * 100) if first_close else 0
-        lines.append("-" * 78)
-        lines.append(f"Period Change: Rs.{change:,.2f} ({change_pct:+.2f}%)")
-
-    return "\n".join(lines)
+    raw = fetch_stock_history_candles(client, symbol, days, interval)
+    if not raw.get("ok"):
+        msg = raw.get("error", "unknown")
+        if raw.get("tradingsymbol"):
+            return f"No candle data returned for {raw['tradingsymbol']}. API message: {msg}"
+        return msg if isinstance(msg, str) else str(msg)
+    return _format_stock_history_from_candles(raw)
 
 
 @mcp.tool()
@@ -440,91 +501,13 @@ def calculate_pnl(symbol: str, ctx: Context = None) -> str:
         symbol: Stock trading symbol to look up, e.g. "SBIN", "RELIANCE", "TCS"
     """
     client = _require_client(ctx)
-    symbol_upper = symbol.upper().strip()
-
-    holding_match = None
-    position_matches = []
-
-    try:
-        holdings = client.get_holdings()
-        if holdings.get("status") and holdings.get("data"):
-            for h in holdings["data"]:
-                ts = (h.get("tradingsymbol") or "").upper()
-                if symbol_upper in ts:
-                    holding_match = h
-                    break
-    except Exception as e:
-        return f"Error fetching holdings: {e}"
-
-    try:
-        positions = client.get_positions()
-        if positions.get("status") and positions.get("data"):
-            for p in positions["data"]:
-                ts = (p.get("tradingsymbol") or "").upper()
-                if symbol_upper in ts:
-                    position_matches.append(p)
-    except Exception as e:
-        return f"Error fetching positions: {e}"
-
-    if not holding_match and not position_matches:
-        return f"No holdings or positions found matching '{symbol}'. Make sure you hold this stock or have an open position."
-
-    lines = [f"=== P&L Report: {symbol_upper} ===", ""]
-
-    if holding_match:
-        h = holding_match
-        ts = h.get("tradingsymbol", "N/A")
-        qty = int(h.get("quantity", 0) or 0)
-        avg = float(h.get("averageprice", 0) or 0)
-        ltp = float(h.get("ltp", 0) or 0)
-        invested = qty * avg
-        current = qty * ltp
-        pnl = current - invested
-        pnl_pct = (pnl / invested * 100) if invested else 0.0
-
-        lines.append("── Holdings ──")
-        lines.append(f"  Symbol:        {ts}")
-        lines.append(f"  Quantity:      {qty}")
-        lines.append(f"  Avg Price:     Rs.{avg:,.2f}")
-        lines.append(f"  LTP:           Rs.{ltp:,.2f}")
-        lines.append(f"  Invested:      Rs.{invested:,.2f}")
-        lines.append(f"  Current Value: Rs.{current:,.2f}")
-        lines.append(f"  Unrealized P&L: Rs.{pnl:,.2f} ({pnl_pct:+.2f}%)")
-        lines.append("")
-
-    if position_matches:
-        lines.append("── Day Positions ──")
-        total_day_pnl = 0.0
-        for p in position_matches:
-            ts = p.get("tradingsymbol", "N/A")
-            product = p.get("producttype", "N/A")
-            net_qty = int(p.get("netqty", 0) or 0)
-            buy_avg = float(p.get("buyavgprice", 0) or 0)
-            sell_avg = float(p.get("sellavgprice", 0) or 0)
-            ltp = float(p.get("ltp", 0) or 0)
-            pnl = float(p.get("pnl", 0) or 0)
-            total_day_pnl += pnl
-
-            lines.append(f"  {ts} ({product})")
-            lines.append(f"    Net Qty: {net_qty}, Buy Avg: Rs.{buy_avg:,.2f}, Sell Avg: Rs.{sell_avg:,.2f}")
-            lines.append(f"    LTP: Rs.{ltp:,.2f}, Day P&L: Rs.{pnl:,.2f}")
-
-        if len(position_matches) > 1:
-            lines.append(f"  Total Day P&L: Rs.{total_day_pnl:,.2f}")
-        lines.append("")
-
-    total_pnl = 0.0
-    if holding_match:
-        qty = int(holding_match.get("quantity", 0) or 0)
-        avg = float(holding_match.get("averageprice", 0) or 0)
-        ltp = float(holding_match.get("ltp", 0) or 0)
-        total_pnl += (qty * ltp) - (qty * avg)
-    for p in position_matches:
-        total_pnl += float(p.get("pnl", 0) or 0)
-
-    lines.append(f"── Combined P&L: Rs.{total_pnl:,.2f} ──")
-
-    return "\n".join(lines)
+    d = calculate_symbol_pnl(client, symbol)
+    if not d.get("ok"):
+        err = d.get("error", "Unknown error")
+        if err.startswith("holdings:") or err.startswith("positions:"):
+            return f"Error fetching {err.split(':', 1)[0]}: {err.split(':', 1)[1].strip()}"
+        return err
+    return _format_pnl_from_dict(d)
 
 
 @mcp.tool()
@@ -538,60 +521,10 @@ def get_market_depth(symbol: str, exchange: str = "NSE", ctx: Context = None) ->
         exchange: Exchange segment - NSE, BSE (default NSE)
     """
     client = _require_client(ctx)
-
-    scrip = client.search_scrip(exchange, symbol)
-    if not scrip.get("status") or not scrip.get("data"):
-        return f"Could not find symbol '{symbol}' on {exchange}. Try a different name."
-
-    match = scrip["data"][0]
-    token = match["symboltoken"]
-    tradingsymbol = match["tradingsymbol"]
-
-    result = client.get_market_data("FULL", {exchange: [token]})
-    if not result.get("status") or not result.get("data"):
-        return f"Could not fetch market depth for {tradingsymbol}. API message: {result.get('message', 'unknown')}"
-
-    data = result["data"]
-    fetched = data.get("fetched", [{}])
-    if not fetched:
-        return f"No market data returned for {tradingsymbol}."
-
-    stock = fetched[0]
-    ltp = stock.get("ltp", "N/A")
-    open_p = stock.get("open", "N/A")
-    high = stock.get("high", "N/A")
-    low = stock.get("low", "N/A")
-    close = stock.get("close", "N/A")
-    total_buy_qty = stock.get("totBuyQuan", "N/A")
-    total_sell_qty = stock.get("totSellQuan", "N/A")
-
-    lines = [f"=== {tradingsymbol} ({exchange}) Market Depth ===", ""]
-    lines.append(f"LTP: Rs.{ltp}  |  Open: {open_p}  |  High: {high}  |  Low: {low}  |  Prev Close: {close}")
-    lines.append("")
-
-    depth = stock.get("depth", {})
-    bids = depth.get("buy", [])
-    asks = depth.get("sell", [])
-
-    lines.append(f"{'':>5} {'BID':^32}  |  {'ASK':^32}")
-    lines.append(f"{'Lvl':>5} {'Price':>10} {'Qty':>10} {'Orders':>8}  |  {'Price':>10} {'Qty':>10} {'Orders':>8}")
-    lines.append("-" * 73)
-
-    max_levels = max(len(bids), len(asks), 5)
-    for i in range(max_levels):
-        bid_price = f"{bids[i].get('price', 0):>10.2f}" if i < len(bids) else f"{'—':>10}"
-        bid_qty = f"{bids[i].get('quantity', 0):>10}" if i < len(bids) else f"{'—':>10}"
-        bid_ord = f"{bids[i].get('orders', 0):>8}" if i < len(bids) else f"{'—':>8}"
-        ask_price = f"{asks[i].get('price', 0):>10.2f}" if i < len(asks) else f"{'—':>10}"
-        ask_qty = f"{asks[i].get('quantity', 0):>10}" if i < len(asks) else f"{'—':>10}"
-        ask_ord = f"{asks[i].get('orders', 0):>8}" if i < len(asks) else f"{'—':>8}"
-
-        lines.append(f"{i+1:>5} {bid_price} {bid_qty} {bid_ord}  |  {ask_price} {ask_qty} {ask_ord}")
-
-    lines.append("-" * 73)
-    lines.append(f"Total Buy Qty: {total_buy_qty}  |  Total Sell Qty: {total_sell_qty}")
-
-    return "\n".join(lines)
+    d = fetch_market_depth(client, symbol, exchange)
+    if not d.get("ok") and d.get("tradingsymbol") and "Could not fetch" not in str(d.get("error", "")):
+        return f"Could not fetch market depth for {d['tradingsymbol']}. API message: {d.get('error', 'unknown')}"
+    return _format_market_depth_from_dict(d)
 
 
 # ── Trading Tools ──────────────────────────────────────────────────────────
@@ -641,10 +574,10 @@ def place_order(
         "triggerprice": triggerprice,
         "quantity": quantity,
     }
-    result = client.place_order(order_params)
-    if result:
-        return f"Order placed successfully. Order ID: {result}"
-    return "Order placement failed. Check logs for details."
+    pr = place_order_result(client, order_params)
+    if pr.get("ok"):
+        return f"Order placed successfully. Order ID: {pr.get('order_id')}"
+    return pr.get("error", "Order placement failed. Check logs for details.")
 
 
 @mcp.tool()
@@ -682,7 +615,7 @@ def modify_order(
         "triggerprice": triggerprice,
         "quantity": quantity,
     }
-    return _safe_call(client.modify_order, order_params)
+    return json.dumps(modify_order_result(client, order_params), indent=2, default=str)
 
 
 @mcp.tool()
@@ -694,7 +627,7 @@ def cancel_order(orderid: str, variety: str = "NORMAL", ctx: Context = None) -> 
         variety: Order variety - NORMAL, STOPLOSS, AMO, ROBO
     """
     client = _require_client(ctx)
-    return _safe_call(client.cancel_order, orderid, variety)
+    return json.dumps(cancel_order_result(client, orderid, variety), indent=2, default=str)
 
 
 if __name__ == "__main__":

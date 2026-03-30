@@ -6,6 +6,7 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 
 - **MCP Server (SSE transport)** — connect from Cursor, Claude Desktop, or any MCP-compatible client
 - **Web Dashboard** — browser-based portfolio viewer with login, holdings, positions, and orders pages
+- **Finance ADK agent (web)** — after login, open **Agent** in the nav to chat with the Google ADK finance assistant (Angel One + research tools). Requires `OPENROUTER_API_KEY` on the **server** (see below)
 - **Multi-user** — each user authenticates with their own Angel One credentials
 - **Zero credential storage** — credentials live only in server memory for the session duration (max 8 hours)
 
@@ -13,8 +14,7 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 
 ```
 ├── main.py              # Combined entry point (MCP + Web on one port)
-├── server.py            # MCP server with all tools (login, portfolio, trading)
-├── mcp_server.py        # Alternate MCP entry (if used)
+├── mcp_server.py        # MCP FastMCP app (tools: login, portfolio, trading)
 ├── web_app.py           # FastAPI web dashboard
 ├── angel_client.py      # Angel One SmartAPI client wrapper
 ├── session_manager.py   # Per-session client management
@@ -66,6 +66,10 @@ cp .env.example .env
 ```
 
 Edit `.env` with your values (see [Getting Your Angel One API Credentials](#getting-your-angel-one-api-credentials) above).
+
+For the **Agent** page (`/agent`), also set **`OPENROUTER_API_KEY`** in `.env` (or the process environment). That key is read on the server by the ADK agent (LiteLLM → OpenRouter). It is **not** the same as the optional OpenRouter key you can store in the browser for **Dashboard → AI insights / Ask AI** (`/api/ai/*`), which is sent per request from the client.
+
+**Scaling note:** The ADK integration uses in-memory runners and sessions in the same process as the web app. Use a **single** uvicorn worker (the default for `python main.py`) so chat state and Angel sessions stay consistent. Multiple workers without sticky sessions will not share that state.
 
 ### 4. Start the server
 

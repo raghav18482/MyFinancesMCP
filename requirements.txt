@@ -19,3 +19,5 @@ pandas
 ta
 transformers
 torch
+google-adk
+litellm==1.82.6
