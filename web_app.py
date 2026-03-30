@@ -26,8 +26,12 @@ from services.technical_service import compute_technical_indicators
 from services.sector_service import get_sector_overview, get_market_breadth
 
 from session_manager import sessions
+from services.adk_runner_registry import registry
 
 logger = logging.getLogger(__name__)
+
+# Starlette session key: ADK multi-turn chat id (per browser session).
+_ADK_CHAT_SESSION_KEY = "adk_chat_session_id"
 
 _dir = os.path.dirname(os.path.abspath(__file__))
 _frontend_dir = os.path.join(_dir, "frontend")
@@ -46,6 +50,14 @@ SECTOR_MAP: dict[str, str] = get_sector_map()
 
 def _sid(request: Request) -> str | None:
     return request.session.get("sid")
+
+
+def _ensure_adk_chat_session_id(request: Request) -> str:
+    raw = request.session.get(_ADK_CHAT_SESSION_KEY)
+    if not raw:
+        raw = uuid.uuid4().hex
+        request.session[_ADK_CHAT_SESSION_KEY] = raw
+    return str(raw)
 
 
 def _ctx(request: Request, active: str = "") -> dict:
@@ -307,6 +319,15 @@ async def news_page(request: Request):
     if client is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(request, "news.html", _ctx(request, "news"))
+
+
+@web.get("/agent", response_class=HTMLResponse)
+async def agent_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    _ensure_adk_chat_session_id(request)
+    return templates.TemplateResponse(request, "agent.html", _ctx(request, "agent"))
 
 
 # ── News API (gnews) ──────────────────────────────────────────────────────
@@ -807,6 +828,43 @@ async def ai_insights(request: Request):
     except Exception as e:
         logger.exception("AI insights error")
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+@web.post("/api/agent/chat")
+async def api_agent_chat(request: Request):
+    """Run the finance ADK agent (server OPENROUTER_API_KEY); uses Angel session from web login."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
+
+    debug = bool(body.get("debug"))
+    adk_session_id = _ensure_adk_chat_session_id(request)
+
+    try:
+        result = await registry.chat(
+            angel_sid=sid,
+            adk_session_id=adk_session_id,
+            message=message,
+            debug=debug,
+        )
+        return JSONResponse(result)
+    except ValueError as e:
+        err = str(e)
+        if "OPENROUTER_API_KEY" in err:
+            return JSONResponse({"error": err}, status_code=503)
+        return JSONResponse({"error": err}, status_code=400)
+    except Exception as e:
+        logger.exception("ADK agent chat error")
+        return JSONResponse({"error": f"Agent error: {e}"}, status_code=500)
 
 
 @web.post("/api/ai/ask")

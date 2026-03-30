@@ -634,6 +634,24 @@ td.negative{color:var(--red)}
 .ai-ask-input{flex:1;padding:.55rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.85rem;outline:none;font-family:inherit;transition:border-color .15s}
 .ai-ask-input:focus{border-color:var(--accent)}
 
+/* ── ADK Agent chat ── */
+.agent-page{max-width:800px}
+.agent-header{margin-bottom:1.25rem}
+.agent-header h1{font-size:1.35rem;font-weight:800;margin-bottom:.35rem}
+.agent-sub{color:var(--muted);font-size:.85rem;line-height:1.55}
+.agent-sub code{font-size:.78rem;background:var(--surface2);padding:.1rem .35rem;border-radius:4px;color:var(--accent)}
+.agent-chat-card{padding:1.25rem}
+.agent-transcript{min-height:220px;max-height:min(52vh,520px);overflow-y:auto;margin-bottom:1rem;padding:.5rem;display:flex;flex-direction:column;gap:.75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius)}
+.agent-compose{display:flex;gap:.5rem;align-items:center}
+.agent-footnote{font-size:.72rem;color:var(--muted);margin:.75rem 0 0}
+.agent-bubble{max-width:92%;font-size:.85rem;line-height:1.65;word-break:break-word}
+.agent-bubble--user{align-self:flex-end}
+.agent-bubble--user .agent-bubble-inner{background:linear-gradient(135deg,var(--accent-solid),#14b8a6);color:#fff;padding:.55rem .85rem;border-radius:14px 14px 4px 14px}
+.agent-bubble--assistant{align-self:flex-start}
+.agent-bubble--assistant .agent-bubble-inner{background:var(--surface);border:1px solid var(--border);padding:.55rem .85rem;border-radius:14px 14px 14px 4px;color:var(--text)}
+.agent-bubble--assistant .agent-bubble-inner strong{color:var(--accent);font-weight:600}
+.agent-bubble.agent-loading{align-self:flex-start;padding:.75rem 1rem}
+
 /* ── Analytics Charts ── */
 .analytics-page{max-width:1140px}
 .analytics-header{margin-bottom:1.5rem}

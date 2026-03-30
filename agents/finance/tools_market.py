@@ -116,7 +116,7 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
         return {"articles": articles, "count": len(articles)}
 
     def research_enrich_sector_news_with_sentiment(
-        sectors: list,
+        sectors: list[dict[str, Any]],
     ) -> dict[str, Any]:
         """
         Run FinBERT on pre-fetched sector news bundles.
