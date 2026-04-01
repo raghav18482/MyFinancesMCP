@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Avoid compromised LiteLLM 1.82.7 / 1.82.8 (supply chain incident, March 2026).
-_DEFAULT_LITELLM_MODEL = "openrouter/openai/gpt-4o-mini"
+_DEFAULT_LITELLM_MODEL = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
 
 
 def adk_litellm_model() -> str:
