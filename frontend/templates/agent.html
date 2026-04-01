@@ -2,26 +2,56 @@
 {% block title %}Finance Agent{% endblock %}
 {% block content %}
 <div class="container agent-page">
-  <div class="agent-header">
-    <h1>Finance agent</h1>
-    <p class="agent-sub">ADK assistant with Angel One and research tools. Uses the server <code>OPENROUTER_API_KEY</code> (not the dashboard browser key).</p>
-  </div>
-
-  <div class="card agent-chat-card">
-    <div id="agent-transcript" class="agent-transcript" aria-live="polite"></div>
-    <div class="agent-compose">
-      <input type="text" id="agent-input" class="ai-ask-input" placeholder="Ask about your portfolio, markets, or research…" autocomplete="off" />
-      <button type="button" id="agent-send" class="btn btn-primary">Send</button>
+  <header class="agent-top">
+    <div class="agent-top-text">
+      <p class="agent-eyebrow">Portfolio assistant</p>
+      <h1>Finance agent</h1>
+      <p class="agent-lead">Chat with your ADK assistant—live Angel One data, research tools, and market context. Replies use the server OpenRouter key (see <code>.env</code>).</p>
     </div>
-    <p class="agent-footnote">Conversation is kept for this browser session only (in-memory on the server).</p>
+    <button type="button" class="btn btn-muted agent-new-btn" id="agent-new-chat" title="Clear messages and start a new thread">
+      New conversation
+    </button>
+  </header>
+
+  <div class="agent-shell card" id="agent-shell">
+    <div class="agent-scroll" id="agent-scroll">
+      <div class="agent-empty" id="agent-empty">
+        <div class="agent-empty-visual" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="1.5" opacity="0.35"/><path d="M16 22h16M16 28h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/><circle cx="24" cy="14" r="3" fill="currentColor" opacity="0.45"/></svg>
+        </div>
+        <h2 class="agent-empty-title">What would you like to know?</h2>
+        <p class="agent-empty-desc">Try a starter below or type your own question. <kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.</p>
+        <div class="agent-starters" id="agent-starters" role="group" aria-label="Suggested questions">
+          <button type="button" class="agent-starter" data-q="Summarize my portfolio: holdings, day P&amp;L, and available cash.">Portfolio summary</button>
+          <button type="button" class="agent-starter" data-q="What is NSE market breadth and key levels today?">Market breadth</button>
+          <button type="button" class="agent-starter" data-q="Any recent news that could affect my largest holding?">News on top holding</button>
+          <button type="button" class="agent-starter" data-q="Explain sector exposure across my holdings.">Sector exposure</button>
+        </div>
+      </div>
+      <div class="agent-messages" id="agent-messages" aria-live="polite"></div>
+    </div>
+
+    <div class="agent-compose-bar">
+      <label class="visually-hidden" for="agent-input">Message</label>
+      <textarea id="agent-input" class="agent-input" rows="1" placeholder="Message your finance agent…" autocomplete="off"></textarea>
+      <button type="button" class="agent-send-btn" id="agent-send" aria-label="Send message" title="Send">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      </button>
+    </div>
+    <p class="agent-footnote">Messages stay in this browser session only. Server memory resets after restart.</p>
   </div>
 </div>
 
 <script>
 (function(){
-  const $transcript=document.getElementById("agent-transcript");
+  const $shell=document.getElementById("agent-shell");
+  const $scroll=document.getElementById("agent-scroll");
+  const $empty=document.getElementById("agent-empty");
+  const $messages=document.getElementById("agent-messages");
   const $input=document.getElementById("agent-input");
   const $send=document.getElementById("agent-send");
+  const $newChat=document.getElementById("agent-new-chat");
+  const $starters=document.getElementById("agent-starters");
 
   function escapeHtml(s){
     return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -31,55 +61,113 @@
     const esc=escapeHtml(s);
     return esc.replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>").replace(/\n/g,"<br>");
   }
-  function appendBubble(role,text,isHtml){
-    const div=document.createElement("div");
-    div.className="agent-bubble agent-bubble--"+role;
-    div.innerHTML=isHtml?text:("<div class=\"agent-bubble-inner\">"+(role==="user"?formatUserText(text):formatReply(text))+"</div>");
-    $transcript.appendChild(div);
-    $transcript.scrollTop=$transcript.scrollHeight;
+
+  function syncEmptyState(){
+    const has=$messages.children.length>0;
+    $shell.classList.toggle("agent-shell--chatting",has);
+    $empty.setAttribute("aria-hidden",has?"true":"false");
   }
-  function showLoading(){
-    const div=document.createElement("div");
-    div.className="agent-bubble agent-bubble--assistant agent-loading";
-    div.innerHTML='<div class="loading"><div class="spinner"></div></div>';
-    div.dataset.loading="1";
-    $transcript.appendChild(div);
-    $transcript.scrollTop=$transcript.scrollHeight;
-    return div;
+
+  function appendMessage(role,text,opts){
+    opts=opts||{};
+    const row=document.createElement("div");
+    row.className="agent-msg agent-msg--"+role+(opts.error?" agent-msg--error":"");
+    const av=document.createElement("div");
+    av.className="agent-msg-avatar";
+    av.textContent=role==="user"?"You":"AI";
+    if(role==="assistant")av.setAttribute("aria-hidden","true");
+    const body=document.createElement("div");
+    body.className="agent-msg-body";
+    const inner=document.createElement("div");
+    inner.className="agent-msg-text";
+    inner.innerHTML=opts.error
+      ?'<p class="agent-msg-error">'+formatUserText(text)+"</p>"
+      :(role==="user"?formatUserText(text):formatReply(text));
+    body.appendChild(inner);
+    row.appendChild(av);
+    row.appendChild(body);
+    $messages.appendChild(row);
+    syncEmptyState();
+    $scroll.scrollTop=$scroll.scrollHeight;
   }
-  function removeLoading(el){if(el&&el.parentNode)el.parentNode.removeChild(el);}
+
+  function showTyping(){
+    const row=document.createElement("div");
+    row.className="agent-msg agent-msg--assistant agent-msg--typing";
+    row.innerHTML='<div class="agent-msg-avatar" aria-hidden="true">AI</div><div class="agent-msg-body"><div class="agent-typing" aria-label="Assistant is typing"><span></span><span></span><span></span></div></div>';
+    $messages.appendChild(row);
+    syncEmptyState();
+    $scroll.scrollTop=$scroll.scrollHeight;
+    return row;
+  }
+
+  function autoResizeTextarea(){
+    $input.style.height="auto";
+    const max=140;
+    $input.style.height=Math.min($input.scrollHeight,max)+"px";
+  }
 
   async function send(){
     const text=$input.value.trim();
     if(!text)return;
     $input.value="";
-    appendBubble("user",text,false);
-    const loadEl=showLoading();
+    autoResizeTextarea();
+    appendMessage("user",text);
+    const typing=showTyping();
     $send.disabled=true;
+    $input.disabled=true;
     try{
       const res=await fetch("/api/agent/chat",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({message:text})
       });
-      const data=await res.json();
-      removeLoading(loadEl);
+      const data=await res.json().catch(function(){return{};});
+      if(typing.parentNode)typing.parentNode.removeChild(typing);
       if(!res.ok){
-        appendBubble("assistant",data.error||("Error "+res.status),false);
+        appendMessage("assistant",data.error||("Something went wrong ("+res.status+")."),{error:true});
         return;
       }
-      appendBubble("assistant",data.reply||"",false);
+      appendMessage("assistant",data.reply||"");
     }catch(e){
-      removeLoading(loadEl);
-      appendBubble("assistant","Request failed: "+e.message,false);
+      if(typing.parentNode)typing.parentNode.removeChild(typing);
+      appendMessage("assistant","Could not reach the server: "+e.message,{error:true});
     }finally{
       $send.disabled=false;
+      $input.disabled=false;
       $input.focus();
     }
   }
 
+  async function newConversation(){
+    try{
+      const res=await fetch("/api/agent/new-chat",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+      if(!res.ok)return;
+    }catch(e){return;}
+    $messages.innerHTML="";
+    syncEmptyState();
+    $input.value="";
+    autoResizeTextarea();
+    $input.focus();
+  }
+
   $send.addEventListener("click",send);
-  $input.addEventListener("keydown",function(e){if(e.key==="Enter")send();});
+  $input.addEventListener("input",autoResizeTextarea);
+  $input.addEventListener("keydown",function(e){
+    if(e.key==="Enter"&&!e.shiftKey){
+      e.preventDefault();
+      send();
+    }
+  });
+  $newChat.addEventListener("click",newConversation);
+  $starters.addEventListener("click",function(e){
+    const b=e.target.closest(".agent-starter");
+    if(!b)return;
+    const q=b.getAttribute("data-q")||"";
+    if(q){$input.value=q;autoResizeTextarea();send();}
+  });
+
+  autoResizeTextarea();
   $input.focus();
 })();
 </script>

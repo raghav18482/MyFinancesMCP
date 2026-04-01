@@ -867,6 +867,16 @@ async def api_agent_chat(request: Request):
         return JSONResponse({"error": f"Agent error: {e}"}, status_code=500)
 
 
+@web.post("/api/agent/new-chat")
+async def api_agent_new_chat(request: Request):
+    """Start a fresh ADK thread (new id in the signed session cookie)."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    request.session[_ADK_CHAT_SESSION_KEY] = uuid.uuid4().hex
+    return JSONResponse({"ok": True})
+
+
 @web.post("/api/ai/ask")
 async def ai_ask(request: Request):
     client = _require_login(request)

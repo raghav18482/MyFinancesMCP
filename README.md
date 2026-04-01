@@ -6,7 +6,7 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 
 - **MCP Server (SSE transport)** — connect from Cursor, Claude Desktop, or any MCP-compatible client
 - **Web Dashboard** — browser-based portfolio viewer with login, holdings, positions, and orders pages
-- **Finance ADK agent (web)** — after login, open **Agent** in the nav to chat with the Google ADK finance assistant (Angel One + research tools). Requires `OPENROUTER_API_KEY` on the **server** (see below)
+- **Finance ADK agent (web)** — after login, open **Agent** in the nav to chat with the Google ADK finance assistant (Angel One + research tools). Use **New conversation** to reset the chat thread. Requires `OPENROUTER_API_KEY` on the **server** (see below)
 - **Multi-user** — each user authenticates with their own Angel One credentials
 - **Zero credential storage** — credentials live only in server memory for the session duration (max 8 hours)
 
