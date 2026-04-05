@@ -48,6 +48,24 @@ def _extract_text_from_event(event: Any) -> str:
     return "".join(p.text for p in event.content.parts if getattr(p, "text", None))
 
 
+def _log_adk_tool_calls(event: Any, angel_sid_prefix: str) -> None:
+    """Emit one INFO log line per model-issued tool call (names only)."""
+    try:
+        calls = event.get_function_calls()
+    except Exception:
+        calls = []
+    if not calls:
+        return
+    for fc in calls:
+        name = getattr(fc, "name", None) or ""
+        if name:
+            logger.info(
+                "ADK tool call: %s (angel_session=%s…)",
+                name,
+                angel_sid_prefix,
+            )
+
+
 class AdkRunnerRegistry:
     """Caches InMemoryRunner per angel_sid; serializes runs per sid with asyncio.Lock."""
 
@@ -124,11 +142,13 @@ class AdkRunnerRegistry:
             fallback_text = ""
             debug_events: list[dict[str, Any]] = []
 
+            sid_prefix = angel_sid[:8] if len(angel_sid) >= 8 else angel_sid
             async for event in runner.run_async(
                 user_id=user_id,
                 session_id=adk_session_id,
                 new_message=content,
             ):
+                _log_adk_tool_calls(event, sid_prefix)
                 if debug:
                     debug_events.append(_event_debug_dict(event))
 
