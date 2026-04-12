@@ -18,6 +18,7 @@ class AngelOneClient:
         self.smart_api = SmartConnect(api_key=self.api_key)
         self._session_data: Optional[dict] = None
         self._login_time: Optional[float] = None
+        self._feed_token: Optional[str] = None
 
     def ensure_session(self):
         if self._session_data and self._login_time:
@@ -46,6 +47,7 @@ class AngelOneClient:
                 if data.get("status"):
                     self._session_data = data
                     self._login_time = time.time()
+                    self._feed_token = (data.get("data") or {}).get("feedToken")
                     logger.info("Angel One session established for %s", self.client_id)
                     return
                 last_error = data.get("message", "Unknown login error")
@@ -56,6 +58,10 @@ class AngelOneClient:
                 time.sleep(2)
 
         raise RuntimeError(f"Failed to authenticate after 5 attempts: {last_error}")
+
+    @property
+    def feed_token(self) -> Optional[str]:
+        return self._feed_token
 
     # ── Portfolio ──────────────────────────────────────────────
 
