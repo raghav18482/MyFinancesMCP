@@ -630,5 +630,95 @@ def cancel_order(orderid: str, variety: str = "NORMAL", ctx: Context = None) -> 
     return json.dumps(cancel_order_result(client, orderid, variety), indent=2, default=str)
 
 
+@mcp.tool()
+def predict_price_direction(
+    tradingsymbol: str,
+    exchange: str = "NSE",
+    days: int = 365,
+    ctx: Context = None,
+) -> str:
+    """Predict whether a stock's price will go UP or DOWN across 7 timeframes.
+
+    Uses technical analysis indicators (RSI, MACD, Bollinger Bands, ADX, etc.)
+    and price-action features to generate predictions for:
+    - 10 minutes, 1 hour, 4 hours, 1 day, 1 week, 1 month, 1 year
+
+    Returns direction (UP/DOWN/NEUTRAL) with confidence percentage for each timeframe,
+    plus an overall outlook and the top bullish/bearish signals driving the prediction.
+
+    Args:
+        tradingsymbol: Stock symbol, e.g. "RELIANCE-EQ" or "SBIN-EQ"
+        exchange: Exchange - NSE or BSE
+        days: Number of days of historical data to analyze (default 90)
+    """
+    from datetime import datetime, timedelta
+    from services.prediction_service import predict_direction as _predict
+
+    client = _require_client(ctx)
+    search_key = tradingsymbol.split("-")[0] if "-" in tradingsymbol else tradingsymbol
+    sr = _safe_call(client.search_scrip, exchange, search_key)
+    if isinstance(sr, str):
+        return f"Could not find symbol: {sr}"
+
+    rows = sr.get("data") or []
+    token = None
+    for r in rows:
+        ts = r.get("tradingsymbol", "")
+        if ts == tradingsymbol or ts == search_key or ts == f"{search_key}-EQ":
+            token = r.get("symboltoken")
+            break
+    if not token and rows:
+        token = rows[0].get("symboltoken")
+    if not token:
+        return f"Could not find token for {tradingsymbol}"
+
+    to_dt = datetime.now()
+    from_dt = to_dt - timedelta(days=days)
+    candle_result = _safe_call(
+        client.get_candle_data,
+        {
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": "ONE_DAY",
+            "fromdate": from_dt.strftime("%Y-%m-%d 09:15"),
+            "todate": to_dt.strftime("%Y-%m-%d 15:30"),
+        },
+    )
+    if isinstance(candle_result, str):
+        return f"Could not fetch candle data: {candle_result}"
+    if not candle_result.get("status") or not candle_result.get("data"):
+        return "No candle data available for this symbol."
+
+    result = _predict(candle_result["data"], tradingsymbol)
+    if result.get("error"):
+        return result["error"]
+
+    lines = [
+        f"=== Price Prediction: {tradingsymbol} ({exchange}) ===",
+        f"Overall Outlook: {result['overall_outlook'].upper()} (score: {result['overall_score']:+.3f})",
+        f"Model: {result['model_type']}",
+        "",
+        f"{'Timeframe':<12} {'Direction':<10} {'Confidence':<12}",
+        "-" * 36,
+    ]
+    for tf in ["10min", "1hr", "4hr", "1day", "1week", "1month", "1year"]:
+        p = result["predictions"].get(tf, {})
+        direction = p.get("direction", "N/A").upper()
+        confidence = f"{p.get('confidence', 0) * 100:.1f}%"
+        lines.append(f"{tf:<12} {direction:<10} {confidence:<12}")
+
+    lines.append("")
+    if result.get("top_bullish_signals"):
+        lines.append("Bullish Signals:")
+        for s in result["top_bullish_signals"]:
+            lines.append(f"  + {s['feature']}: {s['value']:+.4f}")
+    if result.get("top_bearish_signals"):
+        lines.append("Bearish Signals:")
+        for s in result["top_bearish_signals"]:
+            lines.append(f"  - {s['feature']}: {s['value']:.4f}")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     mcp.run(transport="sse")

@@ -813,6 +813,49 @@ td.negative{color:var(--red)}
 .beta-info-heading{font-size:.65rem;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
 .beta-info-values{font-size:.7rem;color:var(--text);line-height:1.55;white-space:pre-line;font-variant-numeric:tabular-nums}
 
+/* ── AI Prediction Section ── */
+.pred-section{border:1px solid rgba(94,234,212,.18);background:linear-gradient(135deg,rgba(18,22,36,.72),rgba(14,22,36,.85))}
+.pred-badge{background:linear-gradient(135deg,var(--accent-solid),#115e59);color:#5eead4;padding:3px 10px;border-radius:5px;font-size:.68rem;font-weight:700;letter-spacing:.04em}
+.pred-container{min-height:340px}
+
+.pred-wrapper{display:flex;flex-direction:column;gap:1.25rem}
+.pred-overall{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;padding:.75rem 1rem;background:var(--surface2);border-radius:10px;border:1px solid var(--border)}
+.pred-overall-main{display:flex;align-items:center;gap:.6rem}
+.pred-outlook-icon{font-size:1.4rem;line-height:1}
+.pred-outlook-label{font-size:1.1rem;font-weight:800;letter-spacing:.04em;font-family:var(--font-display)}
+.pred-outlook-score{font-size:.82rem;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
+.pred-model-tag{font-size:.7rem;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.04em}
+
+.pred-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.65rem}
+@media(max-width:1000px){.pred-grid{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:700px){.pred-grid{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:500px){.pred-grid{grid-template-columns:repeat(2,1fr)}}
+
+.pred-card{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:.85rem .75rem;display:flex;flex-direction:column;align-items:center;gap:.5rem;transition:border-color .15s,transform .15s}
+.pred-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.pred-card-tf{font-size:.72rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.pred-card-dir{display:flex;align-items:center;gap:.4rem}
+.pred-dir-icon{font-size:1.2rem;line-height:1}
+.pred-dir-text{font-size:.95rem;font-weight:800;letter-spacing:.03em}
+.pred-card-conf{display:flex;align-items:center;gap:.5rem;width:100%}
+.pred-conf-bar-bg{flex:1;height:5px;background:var(--border);border-radius:3px;overflow:hidden}
+.pred-conf-bar{height:100%;border-radius:3px;transition:width .4s ease}
+.pred-conf-pct{font-size:.72rem;color:var(--muted);font-weight:700;font-variant-numeric:tabular-nums;min-width:32px;text-align:right}
+
+.pred-chart-row{display:flex;gap:1rem;min-height:220px}
+@media(max-width:700px){.pred-chart-row{flex-direction:column}}
+.pred-gauge-box{flex:2;min-height:200px}
+.pred-signals{flex:1;display:flex;flex-direction:column;gap:.75rem;min-width:200px}
+.pred-signal-group{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:.75rem .85rem}
+.pred-signal-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}
+.pred-signal-row{display:flex;justify-content:space-between;align-items:center;padding:.25rem 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.pred-signal-row:last-child{border-bottom:none}
+.pred-signal-name{font-size:.78rem;color:var(--text);font-weight:500}
+.pred-signal-val{font-size:.78rem;font-weight:700;font-variant-numeric:tabular-nums}
+
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--accent);padding:.35rem .75rem;border-radius:6px;font-size:.75rem;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit}
+.btn-ghost:hover{background:var(--surface2);border-color:var(--accent)}
+
 /* ── News Page ── */
 .news-page{max-width:1140px}
 .news-header{margin-bottom:1rem}

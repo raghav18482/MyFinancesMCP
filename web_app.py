@@ -24,6 +24,7 @@ from services.news_service import (
     search_news_articles,
 )
 from services.technical_service import compute_technical_indicators
+from services.prediction_service import predict_direction
 from services.sector_service import get_sector_overview, get_market_breadth
 from services.risk_profile import risk_profiles, build_profile_from_dict
 from services.trade_proposals import proposal_store, execute_proposal
@@ -562,6 +563,46 @@ async def api_portfolio_candles(
         return JSONResponse({"error": result.get("message", "No candle data")}, status_code=400)
     except Exception as e:
         logger.exception("Candle data error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/portfolio/predict")
+async def api_portfolio_predict(
+    request: Request,
+    symbol: str = Query(...),
+    exchange: str = Query("NSE"),
+    days: int = Query(365),
+):
+    """Predict price direction for a stock across multiple timeframes (up to 1 year)."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        sr = _search_scrip_cached(client, exchange, _scrip_search_key(symbol))
+        row = _pick_scrip_row(sr.get("data") if sr.get("status") else None, symbol)
+        if not row or not row.get("symboltoken"):
+            return JSONResponse({"error": f"Could not find token for {symbol}"}, status_code=404)
+        token = row["symboltoken"]
+
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=days)
+        params = {
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": "ONE_DAY",
+            "fromdate": from_dt.strftime("%Y-%m-%d 09:15"),
+            "todate": to_dt.strftime("%Y-%m-%d 15:30"),
+        }
+        result = client.get_candle_data(params)
+        if not result.get("status") or not result.get("data"):
+            return JSONResponse({"error": "No candle data available"}, status_code=400)
+
+        candles = result["data"]
+        prediction = await asyncio.to_thread(predict_direction, candles, symbol)
+        return JSONResponse(prediction)
+    except Exception as e:
+        logger.exception("Prediction error for %s", symbol)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
