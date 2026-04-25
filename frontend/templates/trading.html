@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+{% block title %}Trading Agent{% endblock %}
+{% block content %}
+<div class="container trading-page">
+
+  <header class="agent-top">
+    <div class="agent-top-text">
+      <p class="agent-eyebrow">Risk-aware trading</p>
+      <h1>Trading agent</h1>
+      <p class="agent-lead">Chat with the AI trading assistant. It proposes trades based on your risk profile &mdash; you approve or reject before any order is placed.</p>
+    </div>
+    <button type="button" class="btn btn-muted agent-new-btn" id="trading-new-chat" title="Start a new conversation">New conversation</button>
+  </header>
+
+  <!-- Risk Profile -->
+  <section class="card trading-section" id="risk-section">
+    <h2 class="trading-section-title">Risk Profile</h2>
+    {% if has_risk_profile %}
+    <p class="risk-status risk-status--set" id="risk-status">Profile loaded. <button type="button" class="btn-link" id="risk-edit-btn">Edit</button></p>
+    {% else %}
+    <p class="risk-status risk-status--missing" id="risk-status">No risk profile set. Fill in below before trading.</p>
+    {% endif %}
+    <form id="risk-form" class="risk-form{% if has_risk_profile %} risk-form--hidden{% endif %}">
+      <div class="risk-grid">
+        <label>Age<input type="number" name="age" min="18" max="120" value="24" required></label>
+        <label>Goal
+          <select name="goal" required>
+            <option value="wealth creation">Wealth Creation</option>
+            <option value="income">Income</option>
+            <option value="preservation">Preservation</option>
+            <option value="speculation">Speculation</option>
+          </select>
+        </label>
+        <label>Horizon (years)<input type="number" name="horizon_years" min="1" max="50" value="10" required></label>
+        <label>Risk Tolerance
+          <select name="risk_tolerance" required>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high" selected>High</option>
+          </select>
+        </label>
+        <label>Tax Bracket<input type="text" name="tax_bracket" value="20%" placeholder="e.g. 30%"></label>
+        <label>Max Order Value<input type="number" name="max_single_order_value" min="1000" step="1000" value="500000"></label>
+        <label>Max Position %<input type="number" name="max_position_pct" min="1" max="100" step="1" value="35"></label>
+        <label>Max Daily Trades<input type="number" name="max_daily_trades" min="1" max="100" value="25"></label>
+      </div>
+      <div class="risk-products">
+        <span>Products:</span>
+        <label><input type="checkbox" name="product_delivery" value="DELIVERY" checked> Delivery</label>
+        <label><input type="checkbox" name="product_intraday" value="INTRADAY" checked> Intraday</label>
+      </div>
+      <button type="submit" class="btn btn-accent">Save Risk Profile</button>
+    </form>
+  </section>
+
+  <!-- Layout: chart + proposals | chat -->
+  <div class="trading-layout">
+    <div class="trading-left">
+      <!-- Real-time Chart -->
+      <section class="card trading-section">
+        <h2 class="trading-section-title">Live Price</h2>
+        <div class="rt-controls">
+          <select id="rt-holdings-select" class="rt-select">
+            <option value="">Loading holdings...</option>
+          </select>
+          <span class="rt-or">or</span>
+          <input type="text" id="rt-symbol" class="rt-input" placeholder="e.g. RELIANCE" value="">
+          <button type="button" id="rt-symbol-btn" class="btn btn-accent btn-sm">Load</button>
+        </div>
+        <div class="rt-price-bar">
+          <span id="rt-symbol-label" class="rt-symbol-label"></span>
+          <span id="rt-ltp" class="rt-ltp">--</span>
+          <span id="rt-change" class="rt-change"></span>
+        </div>
+        <div id="rt-chart" class="rt-chart"></div>
+      </section>
+
+      <div id="rt-boot" hidden data-ws-sid="{{ ws_sid|e }}"></div>
+      <script type="application/json" id="rt-holdings-json">{{ holdings_json|safe }}</script>
+      <script>
+        (function () {
+          var boot = document.getElementById('rt-boot');
+          window.__WS_SID__ = boot ? boot.getAttribute('data-ws-sid') || '' : '';
+          try {
+            window.__HOLDINGS__ = JSON.parse(document.getElementById('rt-holdings-json').textContent);
+          } catch (e) {
+            window.__HOLDINGS__ = [];
+          }
+        })();
+      </script>
+
+      <!-- Proposals -->
+      <section class="card trading-section">
+        <h2 class="trading-section-title">Trade Proposals</h2>
+        <div id="proposals-list" class="proposals-list">
+          <p class="proposals-empty">No proposals yet. Chat with the trading agent to get trade ideas.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="trading-right">
+      <!-- Chat panel -->
+      <div class="agent-shell card" id="agent-shell">
+        <div class="agent-scroll" id="agent-scroll">
+          <div class="agent-empty" id="agent-empty">
+            <div class="agent-empty-visual" aria-hidden="true">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="1.5" opacity="0.35"/><path d="M14 20l10-6 10 6M14 28l10 6 10-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/></svg>
+            </div>
+            <h2 class="agent-empty-title">Trading Assistant</h2>
+            <p class="agent-empty-desc">Ask for trade ideas or type <kbd>APPROVE &lt;id&gt;</kbd> to execute a proposal.</p>
+            <div class="agent-starters" id="agent-starters" role="group">
+              <button type="button" class="agent-starter" data-q="What trades would you recommend based on my risk profile and current holdings?">Suggest trades</button>
+              <button type="button" class="agent-starter" data-q="Analyze RELIANCE-EQ technically and tell me if it's a good entry point.">Analyze RELIANCE</button>
+              <button type="button" class="agent-starter" data-q="Show my current pending proposals.">Pending proposals</button>
+              <button type="button" class="agent-starter" data-q="What is my available margin and current exposure?">Check margin</button>
+            </div>
+          </div>
+          <div class="agent-messages" id="agent-messages" aria-live="polite"></div>
+        </div>
+
+        <div class="agent-compose-bar">
+          <label class="visually-hidden" for="agent-input">Message</label>
+          <textarea id="agent-input" class="agent-input" rows="1" placeholder="Message your trading agent..." autocomplete="off"></textarea>
+          <button type="button" class="agent-send-btn" id="agent-send" aria-label="Send message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+        <p class="agent-footnote">Proposals must be approved before execution. Type <code>APPROVE &lt;id&gt;</code> or use the panel.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.trading-page { max-width: 1400px; }
+.trading-section { padding: 1.25rem; margin-bottom: 1rem; }
+.trading-section-title { font-family: var(--font-display); font-size: 1.1rem; font-weight: 600; margin-bottom: .75rem; color: var(--accent); }
+.trading-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .trading-layout { grid-template-columns: 1fr; } }
+.trading-left { display: flex; flex-direction: column; gap: 1rem; }
+.trading-right { position: sticky; top: 70px; }
+
+/* Risk form */
+.risk-form--hidden { display: none; }
+.risk-status { font-size: .9rem; margin-bottom: .75rem; }
+.risk-status--set { color: var(--green); }
+.risk-status--missing { color: var(--red); }
+.btn-link { background: none; border: none; color: var(--accent-dim); cursor: pointer; text-decoration: underline; font-size: inherit; padding: 0; }
+.risk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .5rem .75rem; margin-bottom: .75rem; }
+.risk-grid label { display: flex; flex-direction: column; font-size: .8rem; color: var(--muted); gap: .2rem; }
+.risk-grid input, .risk-grid select {
+  background: var(--surface-solid); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: .4rem .6rem; font-size: .9rem; font-family: inherit;
+}
+.risk-grid input:focus, .risk-grid select:focus { outline: none; border-color: var(--accent); }
+.risk-products { display: flex; align-items: center; gap: .75rem; font-size: .85rem; color: var(--muted); margin-bottom: .75rem; }
+.risk-products label { display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+
+/* Realtime chart */
+.rt-controls { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; flex-wrap: wrap; }
+.rt-select {
+  background: var(--surface-solid); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: .4rem .6rem; font-size: .9rem; min-width: 200px; font-family: inherit;
+  cursor: pointer; appearance: auto;
+}
+.rt-select:focus { outline: none; border-color: var(--accent); }
+.rt-or { color: var(--muted); font-size: .8rem; }
+.rt-input {
+  background: var(--surface-solid); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: .4rem .6rem; font-size: .9rem; width: 140px; font-family: inherit;
+}
+.rt-input:focus { outline: none; border-color: var(--accent); }
+.rt-price-bar { display: flex; align-items: baseline; gap: .75rem; margin-bottom: .75rem; min-height: 1.8rem; }
+.rt-symbol-label { font-size: .85rem; font-weight: 600; color: var(--text-soft); }
+.rt-ltp { font-size: 1.3rem; font-weight: 700; font-family: var(--font-display); }
+.rt-change { font-size: .9rem; font-weight: 500; }
+.rt-change--up { color: var(--green); }
+.rt-change--down { color: var(--red); }
+.rt-chart { width: 100%; height: 480px; }
+
+/* Proposals */
+.proposals-list { display: flex; flex-direction: column; gap: .5rem; }
+.proposals-empty { color: var(--muted); font-size: .85rem; }
+.proposal-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: .75rem; display: flex; flex-direction: column; gap: .4rem;
+}
+.proposal-summary { font-size: .95rem; font-weight: 500; }
+.proposal-meta { display: flex; align-items: center; gap: .75rem; font-size: .8rem; }
+.proposal-id { color: var(--muted); font-family: monospace; }
+.proposal-status { font-weight: 600; text-transform: uppercase; font-size: .75rem; padding: .15rem .5rem; border-radius: 4px; }
+.proposal-status--pending { color: #eab308; background: rgba(234,179,8,.12); }
+.proposal-status--approved { color: var(--green); background: rgba(34,197,94,.12); }
+.proposal-status--executed { color: var(--accent); background: rgba(94,234,212,.12); }
+.proposal-status--rejected { color: var(--red); background: rgba(248,113,113,.12); }
+.proposal-status--expired { color: var(--muted); background: rgba(139,147,168,.12); }
+.proposal-status--failed { color: var(--red); background: rgba(248,113,113,.12); }
+.proposal-actions { display: flex; gap: .5rem; }
+.proposal-result { font-size: .8rem; color: var(--accent); }
+.proposal-error { font-size: .8rem; color: var(--red); }
+.btn-green { background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
+.btn-green:hover { background: rgba(34,197,94,.25); }
+</style>
+
+<script type="module" src="/static/js/trading.js?v=7"></script>
+
+<script>
+(function(){
+  // Risk profile form
+  const $form = document.getElementById('risk-form');
+  const $status = document.getElementById('risk-status');
+  const $editBtn = document.getElementById('risk-edit-btn');
+
+  if ($editBtn) {
+    $editBtn.addEventListener('click', function() {
+      $form.classList.remove('risk-form--hidden');
+      fetchAndFillProfile();
+    });
+  }
+
+  $form.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const fd = new FormData($form);
+    const products = [];
+    if (fd.get('product_delivery')) products.push('DELIVERY');
+    if (fd.get('product_intraday')) products.push('INTRADAY');
+    const payload = {
+      age: parseInt(fd.get('age')),
+      goal: fd.get('goal'),
+      horizon_years: parseInt(fd.get('horizon_years')),
+      risk_tolerance: fd.get('risk_tolerance'),
+      tax_bracket: fd.get('tax_bracket'),
+      max_single_order_value: parseFloat(fd.get('max_single_order_value')),
+      max_position_pct: parseFloat(fd.get('max_position_pct')),
+      max_daily_trades: parseInt(fd.get('max_daily_trades')),
+      allowed_products: products,
+    };
+    try {
+      const res = await fetch('/api/trading/profile', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        $status.textContent = 'Profile saved.';
+        $status.className = 'risk-status risk-status--set';
+        $form.classList.add('risk-form--hidden');
+        $status.innerHTML = 'Profile loaded. <button type="button" class="btn-link" id="risk-edit-btn">Edit</button>';
+        document.getElementById('risk-edit-btn').addEventListener('click', function() {
+          $form.classList.remove('risk-form--hidden');
+        });
+      } else {
+        alert('Error: ' + (data.error || 'Unknown'));
+      }
+    } catch (err) { alert('Network error: ' + err.message); }
+  });
+
+  async function fetchAndFillProfile() {
+    try {
+      const res = await fetch('/api/trading/profile');
+      const data = await res.json();
+      if (data.has_profile && data.profile) {
+        const p = data.profile;
+        $form.querySelector('[name=age]').value = p.age;
+        $form.querySelector('[name=goal]').value = p.goal;
+        $form.querySelector('[name=horizon_years]').value = p.horizon_years;
+        $form.querySelector('[name=risk_tolerance]').value = p.risk_tolerance;
+        $form.querySelector('[name=tax_bracket]').value = p.tax_bracket;
+        $form.querySelector('[name=max_single_order_value]').value = p.max_single_order_value;
+        $form.querySelector('[name=max_position_pct]').value = p.max_position_pct;
+        $form.querySelector('[name=max_daily_trades]').value = p.max_daily_trades;
+        $form.querySelector('[name=product_delivery]').checked = p.allowed_products.includes('DELIVERY');
+        $form.querySelector('[name=product_intraday]').checked = p.allowed_products.includes('INTRADAY');
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Trading agent chat (same pattern as agent.html but with agent_type: "trading")
+  const $shell = document.getElementById("agent-shell");
+  const $scroll = document.getElementById("agent-scroll");
+  const $empty = document.getElementById("agent-empty");
+  const $messages = document.getElementById("agent-messages");
+  const $input = document.getElementById("agent-input");
+  const $send = document.getElementById("agent-send");
+  const $newChat = document.getElementById("trading-new-chat");
+  const $starters = document.getElementById("agent-starters");
+
+  function escapeHtml(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function formatUserText(s) { return escapeHtml(s).replace(/\n/g,"<br>"); }
+  function formatReply(s) {
+    const esc = escapeHtml(s);
+    return esc.replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>").replace(/\n/g,"<br>");
+  }
+
+  function syncEmptyState() {
+    const has = $messages.children.length > 0;
+    $shell.classList.toggle("agent-shell--chatting", has);
+    $empty.setAttribute("aria-hidden", has ? "true" : "false");
+  }
+
+  function appendMessage(role, text, opts) {
+    opts = opts || {};
+    const row = document.createElement("div");
+    row.className = "agent-msg agent-msg--" + role + (opts.error ? " agent-msg--error" : "");
+    const av = document.createElement("div");
+    av.className = "agent-msg-avatar";
+    av.textContent = role === "user" ? "You" : "AI";
+    const body = document.createElement("div");
+    body.className = "agent-msg-body";
+    const inner = document.createElement("div");
+    inner.className = "agent-msg-text";
+    inner.innerHTML = opts.error
+      ? '<p class="agent-msg-error">' + formatUserText(text) + "</p>"
+      : (role === "user" ? formatUserText(text) : formatReply(text));
+    body.appendChild(inner);
+    row.appendChild(av);
+    row.appendChild(body);
+    $messages.appendChild(row);
+    syncEmptyState();
+    $scroll.scrollTop = $scroll.scrollHeight;
+  }
+
+  function showTyping() {
+    const row = document.createElement("div");
+    row.className = "agent-msg agent-msg--assistant agent-msg--typing";
+    row.innerHTML = '<div class="agent-msg-avatar" aria-hidden="true">AI</div><div class="agent-msg-body"><div class="agent-typing" aria-label="Typing"><span></span><span></span><span></span></div></div>';
+    $messages.appendChild(row);
+    syncEmptyState();
+    $scroll.scrollTop = $scroll.scrollHeight;
+    return row;
+  }
+
+  function autoResize() {
+    $input.style.height = "auto";
+    $input.style.height = Math.min($input.scrollHeight, 140) + "px";
+  }
+
+  async function send() {
+    const text = $input.value.trim();
+    if (!text) return;
+    $input.value = "";
+    autoResize();
+    appendMessage("user", text);
+    const typing = showTyping();
+    $send.disabled = true;
+    $input.disabled = true;
+    try {
+      const res = await fetch("/api/agent/chat", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ message: text, agent_type: "trading" }),
+      });
+      const data = await res.json().catch(function(){ return {}; });
+      if (typing.parentNode) typing.parentNode.removeChild(typing);
+      if (!res.ok) {
+        appendMessage("assistant", data.error || ("Error " + res.status), {error: true});
+        return;
+      }
+      appendMessage("assistant", data.reply || "");
+    } catch (e) {
+      if (typing.parentNode) typing.parentNode.removeChild(typing);
+      appendMessage("assistant", "Could not reach the server: " + e.message, {error: true});
+    } finally {
+      $send.disabled = false;
+      $input.disabled = false;
+      $input.focus();
+    }
+  }
+
+  async function newConversation() {
+    try {
+      await fetch("/api/agent/new-chat", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({agent_type: "trading"}),
+      });
+    } catch (e) { return; }
+    $messages.innerHTML = "";
+    syncEmptyState();
+    $input.value = "";
+    autoResize();
+    $input.focus();
+  }
+
+  $send.addEventListener("click", send);
+  $input.addEventListener("input", autoResize);
+  $input.addEventListener("keydown", function(e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  $newChat.addEventListener("click", newConversation);
+  $starters.addEventListener("click", function(e) {
+    const b = e.target.closest(".agent-starter");
+    if (!b) return;
+    const q = b.getAttribute("data-q") || "";
+    if (q) { $input.value = q; autoResize(); send(); }
+  });
+
+  autoResize();
+  $input.focus();
+})();
+</script>
+{% endblock %}

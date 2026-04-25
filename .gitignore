@@ -8,3 +8,6 @@ dist/
 *.egg-info/
 .DS_Store
 logs/
+
+# Trained prediction models (regenerate with: python models/train_prediction.py)
+models/*.pkl

@@ -19,5 +19,8 @@ pandas
 ta
 transformers
 torch
+lightgbm
+scikit-learn
+joblib
 google-adk
 litellm==1.82.6

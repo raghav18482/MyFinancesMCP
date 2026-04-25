@@ -1,5 +1,5 @@
 """
-In-process ADK runners for the web UI: one InMemoryRunner per Angel web session (sid).
+In-process ADK runners for the web UI: one InMemoryRunner per (Angel web session, agent_type).
 
 Broker tools are bound to sid at agent build time; chat state uses ADK session ids stored
 in the Starlette session (see web_app).
@@ -8,16 +8,31 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
+from google.adk.agents import LlmAgent
 from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from agents.config import openrouter_api_key
-from agents.finance.agent import FINANCE_AGENT_APP_NAME, build_finance_root_agent
 
 logger = logging.getLogger(__name__)
+
+AgentBuilder = Callable[[str], LlmAgent]
+
+_AGENT_BUILDERS: dict[str, tuple[AgentBuilder, str]] = {}
+
+
+def _register_default_builders() -> None:
+    """Lazy-import agent builders to avoid circular imports at module level."""
+    if _AGENT_BUILDERS:
+        return
+    from agents.finance.agent import FINANCE_AGENT_APP_NAME, build_finance_root_agent
+    from agents.trading.agent import TRADING_AGENT_APP_NAME, build_trading_root_agent
+
+    _AGENT_BUILDERS["finance"] = (build_finance_root_agent, FINANCE_AGENT_APP_NAME)
+    _AGENT_BUILDERS["trading"] = (build_trading_root_agent, TRADING_AGENT_APP_NAME)
 
 
 def _event_debug_dict(event: Any) -> dict[str, Any]:
@@ -67,26 +82,39 @@ def _log_adk_tool_calls(event: Any, angel_sid_prefix: str) -> None:
 
 
 class AdkRunnerRegistry:
-    """Caches InMemoryRunner per angel_sid; serializes runs per sid with asyncio.Lock."""
+    """Caches InMemoryRunner per (angel_sid, agent_type); serializes runs per key."""
 
     def __init__(self) -> None:
-        self._runners: dict[str, InMemoryRunner] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._runners: dict[tuple[str, str], InMemoryRunner] = {}
+        self._locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._registry_lock = asyncio.Lock()
 
-    async def _lock_for_sid(self, angel_sid: str) -> asyncio.Lock:
+    async def _lock_for_key(self, key: tuple[str, str]) -> asyncio.Lock:
         async with self._registry_lock:
-            if angel_sid not in self._locks:
-                self._locks[angel_sid] = asyncio.Lock()
-            return self._locks[angel_sid]
+            if key not in self._locks:
+                self._locks[key] = asyncio.Lock()
+            return self._locks[key]
 
-    async def _get_or_create_runner(self, angel_sid: str) -> InMemoryRunner:
-        if angel_sid in self._runners:
-            return self._runners[angel_sid]
-        agent = build_finance_root_agent(angel_sid)
-        runner = InMemoryRunner(agent=agent, app_name=FINANCE_AGENT_APP_NAME)
-        self._runners[angel_sid] = runner
-        logger.info("ADK runner created for session prefix=%s", angel_sid[:8])
+    async def _get_or_create_runner(
+        self, angel_sid: str, agent_type: str
+    ) -> InMemoryRunner:
+        _register_default_builders()
+        key = (angel_sid, agent_type)
+        if key in self._runners:
+            return self._runners[key]
+
+        builder_entry = _AGENT_BUILDERS.get(agent_type)
+        if builder_entry is None:
+            raise ValueError(f"Unknown agent_type: {agent_type!r}. Available: {list(_AGENT_BUILDERS)}")
+
+        build_fn, app_name = builder_entry
+        agent = build_fn(angel_sid)
+        runner = InMemoryRunner(agent=agent, app_name=app_name)
+        self._runners[key] = runner
+        logger.info(
+            "ADK runner created: type=%s session_prefix=%s",
+            agent_type, angel_sid[:8],
+        )
         return runner
 
     async def _ensure_adk_session(
@@ -118,6 +146,7 @@ class AdkRunnerRegistry:
         angel_sid: str,
         adk_session_id: str,
         message: str,
+        agent_type: str = "finance",
         debug: bool = False,
     ) -> dict[str, Any]:
         if not openrouter_api_key():
@@ -130,9 +159,10 @@ class AdkRunnerRegistry:
             raise ValueError("Message cannot be empty.")
 
         user_id = f"web-{angel_sid}"
-        sid_lock = await self._lock_for_sid(angel_sid)
+        key = (angel_sid, agent_type)
+        sid_lock = await self._lock_for_key(key)
         async with sid_lock:
-            runner = await self._get_or_create_runner(angel_sid)
+            runner = await self._get_or_create_runner(angel_sid, agent_type)
             await self._ensure_adk_session(
                 runner, user_id=user_id, adk_session_id=adk_session_id
             )

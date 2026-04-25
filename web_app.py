@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import uuid
 import time
 import asyncio
@@ -7,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
-from fastapi import FastAPI, Request, Form, Query
+from fastapi import FastAPI, Request, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -23,15 +24,23 @@ from services.news_service import (
     search_news_articles,
 )
 from services.technical_service import compute_technical_indicators
+from services.prediction_service import predict_direction
 from services.sector_service import get_sector_overview, get_market_breadth
+from services.risk_profile import risk_profiles, build_profile_from_dict
+from services.trade_proposals import proposal_store, execute_proposal
+from services.realtime_feed import feed_relay, poll_ltp_fallback
 
 from session_manager import sessions
 from services.adk_runner_registry import registry
 
 logger = logging.getLogger(__name__)
 
-# Starlette session key: ADK multi-turn chat id (per browser session).
+# Starlette session keys: separate ADK chat ids for finance vs trading agent.
 _ADK_CHAT_SESSION_KEY = "adk_chat_session_id"
+_ADK_TRADING_CHAT_SESSION_KEY = "adk_trading_chat_session_id"
+
+_APPROVE_RE = re.compile(r"^APPROVE\s+([a-f0-9]{8,16})$", re.IGNORECASE)
+_REJECT_RE = re.compile(r"^REJECT\s+([a-f0-9]{8,16})$", re.IGNORECASE)
 
 _dir = os.path.dirname(os.path.abspath(__file__))
 _frontend_dir = os.path.join(_dir, "frontend")
@@ -52,11 +61,11 @@ def _sid(request: Request) -> str | None:
     return request.session.get("sid")
 
 
-def _ensure_adk_chat_session_id(request: Request) -> str:
-    raw = request.session.get(_ADK_CHAT_SESSION_KEY)
+def _ensure_adk_chat_session_id(request: Request, key: str = _ADK_CHAT_SESSION_KEY) -> str:
+    raw = request.session.get(key)
     if not raw:
         raw = uuid.uuid4().hex
-        request.session[_ADK_CHAT_SESSION_KEY] = raw
+        request.session[key] = raw
     return str(raw)
 
 
@@ -135,6 +144,71 @@ def _require_login(request: Request):
     if not sid:
         return None
     return sessions.get_client(sid)
+
+
+def _scrip_search_key(tradingsymbol: str) -> str:
+    """Root symbol for Angel searchScrip (e.g. GROWW from GROWW-BE, RELIANCE from RELIANCE-EQ)."""
+    sym = (tradingsymbol or "").strip().upper()
+    if "-" in sym:
+        return sym.rsplit("-", 1)[0]
+    return sym
+
+
+def _pick_scrip_row(data: list | None, requested_tradingsymbol: str) -> dict | None:
+    """
+    Pick the row whose tradingsymbol matches the chart/holding symbol.
+
+    Angel returns multiple series (EQ, BE, BL, …); using data[0] often pairs the
+    wrong symboltoken with the requested name and triggers AB4006 Invalid symboltoken.
+    """
+    if not data:
+        return None
+    req = (requested_tradingsymbol or "").strip()
+    req_u = req.upper()
+    for item in data:
+        ts = item.get("tradingsymbol") or ""
+        if ts == req or ts.upper() == req_u:
+            return item
+    base = _scrip_search_key(req)
+    if base and base.upper() != req_u:
+        eq_sym = f"{base}-EQ"
+        for item in data:
+            ts = (item.get("tradingsymbol") or "").upper()
+            if ts == eq_sym.upper():
+                return item
+    return data[0]
+
+
+_search_scrip_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+_SCRIP_SEARCH_CACHE_TTL = 300.0  # seconds — cuts Angel rate limits across WS / candles / research
+
+
+def _search_scrip_cached(client, exchange: str, search_key: str) -> dict:
+    """
+    Cached ``searchScrip`` with one retry on rate-limit text from Angel.
+
+    Many UI actions (candles + live WS + analytics) resolve the same symbol; caching
+    avoids duplicate broker calls. Retry backs off briefly when Angel returns plain-text
+    ``Access denied because of exceeding access rate`` (SmartApi raises DataException).
+    """
+    key = (exchange.upper(), search_key.upper())
+    now = time.time()
+    hit = _search_scrip_cache.get(key)
+    if hit and (now - hit[0]) < _SCRIP_SEARCH_CACHE_TTL:
+        return hit[1]
+    for attempt in range(2):
+        if attempt:
+            time.sleep(2.5)
+        try:
+            out = client.search_scrip(exchange, search_key)
+            _search_scrip_cache[key] = (time.time(), out)
+            return out
+        except Exception as e:
+            low = str(e).lower()
+            if attempt == 0 and ("exceeding access rate" in low or "access denied" in low):
+                continue
+            raise
+    raise RuntimeError("search_scrip failed after retry")  # pragma: no cover
 
 
 @web.get("/dashboard", response_class=HTMLResponse)
@@ -330,6 +404,34 @@ async def agent_page(request: Request):
     return templates.TemplateResponse(request, "agent.html", _ctx(request, "agent"))
 
 
+_portfolio_cache: dict[str, tuple[float, dict]] = {}
+_PORTFOLIO_CACHE_TTL = 60  # seconds
+
+def _get_portfolio_cached(sid: str, client) -> dict:
+    """Return portfolio data, using a short-lived cache to avoid Angel rate limits."""
+    entry = _portfolio_cache.get(sid)
+    if entry and (time.time() - entry[0]) < _PORTFOLIO_CACHE_TTL:
+        return entry[1]
+    data = _build_portfolio_data(client)
+    _portfolio_cache[sid] = (time.time(), data)
+    return data
+
+
+@web.get("/trading", response_class=HTMLResponse)
+async def trading_page(request: Request):
+    client = _require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
+    sid = _sid(request)
+    ctx = _ctx(request, "trading")
+    ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
+    ctx["ws_sid"] = sid or ""
+    portfolio = _get_portfolio_cached(sid, client)
+    ctx["holdings_json"] = json.dumps(portfolio.get("holdings", []))
+    return templates.TemplateResponse(request, "trading.html", ctx)
+
+
 # ── News API (gnews) ──────────────────────────────────────────────────────
 
 
@@ -423,7 +525,8 @@ async def api_portfolio_analytics(request: Request):
     client = _require_login(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    return JSONResponse(_build_portfolio_data(client))
+    sid = _sid(request)
+    return JSONResponse(_get_portfolio_cached(sid, client))
 
 
 @web.get("/api/portfolio/candles")
@@ -439,15 +542,11 @@ async def api_portfolio_candles(
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
-        sr = client.search_scrip(exchange, symbol.replace("-EQ", ""))
-        token = None
-        if sr.get("status") and sr.get("data"):
-            for item in sr["data"]:
-                if item.get("tradingsymbol") == symbol:
-                    token = item["symboltoken"]
-                    break
-        if not token:
+        sr = _search_scrip_cached(client, exchange, _scrip_search_key(symbol))
+        row = _pick_scrip_row(sr.get("data") if sr.get("status") else None, symbol)
+        if not row or not row.get("symboltoken"):
             return JSONResponse({"error": f"Could not find token for {symbol}"}, status_code=404)
+        token = row["symboltoken"]
 
         to_dt = datetime.now()
         from_dt = to_dt - timedelta(days=days)
@@ -464,6 +563,46 @@ async def api_portfolio_candles(
         return JSONResponse({"error": result.get("message", "No candle data")}, status_code=400)
     except Exception as e:
         logger.exception("Candle data error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.get("/api/portfolio/predict")
+async def api_portfolio_predict(
+    request: Request,
+    symbol: str = Query(...),
+    exchange: str = Query("NSE"),
+    days: int = Query(365),
+):
+    """Predict price direction for a stock across multiple timeframes (up to 1 year)."""
+    client = _require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        sr = _search_scrip_cached(client, exchange, _scrip_search_key(symbol))
+        row = _pick_scrip_row(sr.get("data") if sr.get("status") else None, symbol)
+        if not row or not row.get("symboltoken"):
+            return JSONResponse({"error": f"Could not find token for {symbol}"}, status_code=404)
+        token = row["symboltoken"]
+
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=days)
+        params = {
+            "exchange": exchange,
+            "symboltoken": token,
+            "interval": "ONE_DAY",
+            "fromdate": from_dt.strftime("%Y-%m-%d 09:15"),
+            "todate": to_dt.strftime("%Y-%m-%d 15:30"),
+        }
+        result = client.get_candle_data(params)
+        if not result.get("status") or not result.get("data"):
+            return JSONResponse({"error": "No candle data available"}, status_code=400)
+
+        candles = result["data"]
+        prediction = await asyncio.to_thread(predict_direction, candles, symbol)
+        return JSONResponse(prediction)
+    except Exception as e:
+        logger.exception("Prediction error for %s", symbol)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
@@ -512,15 +651,11 @@ async def api_portfolio_beta(request: Request, days: int = Query(90)):
             sym = h["symbol"]
             time.sleep(0.35)
             try:
-                sr = client.search_scrip("NSE", sym.replace("-EQ", ""))
-                token = None
-                if sr and sr.get("status") and sr.get("data"):
-                    for item in sr["data"]:
-                        if item.get("tradingsymbol") == sym:
-                            token = item["symboltoken"]
-                            break
-                if not token:
+                sr = _search_scrip_cached(client, "NSE", _scrip_search_key(sym))
+                row = _pick_scrip_row(sr.get("data") if sr and sr.get("status") else None, sym)
+                if not row or not row.get("symboltoken"):
                     continue
+                token = row["symboltoken"]
 
                 time.sleep(0.35)
                 candles = _fetch_candles_safe(
@@ -629,16 +764,9 @@ async def api_research_technical(
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
-        base_sym = symbol.replace("-EQ", "")
-        sr = client.search_scrip(exchange, base_sym)
-        token = None
-        if sr.get("status") and sr.get("data"):
-            for item in sr["data"]:
-                if item.get("tradingsymbol") == symbol:
-                    token = item["symboltoken"]
-                    break
-            if not token:
-                token = sr["data"][0]["symboltoken"]
+        sr = _search_scrip_cached(client, exchange, _scrip_search_key(symbol))
+        row = _pick_scrip_row(sr.get("data") if sr.get("status") else None, symbol)
+        token = row.get("symboltoken") if row else None
 
         if not token:
             return JSONResponse({"error": f"Could not find token for {symbol}"}, status_code=404)
@@ -764,8 +892,10 @@ def _build_portfolio_data(client) -> dict:
                 pnl_pct = (pnl / inv * 100) if inv else 0.0
                 total_inv += inv
                 total_cur += cur
+                tok = h.get("symboltoken") or h.get("symbolToken") or ""
                 data["holdings"].append({
                     "symbol": h.get("tradingsymbol", "N/A"),
+                    "symboltoken": str(tok).strip() if tok else "",
                     "qty": qty, "avg_price": avg, "ltp": ltp,
                     "invested": round(inv, 2), "current": round(cur, 2),
                     "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
@@ -832,7 +962,7 @@ async def ai_insights(request: Request):
 
 @web.post("/api/agent/chat")
 async def api_agent_chat(request: Request):
-    """Run the finance ADK agent (server OPENROUTER_API_KEY); uses Angel session from web login."""
+    """Run an ADK agent (finance or trading). Uses Angel session from web login."""
     sid = _sid(request)
     if not sid or sessions.get_client(sid) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
@@ -846,16 +976,33 @@ async def api_agent_chat(request: Request):
     if not message:
         return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
 
+    agent_type = (body.get("agent_type") or "finance").strip().lower()
     debug = bool(body.get("debug"))
-    adk_session_id = _ensure_adk_chat_session_id(request)
+
+    if agent_type == "trading":
+        session_key = _ADK_TRADING_CHAT_SESSION_KEY
+    else:
+        session_key = _ADK_CHAT_SESSION_KEY
+    adk_session_id = _ensure_adk_chat_session_id(request, session_key)
+
+    approval_result = None
+    if agent_type == "trading":
+        approval_result = _try_handle_approval(sid, message)
+
+    effective_message = message
+    if approval_result:
+        effective_message = f"[System: {approval_result}] {message}"
 
     try:
         result = await registry.chat(
             angel_sid=sid,
             adk_session_id=adk_session_id,
-            message=message,
+            message=effective_message,
+            agent_type=agent_type,
             debug=debug,
         )
+        if approval_result:
+            result["approval_result"] = approval_result
         return JSONResponse(result)
     except ValueError as e:
         err = str(e)
@@ -867,13 +1014,52 @@ async def api_agent_chat(request: Request):
         return JSONResponse({"error": f"Agent error: {e}"}, status_code=500)
 
 
+def _try_handle_approval(sid: str, message: str) -> str | None:
+    """If message is APPROVE/REJECT <id>, handle it server-side and return a status string."""
+    m = _APPROVE_RE.match(message.strip())
+    if m:
+        pid = m.group(1)
+        try:
+            client = sessions.get_client(sid)
+            proposal_store.approve(sid, pid)
+            if client:
+                result = execute_proposal(sid, pid, client)
+                if result.get("ok"):
+                    return f"Proposal {pid} APPROVED and executed. Order ID: {result.get('order_id')}"
+                return f"Proposal {pid} APPROVED but execution failed: {result.get('error')}"
+            return f"Proposal {pid} approved but no broker session found."
+        except (ValueError, PermissionError) as e:
+            return f"Approval failed: {e}"
+
+    m = _REJECT_RE.match(message.strip())
+    if m:
+        pid = m.group(1)
+        try:
+            proposal_store.reject(sid, pid)
+            return f"Proposal {pid} REJECTED."
+        except (ValueError, PermissionError) as e:
+            return f"Rejection failed: {e}"
+
+    return None
+
+
 @web.post("/api/agent/new-chat")
 async def api_agent_new_chat(request: Request):
     """Start a fresh ADK thread (new id in the signed session cookie)."""
     sid = _sid(request)
     if not sid or sessions.get_client(sid) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    request.session[_ADK_CHAT_SESSION_KEY] = uuid.uuid4().hex
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    agent_type = (body.get("agent_type") or "finance").strip().lower()
+
+    if agent_type == "trading":
+        request.session[_ADK_TRADING_CHAT_SESSION_KEY] = uuid.uuid4().hex
+    else:
+        request.session[_ADK_CHAT_SESSION_KEY] = uuid.uuid4().hex
     return JSONResponse({"ok": True})
 
 
@@ -909,6 +1095,156 @@ async def ai_ask(request: Request):
     except Exception as e:
         logger.exception("AI ask error")
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+# ── Trading API ────────────────────────────────────────────────────────────
+
+
+@web.get("/api/trading/profile")
+async def api_trading_profile_get(request: Request):
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    profile = risk_profiles.get(sid)
+    if profile is None:
+        return JSONResponse({"has_profile": False})
+    return JSONResponse({"has_profile": True, "profile": profile.to_dict()})
+
+
+@web.post("/api/trading/profile")
+async def api_trading_profile_set(request: Request):
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    try:
+        profile = build_profile_from_dict(body)
+        risk_profiles.set(sid, profile)
+        return JSONResponse({"ok": True, "profile": profile.to_dict()})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@web.get("/api/trading/proposals")
+async def api_trading_proposals(request: Request):
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    proposals = proposal_store.list_for_session(sid)
+    return JSONResponse({
+        "proposals": [p.to_dict() for p in proposals],
+        "count": len(proposals),
+    })
+
+
+@web.post("/api/trading/proposals/{proposal_id}/approve")
+async def api_trading_approve(request: Request, proposal_id: str):
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    client = sessions.get_client(sid)
+    try:
+        proposal_store.approve(sid, proposal_id)
+        result = execute_proposal(sid, proposal_id, client)
+        return JSONResponse(result)
+    except (ValueError, PermissionError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("Proposal approval error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@web.post("/api/trading/proposals/{proposal_id}/reject")
+async def api_trading_reject(request: Request, proposal_id: str):
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    try:
+        proposal = proposal_store.reject(sid, proposal_id)
+        return JSONResponse({"ok": True, "status": proposal.effective_status})
+    except (ValueError, PermissionError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+# ── Real-time market WebSocket ─────────────────────────────────────────────
+
+
+@web.websocket("/ws/market/{symbol}")
+async def ws_market(websocket: WebSocket, symbol: str):
+    """
+    Push real-time price ticks for a symbol to the browser.
+    Auth via ``?sid=`` query param (the actual Angel session id, injected by
+    the template from the server-side session — never the raw cookie string).
+    """
+    await websocket.accept()
+
+    ws_sid = websocket.query_params.get("sid", "").strip()
+    if not ws_sid:
+        await websocket.send_json({"error": "Not authenticated — sid missing"})
+        await websocket.close()
+        return
+
+    client = sessions.get_client(ws_sid)
+    if client is None:
+        await websocket.send_json({"error": "Session expired"})
+        await websocket.close()
+        return
+
+    exchange = "NSE"
+    q_token = (websocket.query_params.get("symboltoken") or "").strip()
+    tradingsymbol = symbol.strip()
+    symboltoken: str | None = None
+
+    if q_token and q_token.isdigit():
+        symboltoken = q_token
+    else:
+        search_key = _scrip_search_key(symbol)
+        try:
+            scrip = await asyncio.to_thread(_search_scrip_cached, client, exchange, search_key)
+        except Exception as e:
+            msg = str(e).lower()
+            logger.warning("search_scrip failed in ws_market for %s: %s", symbol, e)
+            if "exceeding access rate" in msg or "access denied" in msg:
+                detail = (
+                    "Angel One rate limit: too many API calls in a short window. "
+                    "Wait 30–60 seconds, then reload the page or pick the symbol again."
+                )
+            else:
+                detail = "Symbol lookup failed (broker error). Try again in a moment."
+            await websocket.send_json({"error": detail})
+            await websocket.close()
+            return
+
+        if not isinstance(scrip, dict) or not scrip.get("status") or not scrip.get("data"):
+            await websocket.send_json({"error": f"Symbol '{symbol}' not found on {exchange}"})
+            await websocket.close()
+            return
+
+        match = _pick_scrip_row(scrip["data"], symbol)
+        if not match or not match.get("symboltoken"):
+            await websocket.send_json({"error": f"Could not resolve token for '{symbol}'"})
+            await websocket.close()
+            return
+        symboltoken = str(match["symboltoken"])
+        tradingsymbol = match["tradingsymbol"]
+
+    await websocket.send_json({"status": "subscribed", "tradingsymbol": tradingsymbol, "symboltoken": symboltoken})
+
+    try:
+        async for tick in poll_ltp_fallback(client, exchange, tradingsymbol, symboltoken, interval=2.0):
+            try:
+                await websocket.send_json(tick.to_dict())
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.debug("WS market error for %s: %s", symbol, e)
 
 
 # ── Data classes for template rendering ────────────────────────────────────
