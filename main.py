@@ -40,6 +40,12 @@ async def _cleanup_loop():
 @asynccontextmanager
 async def _lifespan(_app: Starlette):
     """Starlette 0.37+ removed on_event; use lifespan for startup/shutdown."""
+    try:
+        from db import init_db
+
+        init_db()
+    except Exception as e:
+        logger.warning("init_db skipped: %s", e)
     task = asyncio.create_task(_cleanup_loop())
     try:
         yield

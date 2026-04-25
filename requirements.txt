@@ -24,3 +24,6 @@ scikit-learn
 joblib
 google-adk
 litellm==1.82.6
+sqlmodel
+psycopg[binary]
+cryptography

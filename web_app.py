@@ -32,6 +32,7 @@ from services.realtime_feed import feed_relay, poll_ltp_fallback
 
 from session_manager import sessions
 from services.adk_runner_registry import registry
+from adminApi import admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,13 @@ _REJECT_RE = re.compile(r"^REJECT\s+([a-f0-9]{8,16})$", re.IGNORECASE)
 _dir = os.path.dirname(os.path.abspath(__file__))
 _frontend_dir = os.path.join(_dir, "frontend")
 
-web = FastAPI(docs_url=None, redoc_url=None)
+web = FastAPI(
+    docs_url="/docs",
+    redoc_url="/redoc",
+    title="MyFinanceMCP API",
+    description="Internal admin and portfolio APIs. Remove docs_url/redoc_url before public deployment.",
+    version="1.0.0",
+)
 web.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("SESSION_SECRET", uuid.uuid4().hex),
@@ -53,6 +60,8 @@ web.add_middleware(
 web.mount("/static/data", StaticFiles(directory=os.path.join(_dir, "data")), name="data")
 web.mount("/static", StaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(_frontend_dir, "templates"))
+
+web.include_router(admin_router)
 
 SECTOR_MAP: dict[str, str] = get_sector_map()
 
