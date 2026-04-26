@@ -8,11 +8,16 @@ import logging
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 
+import httpx
 from fastapi import FastAPI, Request, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlmodel import select
 from starlette.middleware.sessions import SessionMiddleware
+
+from db import get_session
+from db.models import User
 
 from services.ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
 from services.fundamental_service import get_stock_fundamentals
@@ -84,6 +89,21 @@ def _ctx(request: Request, active: str = "") -> dict:
         "logged_in": _sid(request) is not None and sessions.get_client(_sid(request)) is not None,
         "active": active,
     }
+
+
+def _registered_user_for_session(client) -> User | None:
+    """Look up the persisted ``User`` row matching the live broker session's
+    ``angel_client_id``. Returns ``None`` if not registered (or DB unreachable)."""
+    if client is None:
+        return None
+    try:
+        with get_session() as s:
+            return s.exec(
+                select(User).where(User.angel_client_id == client.client_id)
+            ).first()
+    except Exception:
+        logger.exception("Premium status lookup failed")
+        return None
 
 
 # ── Public routes ──────────────────────────────────────────────────────────
@@ -431,13 +451,25 @@ async def trading_page(request: Request):
     client = _require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
     sid = _sid(request)
     ctx = _ctx(request, "trading")
-    ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
-    ctx["ws_sid"] = sid or ""
-    portfolio = _get_portfolio_cached(sid, client)
-    ctx["holdings_json"] = json.dumps(portfolio.get("holdings", []))
+
+    user = _registered_user_for_session(client)
+    is_premium = bool(user and user.is_active)
+    ctx["is_premium_registered"] = is_premium
+    ctx["registered_whatsapp"] = user.whatsapp_number if user else ""
+
+    if is_premium:
+        _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
+        ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
+        ctx["ws_sid"] = sid or ""
+        portfolio = _get_portfolio_cached(sid, client)
+        ctx["holdings_json"] = json.dumps(portfolio.get("holdings", []))
+    else:
+        ctx["has_risk_profile"] = False
+        ctx["ws_sid"] = ""
+        ctx["holdings_json"] = "[]"
+
     return templates.TemplateResponse(request, "trading.html", ctx)
 
 
@@ -1104,6 +1136,105 @@ async def ai_ask(request: Request):
     except Exception as e:
         logger.exception("AI ask error")
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+# ── Premium registration API ───────────────────────────────────────────────
+
+
+@web.get("/api/premium/status")
+async def api_premium_status(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if user and user.is_active:
+        return JSONResponse({
+            "registered": True,
+            "whatsapp_number": user.whatsapp_number,
+            "user_id": user.id,
+        })
+    return JSONResponse({"registered": False})
+
+
+@web.post("/api/premium/register")
+async def api_premium_register(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    whatsapp_number = (body.get("whatsapp_number") or "").strip()
+    if not whatsapp_number.startswith("+"):
+        return JSONResponse(
+            {"error": "whatsapp_number must start with + and country code"},
+            status_code=400,
+        )
+
+    admin_key = os.environ.get("ADMIN_API_KEY", "").strip()
+    if not admin_key:
+        return JSONResponse({"error": "Server misconfigured: ADMIN_API_KEY missing"}, status_code=500)
+
+    existing = _registered_user_for_session(client)
+    if existing and existing.is_active:
+        return JSONResponse(
+            {"ok": False, "error": "You are already registered for premium."},
+            status_code=409,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    headers = {"X-Admin-Key": admin_key}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            if existing is not None:
+                resp = await http.put(
+                    f"{base_url}/api/admin/users/{existing.id}",
+                    headers=headers,
+                    json={
+                        "whatsapp_number": whatsapp_number,
+                        "angel_api_key": client.api_key,
+                        "angel_password": client.password,
+                        "angel_totp_secret": client.totp_secret,
+                        "is_active": True,
+                    },
+                )
+            else:
+                resp = await http.post(
+                    f"{base_url}/api/admin/users",
+                    headers=headers,
+                    json={
+                        "whatsapp_number": whatsapp_number,
+                        "angel_api_key": client.api_key,
+                        "angel_client_id": client.client_id,
+                        "angel_password": client.password,
+                        "angel_totp_secret": client.totp_secret,
+                    },
+                )
+    except httpx.HTTPError as e:
+        logger.exception("Premium registration: admin API call failed")
+        return JSONResponse({"ok": False, "error": f"Could not reach admin API: {e}"}, status_code=502)
+
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {}
+
+    if resp.status_code in (200, 201):
+        return JSONResponse({"ok": True, "user": data})
+    if resp.status_code == 409:
+        return JSONResponse(
+            {"ok": False, "error": "You are already registered for premium."},
+            status_code=409,
+        )
+    return JSONResponse(
+        {"ok": False, "error": data.get("detail") or "Registration failed."},
+        status_code=resp.status_code or 500,
+    )
 
 
 # ── Trading API ────────────────────────────────────────────────────────────

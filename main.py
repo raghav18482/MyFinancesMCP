@@ -20,6 +20,13 @@ _project_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_project_dir)
 sys.path.insert(0, _project_dir)
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(_project_dir, ".env"))
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 

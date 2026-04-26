@@ -9,9 +9,43 @@
       <h1>Trading agent</h1>
       <p class="agent-lead">Chat with the AI trading assistant. It proposes trades based on your risk profile &mdash; you approve or reject before any order is placed.</p>
     </div>
+    {% if is_premium_registered %}
     <button type="button" class="btn btn-muted agent-new-btn" id="trading-new-chat" title="Start a new conversation">New conversation</button>
+    {% endif %}
   </header>
 
+  <!-- Premium Registration -->
+  <section class="card trading-section" id="premium-section">
+    <h2 class="trading-section-title">Premium Activation</h2>
+
+    {% if is_premium_registered %}
+    <div class="premium-status premium-status--active" id="premium-active">
+      <div>
+        <p class="premium-headline">Premium is active</p>
+        <p class="premium-sub">WhatsApp alerts will be sent to <strong>{{ registered_whatsapp }}</strong>.</p>
+      </div>
+      <span class="premium-badge">ACTIVE</span>
+    </div>
+    {% else %}
+    <div class="premium-cta" id="premium-cta">
+      <p class="premium-headline">Activate the Premium Trading Agent</p>
+      <p class="premium-sub">Get trade proposals and approvals delivered to WhatsApp. We use the Angel One credentials from your current session, so you only need to share a number.</p>
+      <form id="premium-form" class="premium-form" novalidate>
+        <label class="premium-label" for="premium-whatsapp">WhatsApp number</label>
+        <div class="premium-row">
+          <input type="tel" id="premium-whatsapp" name="whatsapp_number"
+                 placeholder="+919999999999" pattern="^\+[0-9]{8,15}$"
+                 required autocomplete="tel">
+          <button type="submit" class="btn btn-accent" id="premium-submit">Activate</button>
+        </div>
+        <p class="premium-hint">Include the country code (e.g. <code>+91</code> for India).</p>
+        <p class="premium-msg" id="premium-msg" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if is_premium_registered %}
   <!-- Risk Profile -->
   <section class="card trading-section" id="risk-section">
     <h2 class="trading-section-title">Risk Profile</h2>
@@ -129,6 +163,9 @@
       </div>
     </div>
   </div>
+  {% else %}
+  <p class="trading-locked-note">Activate Premium above to unlock your risk profile, real-time charts, trade proposals, and the AI trading assistant.</p>
+  {% endif %}
 </div>
 
 <style>
@@ -200,8 +237,35 @@
 .proposal-error { font-size: .8rem; color: var(--red); }
 .btn-green { background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
 .btn-green:hover { background: rgba(34,197,94,.25); }
+
+/* Premium activation */
+.premium-status { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.premium-status--active .premium-headline { color: var(--green); }
+.premium-badge { font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+  padding: .25rem .55rem; border-radius: 4px;
+  color: var(--green); background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.3); }
+.premium-headline { font-size: 1rem; font-weight: 600; margin: 0 0 .25rem 0; }
+.premium-sub { font-size: .85rem; color: var(--muted); margin: 0; }
+.premium-form { margin-top: .75rem; }
+.premium-label { font-size: .8rem; color: var(--muted); display: block; margin-bottom: .3rem; }
+.premium-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+.premium-row input {
+  flex: 1 1 220px; min-width: 200px;
+  background: var(--surface-solid); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: .5rem .7rem; font-size: .95rem; font-family: inherit;
+}
+.premium-row input:focus { outline: none; border-color: var(--accent); }
+.premium-hint { margin: .4rem 0 0 0; font-size: .75rem; color: var(--muted); }
+.premium-hint code { background: var(--surface); padding: .05rem .3rem; border-radius: 3px; }
+.premium-msg { margin-top: .5rem; font-size: .85rem; min-height: 1.1em; }
+.premium-msg--error { color: var(--red); }
+.premium-msg--success { color: var(--green); }
+
+/* Premium-locked placeholder */
+.trading-locked-note { color: var(--muted); font-size: .85rem; margin-top: .25rem; }
 </style>
 
+{% if is_premium_registered %}
 <script type="module" src="/static/js/trading.js?v=7"></script>
 
 <script>
@@ -395,6 +459,53 @@
 
   autoResize();
   $input.focus();
+})();
+</script>
+{% endif %}
+
+<script>
+(function () {
+  const form = document.getElementById('premium-form');
+  if (!form) return;
+
+  const $input = document.getElementById('premium-whatsapp');
+  const $btn = document.getElementById('premium-submit');
+  const $msg = document.getElementById('premium-msg');
+
+  function setMsg(text, kind) {
+    $msg.textContent = text || '';
+    $msg.className = 'premium-msg' + (kind ? ' premium-msg--' + kind : '');
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const whatsapp = ($input.value || '').trim();
+    if (!/^\+[0-9]{8,15}$/.test(whatsapp)) {
+      setMsg('Please enter a valid number with country code, e.g. +919999999999.', 'error');
+      $input.focus();
+      return;
+    }
+    $btn.disabled = true;
+    setMsg('Activating...', '');
+    try {
+      const res = await fetch('/api/premium/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ whatsapp_number: whatsapp }),
+      });
+      const data = await res.json().catch(function () { return {}; });
+      if (res.ok && data.ok) {
+        setMsg('Activated. Loading your trading workspace...', 'success');
+        window.location.reload();
+      } else {
+        setMsg(data.error || ('Error ' + res.status), 'error');
+        $btn.disabled = false;
+      }
+    } catch (err) {
+      setMsg('Network error: ' + err.message, 'error');
+      $btn.disabled = false;
+    }
+  });
 })();
 </script>
 {% endblock %}
