@@ -53,10 +53,28 @@ async def _lifespan(_app: Starlette):
         init_db()
     except Exception as e:
         logger.warning("init_db skipped: %s", e)
+
+    scheduler_enabled = os.environ.get("SCHEDULER_ENABLED") == "1"
+    if scheduler_enabled:
+        try:
+            from services.schedular.runner import start as start_scheduler
+
+            start_scheduler()
+        except Exception:
+            logger.exception("scheduler failed to start; continuing without it")
+            scheduler_enabled = False
+
     task = asyncio.create_task(_cleanup_loop())
     try:
         yield
     finally:
+        if scheduler_enabled:
+            try:
+                from services.schedular.runner import stop as stop_scheduler
+
+                stop_scheduler()
+            except Exception:
+                logger.exception("scheduler failed to stop cleanly")
         task.cancel()
         try:
             await task

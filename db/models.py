@@ -38,6 +38,7 @@ class Schedule(SQLModel, table=True):
     next_run: datetime = Field(index=True)
     last_run: datetime | None = None
     enabled: bool = Field(default=True, index=True)
+    status: str = Field(default="pending", index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
+from sqlalchemy import text
 from sqlmodel import Session, SQLModel, create_engine
 
 logger = logging.getLogger(__name__)
@@ -19,11 +20,28 @@ DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 
 
+# Lightweight per-column migrations applied on every startup. Each entry is
+# idempotent (``ADD COLUMN IF NOT EXISTS``) so it is safe to run repeatedly
+# until Alembic is introduced.
+_COLUMN_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'pending'",
+)
+
+
 def init_db() -> None:
-    """Create all SQLModel tables. Idempotent; replace with Alembic when schema evolves."""
+    """Create all SQLModel tables and apply additive column migrations.
+
+    Idempotent; replace with Alembic when schema evolves beyond simple adds.
+    """
     from . import models  # noqa: F401  -- ensure models register with SQLModel.metadata
 
     SQLModel.metadata.create_all(engine)
+
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            for stmt in _COLUMN_MIGRATIONS:
+                conn.execute(text(stmt))
+
     logger.info("init_db: tables ensured on %s", _safe_url(DATABASE_URL))
 
 

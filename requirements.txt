@@ -28,3 +28,4 @@ sqlmodel
 psycopg[binary]
 cryptography
 httpx>=0.27.0
+apscheduler
