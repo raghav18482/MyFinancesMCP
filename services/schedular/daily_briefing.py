@@ -298,10 +298,26 @@ def _bootstrap_angel_session_from_env(session_id: str) -> None:
 
 
 if __name__ == "__main__":
+    import sys as _sys
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
-    sid = "daily-briefing-default"
-    _bootstrap_angel_session_from_env(sid)
-    message = asyncio.run(generate_daily_briefing(sid))
-    print("\n" + "=" * 60)
-    print(message)
-    print("=" * 60)
+
+    # Optional: pass a phone number as the first CLI argument to also send via WhatsApp.
+    # Usage:  python -m services.schedular.daily_briefing [phone]
+    # e.g.:   python -m services.schedular.daily_briefing 8107037133
+    _phone: str | None = _sys.argv[1] if len(_sys.argv) > 1 else None
+
+    async def _run() -> None:
+        sid = "daily-briefing-default"
+        _bootstrap_angel_session_from_env(sid)
+        message = await generate_daily_briefing(sid)
+        print("\n" + "=" * 60)
+        print(message)
+        print("=" * 60)
+        if _phone:
+            from services.schedular.whatsapp import send as _wa_send
+            print(f"\nSending to {_phone} via WhatsApp...")
+            await _wa_send(_phone, message)
+            print("WhatsApp message sent.")
+
+    asyncio.run(_run())
