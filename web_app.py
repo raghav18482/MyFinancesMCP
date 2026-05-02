@@ -5,14 +5,19 @@ import uuid
 import time
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
+import httpx
 from fastapi import FastAPI, Request, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlmodel import select
 from starlette.middleware.sessions import SessionMiddleware
+
+from db import get_session
+from db.models import Log, Schedule, User
 
 from services.ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
 from services.fundamental_service import get_stock_fundamentals
@@ -32,6 +37,7 @@ from services.realtime_feed import feed_relay, poll_ltp_fallback
 
 from session_manager import sessions
 from services.adk_runner_registry import registry
+from adminApi import admin_router
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +51,13 @@ _REJECT_RE = re.compile(r"^REJECT\s+([a-f0-9]{8,16})$", re.IGNORECASE)
 _dir = os.path.dirname(os.path.abspath(__file__))
 _frontend_dir = os.path.join(_dir, "frontend")
 
-web = FastAPI(docs_url=None, redoc_url=None)
+web = FastAPI(
+    docs_url="/docs",
+    redoc_url="/redoc",
+    title="MyFinanceMCP API",
+    description="Internal admin and portfolio APIs. Remove docs_url/redoc_url before public deployment.",
+    version="1.0.0",
+)
 web.add_middleware(
     SessionMiddleware,
     secret_key=os.environ.get("SESSION_SECRET", uuid.uuid4().hex),
@@ -53,6 +65,8 @@ web.add_middleware(
 web.mount("/static/data", StaticFiles(directory=os.path.join(_dir, "data")), name="data")
 web.mount("/static", StaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(_frontend_dir, "templates"))
+
+web.include_router(admin_router)
 
 SECTOR_MAP: dict[str, str] = get_sector_map()
 
@@ -75,6 +89,21 @@ def _ctx(request: Request, active: str = "") -> dict:
         "logged_in": _sid(request) is not None and sessions.get_client(_sid(request)) is not None,
         "active": active,
     }
+
+
+def _registered_user_for_session(client) -> User | None:
+    """Look up the persisted ``User`` row matching the live broker session's
+    ``angel_client_id``. Returns ``None`` if not registered (or DB unreachable)."""
+    if client is None:
+        return None
+    try:
+        with get_session() as s:
+            return s.exec(
+                select(User).where(User.angel_client_id == client.client_id)
+            ).first()
+    except Exception:
+        logger.exception("Premium status lookup failed")
+        return None
 
 
 # ── Public routes ──────────────────────────────────────────────────────────
@@ -422,13 +451,25 @@ async def trading_page(request: Request):
     client = _require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
     sid = _sid(request)
     ctx = _ctx(request, "trading")
-    ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
-    ctx["ws_sid"] = sid or ""
-    portfolio = _get_portfolio_cached(sid, client)
-    ctx["holdings_json"] = json.dumps(portfolio.get("holdings", []))
+
+    user = _registered_user_for_session(client)
+    is_premium = bool(user and user.is_active)
+    ctx["is_premium_registered"] = is_premium
+    ctx["registered_whatsapp"] = user.whatsapp_number if user else ""
+
+    if is_premium:
+        _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
+        ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
+        ctx["ws_sid"] = sid or ""
+        portfolio = _get_portfolio_cached(sid, client)
+        ctx["holdings_json"] = json.dumps(portfolio.get("holdings", []))
+    else:
+        ctx["has_risk_profile"] = False
+        ctx["ws_sid"] = ""
+        ctx["holdings_json"] = "[]"
+
     return templates.TemplateResponse(request, "trading.html", ctx)
 
 
@@ -1095,6 +1136,320 @@ async def ai_ask(request: Request):
     except Exception as e:
         logger.exception("AI ask error")
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
+
+
+# ── Premium registration API ───────────────────────────────────────────────
+
+
+@web.get("/api/premium/status")
+async def api_premium_status(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if user and user.is_active:
+        return JSONResponse({
+            "registered": True,
+            "whatsapp_number": user.whatsapp_number,
+            "user_id": user.id,
+        })
+    return JSONResponse({"registered": False})
+
+
+@web.post("/api/premium/register")
+async def api_premium_register(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    whatsapp_number = (body.get("whatsapp_number") or "").strip()
+    if not whatsapp_number.startswith("+"):
+        return JSONResponse(
+            {"error": "whatsapp_number must start with + and country code"},
+            status_code=400,
+        )
+
+    admin_key = os.environ.get("ADMIN_API_KEY", "").strip()
+    if not admin_key:
+        return JSONResponse({"error": "Server misconfigured: ADMIN_API_KEY missing"}, status_code=500)
+
+    existing = _registered_user_for_session(client)
+    if existing and existing.is_active:
+        return JSONResponse(
+            {"ok": False, "error": "You are already registered for premium."},
+            status_code=409,
+        )
+
+    base_url = str(request.base_url).rstrip("/")
+    headers = {"X-Admin-Key": admin_key}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            if existing is not None:
+                resp = await http.put(
+                    f"{base_url}/api/admin/users/{existing.id}",
+                    headers=headers,
+                    json={
+                        "whatsapp_number": whatsapp_number,
+                        "angel_api_key": client.api_key,
+                        "angel_password": client.password,
+                        "angel_totp_secret": client.totp_secret,
+                        "is_active": True,
+                    },
+                )
+            else:
+                resp = await http.post(
+                    f"{base_url}/api/admin/users",
+                    headers=headers,
+                    json={
+                        "whatsapp_number": whatsapp_number,
+                        "angel_api_key": client.api_key,
+                        "angel_client_id": client.client_id,
+                        "angel_password": client.password,
+                        "angel_totp_secret": client.totp_secret,
+                    },
+                )
+    except httpx.HTTPError as e:
+        logger.exception("Premium registration: admin API call failed")
+        return JSONResponse({"ok": False, "error": f"Could not reach admin API: {e}"}, status_code=502)
+
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {}
+
+    if resp.status_code in (200, 201):
+        return JSONResponse({"ok": True, "user": data})
+    if resp.status_code == 409:
+        return JSONResponse(
+            {"ok": False, "error": "You are already registered for premium."},
+            status_code=409,
+        )
+    return JSONResponse(
+        {"ok": False, "error": data.get("detail") or "Registration failed."},
+        status_code=resp.status_code or 500,
+    )
+
+
+# ── Briefing Scheduler API ─────────────────────────────────────────────────
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+_BRIEFING_KIND = "daily_briefing"
+
+
+def _next_run_utc_from_ist(time_ist: str) -> datetime:
+    """Convert 'HH:MM' IST → next UTC naive datetime for that wall-clock time."""
+    hour, minute = map(int, time_ist.split(":"))
+    now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(_IST)
+    candidate = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now_ist:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _get_briefing_schedule(user_id: int) -> Schedule | None:
+    with get_session() as db:
+        return db.exec(
+            select(Schedule).where(
+                Schedule.user_id == user_id,
+                Schedule.kind == _BRIEFING_KIND,
+            )
+        ).first()
+
+
+def _schedule_to_dict(s: Schedule) -> dict:
+    return {
+        "id": s.id,
+        "enabled": s.enabled,
+        "interval_minutes": s.interval_minutes,
+        "next_run": s.next_run.isoformat() if s.next_run else None,
+        "last_run": s.last_run.isoformat() if s.last_run else None,
+        "status": s.status,
+    }
+
+
+@web.get("/api/briefing/schedule")
+async def api_briefing_schedule_get(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if not user:
+        return JSONResponse({"exists": False})
+    schedule = _get_briefing_schedule(user.id)
+    if not schedule:
+        return JSONResponse({"exists": False})
+    return JSONResponse({"exists": True, "schedule": _schedule_to_dict(schedule)})
+
+
+@web.post("/api/briefing/schedule")
+async def api_briefing_schedule_save(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if not user:
+        return JSONResponse({"error": "Not registered for premium"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    time_ist = (body.get("time_ist") or "08:30").strip()
+    try:
+        next_run = _next_run_utc_from_ist(time_ist)
+    except Exception:
+        return JSONResponse({"error": "Invalid time format, expected HH:MM"}, status_code=400)
+    enabled = bool(body.get("enabled", True))
+    with get_session() as db:
+        schedule = db.exec(
+            select(Schedule).where(
+                Schedule.user_id == user.id,
+                Schedule.kind == _BRIEFING_KIND,
+            )
+        ).first()
+        if schedule:
+            schedule.next_run = next_run
+            schedule.enabled = enabled
+            schedule.status = "pending"
+            db.add(schedule)
+        else:
+            schedule = Schedule(
+                user_id=user.id,
+                kind=_BRIEFING_KIND,
+                interval_minutes=1440,
+                next_run=next_run,
+                enabled=enabled,
+                status="pending",
+            )
+            db.add(schedule)
+        db.commit()
+        db.refresh(schedule)
+        return JSONResponse({"ok": True, "schedule": _schedule_to_dict(schedule)})
+
+
+@web.delete("/api/briefing/schedule")
+async def api_briefing_schedule_delete(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if not user:
+        return JSONResponse({"error": "Not registered"}, status_code=403)
+    with get_session() as db:
+        schedule = db.exec(
+            select(Schedule).where(
+                Schedule.user_id == user.id,
+                Schedule.kind == _BRIEFING_KIND,
+            )
+        ).first()
+        if not schedule:
+            return JSONResponse({"ok": True})
+        schedule.enabled = False
+        db.add(schedule)
+        db.commit()
+    return JSONResponse({"ok": True})
+
+
+async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
+    """Background task: full briefing pipeline without touching next_run."""
+    import time as _time
+    from uuid import uuid4 as _uuid4
+    from db import decrypt_value as _dec
+    from services.schedular.daily_briefing import generate_daily_briefing as _brief
+    from services.schedular.whatsapp import send as _wa
+
+    started = _time.perf_counter()
+    sid = f"manual-{user_id}-{_uuid4().hex[:8]}"
+    try:
+        with get_session() as db:
+            user = db.get(User, user_id)
+            if not user or not user.is_active:
+                return
+            api_key = user.angel_api_key
+            client_id = user.angel_client_id
+            pw = _dec(user.angel_password_encrypted)
+            totp = _dec(user.angel_totp_secret_encrypted)
+
+        sessions.create_session(sid, api_key, client_id, pw, totp)
+        message = await _brief(sid)
+        await _wa(phone, message)
+        duration_ms = int((_time.perf_counter() - started) * 1000)
+        with get_session() as db:
+            db.add(Log(
+                user_id=user_id,
+                status="success",
+                message=f"manual send · {len(message)} chars to {phone or '<unset>'}",
+                duration_ms=duration_ms,
+            ))
+            db.commit()
+    except Exception:
+        duration_ms = int((_time.perf_counter() - started) * 1000)
+        logger.exception("manual briefing send failed for user %s", user_id)
+        try:
+            with get_session() as db:
+                db.add(Log(user_id=user_id, status="failed",
+                           message="manual send error", duration_ms=duration_ms))
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        try:
+            sessions.remove_session(sid)
+        except Exception:
+            pass
+
+
+@web.post("/api/briefing/send-now")
+async def api_briefing_send_now(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if not user:
+        return JSONResponse({"error": "Not registered for premium"}, status_code=403)
+    asyncio.create_task(_run_briefing_now_bg(user.id, user.whatsapp_number))
+    return JSONResponse({"ok": True, "message": "Briefing started — check WhatsApp in ~30s"})
+
+
+@web.get("/api/briefing/logs")
+async def api_briefing_logs(request: Request):
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if not client:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _registered_user_for_session(client)
+    if not user:
+        return JSONResponse({"logs": []})
+    with get_session() as db:
+        logs = db.exec(
+            select(Log)
+            .where(Log.user_id == user.id)
+            .order_by(Log.created_at.desc())
+            .limit(8)
+        ).all()
+    return JSONResponse({
+        "logs": [
+            {
+                "id": l.id,
+                "status": l.status,
+                "message": l.message,
+                "duration_ms": l.duration_ms,
+                "created_at": l.created_at.isoformat() if l.created_at else None,
+            }
+            for l in logs
+        ]
+    })
 
 
 # ── Trading API ────────────────────────────────────────────────────────────

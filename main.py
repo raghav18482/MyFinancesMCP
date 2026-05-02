@@ -20,6 +20,13 @@ _project_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_project_dir)
 sys.path.insert(0, _project_dir)
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(_project_dir, ".env"))
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -40,10 +47,34 @@ async def _cleanup_loop():
 @asynccontextmanager
 async def _lifespan(_app: Starlette):
     """Starlette 0.37+ removed on_event; use lifespan for startup/shutdown."""
+    try:
+        from db import init_db
+
+        init_db()
+    except Exception as e:
+        logger.warning("init_db skipped: %s", e)
+
+    scheduler_enabled = os.environ.get("SCHEDULER_ENABLED") == "1"
+    if scheduler_enabled:
+        try:
+            from services.schedular.runner import start as start_scheduler
+
+            start_scheduler()
+        except Exception:
+            logger.exception("scheduler failed to start; continuing without it")
+            scheduler_enabled = False
+
     task = asyncio.create_task(_cleanup_loop())
     try:
         yield
     finally:
+        if scheduler_enabled:
+            try:
+                from services.schedular.runner import stop as stop_scheduler
+
+                stop_scheduler()
+            except Exception:
+                logger.exception("scheduler failed to stop cleanly")
         task.cancel()
         try:
             await task

@@ -9,8 +9,115 @@
       <h1>Trading agent</h1>
       <p class="agent-lead">Chat with the AI trading assistant. It proposes trades based on your risk profile &mdash; you approve or reject before any order is placed.</p>
     </div>
+    {% if is_premium_registered %}
     <button type="button" class="btn btn-muted agent-new-btn" id="trading-new-chat" title="Start a new conversation">New conversation</button>
+    {% endif %}
   </header>
+
+  <!-- Premium Registration -->
+  <section class="card trading-section" id="premium-section">
+    <h2 class="trading-section-title">Premium Activation</h2>
+
+    {% if is_premium_registered %}
+    <div class="premium-status premium-status--active" id="premium-active">
+      <div>
+        <p class="premium-headline">Premium is active</p>
+        <p class="premium-sub">WhatsApp alerts will be sent to <strong>{{ registered_whatsapp }}</strong>.</p>
+      </div>
+      <span class="premium-badge">ACTIVE</span>
+    </div>
+    {% else %}
+    <div class="premium-cta" id="premium-cta">
+      <p class="premium-headline">Activate the Premium Trading Agent</p>
+      <p class="premium-sub">Get trade proposals and approvals delivered to WhatsApp. We use the Angel One credentials from your current session, so you only need to share a number.</p>
+      <form id="premium-form" class="premium-form" novalidate>
+        <label class="premium-label" for="premium-whatsapp">WhatsApp number</label>
+        <div class="premium-row">
+          <input type="tel" id="premium-whatsapp" name="whatsapp_number"
+                 placeholder="+919999999999" pattern="^\+[0-9]{8,15}$"
+                 required autocomplete="tel">
+          <button type="submit" class="btn btn-accent" id="premium-submit">Activate</button>
+        </div>
+        <p class="premium-hint">Include the country code (e.g. <code>+91</code> for India).</p>
+        <p class="premium-msg" id="premium-msg" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if is_premium_registered %}
+  <!-- Daily Briefing Scheduler -->
+  <section class="card trading-section" id="briefing-section">
+    <div class="briefing-header">
+      <div class="briefing-title-row">
+        <div class="briefing-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="12" y1="2" x2="12" y2="3"/></svg>
+        </div>
+        <div>
+          <h2 class="trading-section-title" style="margin-bottom:.1rem">Daily Portfolio Brief</h2>
+          <p class="briefing-desc">AI briefing with ML signals for every holding, sent to <strong>{{ registered_whatsapp }}</strong></p>
+        </div>
+      </div>
+      <span class="briefing-badge" id="briefing-badge" style="display:none"></span>
+    </div>
+
+    <!-- Next / Last run row -->
+    <div class="briefing-meta-row" id="briefing-meta-row" style="display:none">
+      <div class="briefing-meta-item">
+        <span class="briefing-meta-lbl">Next send</span>
+        <span class="briefing-meta-val" id="brf-next-run">—</span>
+      </div>
+      <div class="briefing-meta-item">
+        <span class="briefing-meta-lbl">Last sent</span>
+        <span class="briefing-meta-val" id="brf-last-run">—</span>
+      </div>
+      <div class="briefing-meta-item">
+        <span class="briefing-meta-lbl">Cadence</span>
+        <span class="briefing-meta-val">Daily · IST</span>
+      </div>
+    </div>
+
+    <!-- Schedule form -->
+    <form id="briefing-form" class="briefing-form" novalidate>
+      <div class="briefing-form-body">
+        <label class="briefing-field-label">
+          Send time (IST)
+          <div class="brf-time-wrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <input type="time" id="brf-time" name="time_ist" value="08:30" required>
+          </div>
+        </label>
+        <label class="briefing-toggle-wrap" title="Enable or disable automatic daily sends">
+          <span class="brf-toggle-label">Auto-send</span>
+          <div class="brf-toggle">
+            <input type="checkbox" id="brf-enabled" name="enabled" checked>
+            <span class="brf-slider"></span>
+          </div>
+        </label>
+      </div>
+      <div class="briefing-actions">
+        <button type="submit" class="btn btn-accent" id="brf-save">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Schedule
+        </button>
+        <button type="button" class="btn btn-wa" id="brf-send-now">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          Send Now
+        </button>
+        <button type="button" class="btn btn-muted btn-sm" id="brf-remove" title="Disable and remove schedule">Remove</button>
+      </div>
+      <p class="briefing-msg" id="briefing-msg" aria-live="polite"></p>
+    </form>
+
+    <!-- Activity log -->
+    <div id="brf-log-section" style="display:none">
+      <div class="brf-log-header">
+        <span class="brf-log-title">Recent activity</span>
+        <button type="button" class="btn-link brf-refresh-btn" id="brf-refresh">↺ Refresh</button>
+      </div>
+      <div class="brf-log-list" id="brf-log-list"></div>
+    </div>
+  </section>
 
   <!-- Risk Profile -->
   <section class="card trading-section" id="risk-section">
@@ -129,6 +236,9 @@
       </div>
     </div>
   </div>
+  {% else %}
+  <p class="trading-locked-note">Activate Premium above to unlock your risk profile, real-time charts, trade proposals, and the AI trading assistant.</p>
+  {% endif %}
 </div>
 
 <style>
@@ -200,9 +310,270 @@
 .proposal-error { font-size: .8rem; color: var(--red); }
 .btn-green { background: rgba(34,197,94,.15); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
 .btn-green:hover { background: rgba(34,197,94,.25); }
+
+/* Premium activation */
+.premium-status { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.premium-status--active .premium-headline { color: var(--green); }
+.premium-badge { font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+  padding: .25rem .55rem; border-radius: 4px;
+  color: var(--green); background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.3); }
+.premium-headline { font-size: 1rem; font-weight: 600; margin: 0 0 .25rem 0; }
+.premium-sub { font-size: .85rem; color: var(--muted); margin: 0; }
+.premium-form { margin-top: .75rem; }
+.premium-label { font-size: .8rem; color: var(--muted); display: block; margin-bottom: .3rem; }
+.premium-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+.premium-row input {
+  flex: 1 1 220px; min-width: 200px;
+  background: var(--surface-solid); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); padding: .5rem .7rem; font-size: .95rem; font-family: inherit;
+}
+.premium-row input:focus { outline: none; border-color: var(--accent); }
+.premium-hint { margin: .4rem 0 0 0; font-size: .75rem; color: var(--muted); }
+.premium-hint code { background: var(--surface); padding: .05rem .3rem; border-radius: 3px; }
+.premium-msg { margin-top: .5rem; font-size: .85rem; min-height: 1.1em; }
+.premium-msg--error { color: var(--red); }
+.premium-msg--success { color: var(--green); }
+
+/* Premium-locked placeholder */
+.trading-locked-note { color: var(--muted); font-size: .85rem; margin-top: .25rem; }
+
+/* ── Daily Briefing Scheduler ── */
+.briefing-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: .85rem; }
+.briefing-title-row { display: flex; align-items: center; gap: .7rem; }
+.briefing-icon { width: 38px; height: 38px; border-radius: 10px; background: rgba(94,234,212,.1); border: 1px solid rgba(94,234,212,.2); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--accent); }
+.briefing-desc { font-size: .8rem; color: var(--muted); margin: 0; }
+.briefing-badge { font-size: .7rem; font-weight: 700; letter-spacing: .07em; padding: .2rem .55rem; border-radius: 4px; white-space: nowrap; }
+.briefing-badge--active { color: var(--green); background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.3); }
+.briefing-badge--disabled { color: var(--muted); background: var(--surface); border: 1px solid var(--border); }
+.briefing-badge--running { color: #f59e0b; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.3); animation: brf-pulse 1.4s ease-in-out infinite; }
+@keyframes brf-pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+.briefing-meta-row { display: flex; gap: 1.5rem; flex-wrap: wrap; padding: .65rem .85rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: .9rem; }
+.briefing-meta-item { display: flex; flex-direction: column; gap: .1rem; }
+.briefing-meta-lbl { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.briefing-meta-val { font-size: .88rem; font-weight: 500; color: var(--text); }
+
+.briefing-form { margin: 0; }
+.briefing-form-body { display: flex; align-items: flex-end; gap: 1.25rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.briefing-field-label { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem; color: var(--muted); }
+.brf-time-wrap { display: flex; align-items: center; gap: .4rem; background: var(--surface-solid); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .4rem .65rem; }
+.brf-time-wrap svg { color: var(--muted); flex-shrink: 0; }
+.brf-time-wrap input[type=time] { background: transparent; border: none; color: var(--text); font-size: .95rem; font-family: inherit; outline: none; width: 96px; cursor: pointer; }
+.brf-time-wrap:focus-within { border-color: var(--accent); }
+
+.briefing-toggle-wrap { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem; color: var(--muted); cursor: pointer; user-select: none; }
+.brf-toggle { position: relative; width: 40px; height: 22px; }
+.brf-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.brf-slider { position: absolute; inset: 0; border-radius: 22px; background: var(--border); transition: background .2s; cursor: pointer; }
+.brf-slider::before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .2s; }
+.brf-toggle input:checked + .brf-slider { background: var(--accent); }
+.brf-toggle input:checked + .brf-slider::before { transform: translateX(18px); }
+
+.briefing-actions { display: flex; gap: .55rem; flex-wrap: wrap; align-items: center; }
+.btn-wa { background: rgba(37,211,102,.13); color: #25d366; border: 1px solid rgba(37,211,102,.3); display: inline-flex; align-items: center; gap: .4rem; }
+.btn-wa:hover { background: rgba(37,211,102,.22); }
+.btn-wa:disabled { opacity: .5; cursor: not-allowed; }
+.briefing-msg { margin: .5rem 0 0 0; font-size: .82rem; min-height: 1.1em; }
+.briefing-msg--error { color: var(--red); }
+.briefing-msg--success { color: var(--green); }
+.briefing-msg--info { color: var(--accent); }
+
+.brf-log-header { display: flex; justify-content: space-between; align-items: center; margin: 1rem 0 .5rem 0; }
+.brf-log-title { font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.brf-refresh-btn { font-size: .8rem; color: var(--accent-dim); }
+.brf-log-list { display: flex; flex-direction: column; gap: .35rem; }
+.brf-log-item { display: flex; align-items: center; gap: .65rem; padding: .45rem .7rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: .8rem; }
+.brf-log-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.brf-log-dot--success { background: var(--green); }
+.brf-log-dot--failed { background: var(--red); }
+.brf-log-dot--running { background: #f59e0b; animation: brf-pulse 1s ease-in-out infinite; }
+.brf-log-time { color: var(--muted); white-space: nowrap; flex-shrink: 0; }
+.brf-log-msg { color: var(--text-soft); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brf-log-dur { color: var(--muted); white-space: nowrap; font-family: monospace; }
+.brf-log-pill { font-size: .68rem; font-weight: 600; padding: .1rem .38rem; border-radius: 3px; text-transform: uppercase; flex-shrink: 0; }
+.brf-log-pill--success { color: var(--green); background: rgba(34,197,94,.12); }
+.brf-log-pill--failed { color: var(--red); background: rgba(248,113,113,.12); }
+.brf-log-pill--running { color: #f59e0b; background: rgba(245,158,11,.12); }
 </style>
 
+{% if is_premium_registered %}
 <script type="module" src="/static/js/trading.js?v=7"></script>
+
+<script>
+(function () {
+  // ── Daily Briefing Scheduler ──────────────────────────────────────────
+  const $badge    = document.getElementById('briefing-badge');
+  const $metaRow  = document.getElementById('briefing-meta-row');
+  const $nextRun  = document.getElementById('brf-next-run');
+  const $lastRun  = document.getElementById('brf-last-run');
+  const $timeIn   = document.getElementById('brf-time');
+  const $enabled  = document.getElementById('brf-enabled');
+  const $form     = document.getElementById('briefing-form');
+  const $save     = document.getElementById('brf-save');
+  const $sendNow  = document.getElementById('brf-send-now');
+  const $remove   = document.getElementById('brf-remove');
+  const $msg      = document.getElementById('briefing-msg');
+  const $logSec   = document.getElementById('brf-log-section');
+  const $logList  = document.getElementById('brf-log-list');
+  const $refresh  = document.getElementById('brf-refresh');
+
+  function toIST(utcIso) {
+    if (!utcIso) return '—';
+    const d = new Date(utcIso + 'Z');
+    return d.toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit', month: 'short',
+      hour: '2-digit', minute: '2-digit', hour12: true,
+    });
+  }
+
+  function toISTTime(utcIso) {
+    if (!utcIso) return '08:30';
+    const d = new Date(utcIso + 'Z');
+    const parts = d.toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit',
+    });
+    return parts.slice(0, 5); // "HH:MM"
+  }
+
+  function setBadge(status, enabled) {
+    if (!$badge) return;
+    $badge.style.display = '';
+    if (status === 'running') {
+      $badge.textContent = '● RUNNING';
+      $badge.className = 'briefing-badge briefing-badge--running';
+    } else if (enabled) {
+      $badge.textContent = '● ACTIVE';
+      $badge.className = 'briefing-badge briefing-badge--active';
+    } else {
+      $badge.textContent = 'PAUSED';
+      $badge.className = 'briefing-badge briefing-badge--disabled';
+    }
+  }
+
+  function setMsg(text, kind) {
+    $msg.textContent = text || '';
+    $msg.className = 'briefing-msg' + (kind ? ' briefing-msg--' + kind : '');
+  }
+
+  function renderLogs(logs) {
+    if (!logs || !logs.length) {
+      $logSec.style.display = 'none';
+      return;
+    }
+    $logSec.style.display = '';
+    $logList.innerHTML = logs.map(function (l) {
+      const dotClass = l.status === 'success' ? 'success' : l.status === 'running' ? 'running' : 'failed';
+      const pillClass = dotClass;
+      const dur = l.duration_ms ? (l.duration_ms / 1000).toFixed(1) + 's' : '';
+      const msg = (l.message || '').replace(/manual send · /, '').slice(0, 72);
+      return '<div class="brf-log-item">' +
+        '<span class="brf-log-dot brf-log-dot--' + dotClass + '"></span>' +
+        '<span class="brf-log-pill brf-log-pill--' + pillClass + '">' + l.status + '</span>' +
+        '<span class="brf-log-time">' + toIST(l.created_at) + '</span>' +
+        '<span class="brf-log-msg">' + msg + '</span>' +
+        (dur ? '<span class="brf-log-dur">' + dur + '</span>' : '') +
+        '</div>';
+    }).join('');
+  }
+
+  async function loadSchedule() {
+    try {
+      const res = await fetch('/api/briefing/schedule');
+      const data = await res.json();
+      if (data.exists && data.schedule) {
+        const s = data.schedule;
+        $timeIn.value = toISTTime(s.next_run);
+        $enabled.checked = s.enabled;
+        $metaRow.style.display = '';
+        $nextRun.textContent = toIST(s.next_run);
+        $lastRun.textContent = toIST(s.last_run);
+        setBadge(s.status, s.enabled);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  async function loadLogs() {
+    try {
+      const res = await fetch('/api/briefing/logs');
+      const data = await res.json();
+      renderLogs(data.logs || []);
+    } catch (e) { /* ignore */ }
+  }
+
+  $form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const timeVal = ($timeIn.value || '').trim();
+    if (!/^\d{2}:\d{2}$/.test(timeVal)) {
+      setMsg('Please pick a valid time.', 'error'); return;
+    }
+    $save.disabled = true;
+    setMsg('Saving…', '');
+    try {
+      const res = await fetch('/api/briefing/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ time_ist: timeVal, enabled: $enabled.checked }),
+      });
+      const data = await res.json();
+      if (data.ok && data.schedule) {
+        const s = data.schedule;
+        $metaRow.style.display = '';
+        $nextRun.textContent = toIST(s.next_run);
+        $lastRun.textContent = toIST(s.last_run);
+        setBadge(s.status, s.enabled);
+        setMsg('Schedule saved — next send ' + toIST(s.next_run), 'success');
+      } else {
+        setMsg(data.error || 'Save failed.', 'error');
+      }
+    } catch (err) {
+      setMsg('Network error: ' + err.message, 'error');
+    } finally {
+      $save.disabled = false;
+    }
+  });
+
+  $sendNow.addEventListener('click', async function () {
+    $sendNow.disabled = true;
+    $sendNow.textContent = 'Sending…';
+    setMsg('Generating briefing and sending to WhatsApp…', 'info');
+    try {
+      const res = await fetch('/api/briefing/send-now', { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) {
+        setMsg(data.message || 'Sent!', 'success');
+        setTimeout(loadLogs, 35000);
+      } else {
+        setMsg(data.error || 'Send failed.', 'error');
+      }
+    } catch (err) {
+      setMsg('Network error: ' + err.message, 'error');
+    } finally {
+      $sendNow.disabled = false;
+      $sendNow.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send Now';
+    }
+  });
+
+  $remove.addEventListener('click', async function () {
+    if (!confirm('Disable and remove the daily briefing schedule?')) return;
+    try {
+      await fetch('/api/briefing/schedule', { method: 'DELETE' });
+      $badge.textContent = 'PAUSED';
+      $badge.className = 'briefing-badge briefing-badge--disabled';
+      $enabled.checked = false;
+      $metaRow.style.display = 'none';
+      setMsg('Schedule removed.', '');
+    } catch (err) {
+      setMsg('Error: ' + err.message, 'error');
+    }
+  });
+
+  $refresh && $refresh.addEventListener('click', loadLogs);
+
+  loadSchedule();
+  loadLogs();
+})();
+</script>
 
 <script>
 (function(){
@@ -395,6 +766,53 @@
 
   autoResize();
   $input.focus();
+})();
+</script>
+{% endif %}
+
+<script>
+(function () {
+  const form = document.getElementById('premium-form');
+  if (!form) return;
+
+  const $input = document.getElementById('premium-whatsapp');
+  const $btn = document.getElementById('premium-submit');
+  const $msg = document.getElementById('premium-msg');
+
+  function setMsg(text, kind) {
+    $msg.textContent = text || '';
+    $msg.className = 'premium-msg' + (kind ? ' premium-msg--' + kind : '');
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const whatsapp = ($input.value || '').trim();
+    if (!/^\+[0-9]{8,15}$/.test(whatsapp)) {
+      setMsg('Please enter a valid number with country code, e.g. +919999999999.', 'error');
+      $input.focus();
+      return;
+    }
+    $btn.disabled = true;
+    setMsg('Activating...', '');
+    try {
+      const res = await fetch('/api/premium/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ whatsapp_number: whatsapp }),
+      });
+      const data = await res.json().catch(function () { return {}; });
+      if (res.ok && data.ok) {
+        setMsg('Activated. Loading your trading workspace...', 'success');
+        window.location.reload();
+      } else {
+        setMsg(data.error || ('Error ' + res.status), 'error');
+        $btn.disabled = false;
+      }
+    } catch (err) {
+      setMsg('Network error: ' + err.message, 'error');
+      $btn.disabled = false;
+    }
+  });
 })();
 </script>
 {% endblock %}
