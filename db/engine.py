@@ -17,7 +17,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATABASE_URL = "postgresql+psycopg://my_finance:admin@localhost/my_finance"
 DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
-engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+# Neon (and other SSL-required hosts) embed sslmode=require in the URL.
+# psycopg v3 needs it forwarded explicitly via connect_args when using the
+# pooler endpoint. Passing an empty dict is harmless for local connections.
+_url_lower = DATABASE_URL.lower()
+_connect_args: dict = {"sslmode": "require"} if "sslmode=require" in _url_lower else {}
+
+engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=_connect_args)
 
 
 # Lightweight per-column migrations applied on every startup. Each entry is
