@@ -31,7 +31,7 @@ from services.news_service import (
 from services.technical_service import compute_technical_indicators
 from services.prediction_service import predict_direction
 from services.sector_service import get_sector_overview, get_market_breadth
-from services.risk_profile import risk_profiles, build_profile_from_dict
+from services.risk_profile import risk_profiles, build_profile_from_dict, load_profile, save_profile
 from services.trade_proposals import proposal_store, execute_proposal
 from services.realtime_feed import feed_relay, poll_ltp_fallback
 
@@ -461,6 +461,10 @@ async def trading_page(request: Request):
 
     if is_premium:
         _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
+        if sid and not risk_profiles.has(sid) and user:
+            _db_profile = load_profile(user.id)
+            if _db_profile:
+                risk_profiles.set(sid, _db_profile)
         ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
         ctx["ws_sid"] = sid or ""
         portfolio = _get_portfolio_cached(sid, client)
@@ -1458,9 +1462,16 @@ async def api_briefing_logs(request: Request):
 @web.get("/api/trading/profile")
 async def api_trading_profile_get(request: Request):
     sid = _sid(request)
-    if not sid or sessions.get_client(sid) is None:
+    client = sessions.get_client(sid) if sid else None
+    if not sid or client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     profile = risk_profiles.get(sid)
+    if profile is None:
+        user = _registered_user_for_session(client)
+        if user:
+            profile = load_profile(user.id)
+            if profile:
+                risk_profiles.set(sid, profile)
     if profile is None:
         return JSONResponse({"has_profile": False})
     return JSONResponse({"has_profile": True, "profile": profile.to_dict()})
@@ -1469,7 +1480,8 @@ async def api_trading_profile_get(request: Request):
 @web.post("/api/trading/profile")
 async def api_trading_profile_set(request: Request):
     sid = _sid(request)
-    if not sid or sessions.get_client(sid) is None:
+    client = sessions.get_client(sid) if sid else None
+    if not sid or client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         body = await request.json()
@@ -1478,6 +1490,9 @@ async def api_trading_profile_set(request: Request):
     try:
         profile = build_profile_from_dict(body)
         risk_profiles.set(sid, profile)
+        user = _registered_user_for_session(client)
+        if user:
+            save_profile(user.id, profile)
         return JSONResponse({"ok": True, "profile": profile.to_dict()})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
