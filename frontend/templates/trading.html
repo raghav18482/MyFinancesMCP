@@ -655,6 +655,9 @@
   const $newChat = document.getElementById("trading-new-chat");
   const $starters = document.getElementById("agent-starters");
 
+  let tradingThreadId = null;
+  let tradingPremium = false;
+
   function escapeHtml(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
   function formatUserText(s) { return escapeHtml(s).replace(/\n/g,"<br>"); }
   function formatReply(s) {
@@ -705,20 +708,35 @@
     $input.style.height = Math.min($input.scrollHeight, 140) + "px";
   }
 
+  async function ensureTradingThread() {
+    if (!tradingPremium || tradingThreadId !== null) return;
+    try {
+      const res = await fetch("/api/agent/threads", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({agent_type: "trading"}),
+      });
+      const data = await res.json().catch(function(){ return {}; });
+      if (res.ok && data.thread) tradingThreadId = data.thread.id;
+    } catch (e) { /* ignore */ }
+  }
+
   async function send() {
     const text = $input.value.trim();
     if (!text) return;
     $input.value = "";
     autoResize();
+    await ensureTradingThread();
     appendMessage("user", text);
     const typing = showTyping();
     $send.disabled = true;
     $input.disabled = true;
     try {
+      const payload = { message: text, agent_type: "trading" };
+      if (tradingThreadId !== null) payload.thread_id = tradingThreadId;
       const res = await fetch("/api/agent/chat", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ message: text, agent_type: "trading" }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(function(){ return {}; });
       if (typing.parentNode) typing.parentNode.removeChild(typing);
@@ -738,17 +756,37 @@
   }
 
   async function newConversation() {
-    try {
-      await fetch("/api/agent/new-chat", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({agent_type: "trading"}),
-      });
-    } catch (e) { return; }
+    tradingThreadId = null;
+    if (tradingPremium) {
+      await ensureTradingThread();
+    } else {
+      try {
+        await fetch("/api/agent/new-chat", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({agent_type: "trading"}),
+        });
+      } catch (e) { /* ignore */ }
+    }
     $messages.innerHTML = "";
     syncEmptyState();
     $input.value = "";
     autoResize();
     $input.focus();
+  }
+
+  async function loadLatestTradingThread() {
+    try {
+      const res = await fetch("/api/agent/threads?agent_type=trading");
+      const data = await res.json().catch(function(){ return {}; });
+      tradingPremium = !!data.premium;
+      const threads = data.threads || [];
+      if (tradingPremium && threads.length) {
+        tradingThreadId = threads[0].id;
+        const mres = await fetch("/api/agent/threads/" + tradingThreadId + "/messages");
+        const mdata = await mres.json().catch(function(){ return {}; });
+        (mdata.messages || []).forEach(function(m){ appendMessage(m.role, m.text); });
+      }
+    } catch (e) { /* ignore */ }
   }
 
   $send.addEventListener("click", send);
@@ -766,6 +804,7 @@
 
   autoResize();
   $input.focus();
+  loadLatestTradingThread();
 })();
 </script>
 {% endif %}
