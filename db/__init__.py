@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from .crypto import decrypt_value, encrypt_value
 from .engine import DATABASE_URL, engine, get_session, init_db
-from .models import Log, RiskProfile, Schedule, User
+from .models import ChatThread, Log, RiskProfile, Schedule, User
 
 __all__ = [
     "DATABASE_URL",
@@ -20,6 +20,7 @@ __all__ = [
     "Schedule",
     "Log",
     "RiskProfile",
+    "ChatThread",
     "encrypt_value",
     "decrypt_value",
 ]
