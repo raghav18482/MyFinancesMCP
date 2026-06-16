@@ -1,49 +1,79 @@
 {% extends "base.html" %}
 {% block title %}Finance Agent{% endblock %}
 {% block content %}
-<div class="container agent-page">
-  <header class="agent-top">
-    <div class="agent-top-text">
-      <p class="agent-eyebrow">Portfolio assistant</p>
-      <h1>Finance agent</h1>
-      <p class="agent-lead">Chat with your ADK assistant—live Angel One data, research tools, and market context. Replies use the server OpenRouter key (see <code>.env</code>).</p>
-    </div>
-    <button type="button" class="btn btn-muted agent-new-btn" id="agent-new-chat" title="Clear messages and start a new thread">
-      New conversation
-    </button>
-  </header>
-
-  <div class="agent-shell card" id="agent-shell">
-    <div class="agent-scroll" id="agent-scroll">
-      <div class="agent-empty" id="agent-empty">
-        <div class="agent-empty-visual" aria-hidden="true">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="1.5" opacity="0.35"/><path d="M16 22h16M16 28h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/><circle cx="24" cy="14" r="3" fill="currentColor" opacity="0.45"/></svg>
-        </div>
-        <h2 class="agent-empty-title">What would you like to know?</h2>
-        <p class="agent-empty-desc">Try a starter below or type your own question. <kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.</p>
-        <div class="agent-starters" id="agent-starters" role="group" aria-label="Suggested questions">
-          <button type="button" class="agent-starter" data-q="Summarize my portfolio: holdings, day P&amp;L, and available cash.">Portfolio summary</button>
-          <button type="button" class="agent-starter" data-q="What is NSE market breadth and key levels today?">Market breadth</button>
-          <button type="button" class="agent-starter" data-q="Any recent news that could affect my largest holding?">News on top holding</button>
-          <button type="button" class="agent-starter" data-q="Explain sector exposure across my holdings.">Sector exposure</button>
-        </div>
+<div class="container agent-page agent-page--wide">
+  <div class="agent-layout" id="agent-layout">
+    <!-- Conversation history sidebar -->
+    <aside class="agent-sidebar" id="agent-sidebar" aria-label="Conversation history">
+      <div class="agent-sidebar-head">
+        <button type="button" class="btn agent-newchat-btn" id="agent-new-chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          New chat
+        </button>
+        <button type="button" class="agent-sidebar-close" id="agent-sidebar-close" aria-label="Close history">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
       </div>
-      <div class="agent-messages" id="agent-messages" aria-live="polite"></div>
-    </div>
 
-    <div class="agent-compose-bar">
-      <label class="visually-hidden" for="agent-input">Message</label>
-      <textarea id="agent-input" class="agent-input" rows="1" placeholder="Message your finance agent…" autocomplete="off"></textarea>
-      <button type="button" class="agent-send-btn" id="agent-send" aria-label="Send message" title="Send">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-      </button>
+      <div class="agent-agent-toggle" id="agent-agent-toggle" role="tablist" aria-label="Choose assistant">
+        <button type="button" class="agent-toggle-btn is-active" data-agent="finance" role="tab" aria-selected="true">Finance</button>
+        <button type="button" class="agent-toggle-btn" data-agent="trading" role="tab" aria-selected="false">Trading</button>
+      </div>
+
+      <div class="agent-convos" id="agent-convos" aria-live="polite"></div>
+      <p class="agent-sidebar-note" id="agent-sidebar-note" hidden></p>
+    </aside>
+
+    <!-- Main chat pane -->
+    <div class="agent-main">
+      <header class="agent-top">
+        <button type="button" class="agent-history-toggle" id="agent-history-toggle" aria-label="Show conversation history">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <div class="agent-top-text">
+          <p class="agent-eyebrow" id="agent-eyebrow">Portfolio assistant</p>
+          <h1 id="agent-title">Finance agent</h1>
+        </div>
+      </header>
+
+      <div class="agent-shell card" id="agent-shell">
+        <div class="agent-scroll" id="agent-scroll">
+          <div class="agent-empty" id="agent-empty">
+            <div class="agent-empty-visual" aria-hidden="true">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="1.5" opacity="0.35"/><path d="M16 22h16M16 28h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/><circle cx="24" cy="14" r="3" fill="currentColor" opacity="0.45"/></svg>
+            </div>
+            <h2 class="agent-empty-title">What would you like to know?</h2>
+            <p class="agent-empty-desc">Try a starter below or type your own question. <kbd>Enter</kbd> sends · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line.</p>
+            <div class="agent-starters" id="agent-starters" role="group" aria-label="Suggested questions">
+              <button type="button" class="agent-starter" data-q="Summarize my portfolio: holdings, day P&amp;L, and available cash.">Portfolio summary</button>
+              <button type="button" class="agent-starter" data-q="What is NSE market breadth and key levels today?">Market breadth</button>
+              <button type="button" class="agent-starter" data-q="Any recent news that could affect my largest holding?">News on top holding</button>
+              <button type="button" class="agent-starter" data-q="Explain sector exposure across my holdings.">Sector exposure</button>
+            </div>
+          </div>
+          <div class="agent-messages" id="agent-messages" aria-live="polite"></div>
+        </div>
+
+        <div class="agent-compose-bar">
+          <label class="visually-hidden" for="agent-input">Message</label>
+          <textarea id="agent-input" class="agent-input" rows="1" placeholder="Message your finance agent…" autocomplete="off"></textarea>
+          <button type="button" class="agent-send-btn" id="agent-send" aria-label="Send message" title="Send">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
+        <p class="agent-footnote" id="agent-footnote">Conversations are saved to your account for premium users.</p>
+      </div>
     </div>
-    <p class="agent-footnote">Messages stay in this browser session only. Server memory resets after restart.</p>
   </div>
+
+  <div class="agent-sidebar-backdrop" id="agent-sidebar-backdrop" hidden></div>
 </div>
 
 <script>
 (function(){
+  const $layout=document.getElementById("agent-layout");
+  const $sidebar=document.getElementById("agent-sidebar");
+  const $backdrop=document.getElementById("agent-sidebar-backdrop");
   const $shell=document.getElementById("agent-shell");
   const $scroll=document.getElementById("agent-scroll");
   const $empty=document.getElementById("agent-empty");
@@ -52,6 +82,24 @@
   const $send=document.getElementById("agent-send");
   const $newChat=document.getElementById("agent-new-chat");
   const $starters=document.getElementById("agent-starters");
+  const $convos=document.getElementById("agent-convos");
+  const $note=document.getElementById("agent-sidebar-note");
+  const $toggle=document.getElementById("agent-agent-toggle");
+  const $title=document.getElementById("agent-title");
+  const $eyebrow=document.getElementById("agent-eyebrow");
+  const $footnote=document.getElementById("agent-footnote");
+  const $historyToggle=document.getElementById("agent-history-toggle");
+  const $sidebarClose=document.getElementById("agent-sidebar-close");
+
+  const AGENT_META={
+    finance:{title:"Finance agent",eyebrow:"Portfolio assistant",placeholder:"Message your finance agent…"},
+    trading:{title:"Trading agent",eyebrow:"Trade copilot",placeholder:"Message your trading agent…"}
+  };
+
+  let isPremium=false;
+  let agentType="finance";
+  let currentThreadId=null;
+  let busy=false;
 
   function escapeHtml(s){
     return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -61,12 +109,23 @@
     const esc=escapeHtml(s);
     return esc.replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>").replace(/\n/g,"<br>");
   }
+  function relTime(iso){
+    if(!iso)return "";
+    const d=new Date(iso),now=new Date(),diff=(now-d)/1000;
+    if(diff<60)return "just now";
+    if(diff<3600)return Math.floor(diff/60)+"m ago";
+    if(diff<86400)return Math.floor(diff/3600)+"h ago";
+    if(diff<604800)return Math.floor(diff/86400)+"d ago";
+    return d.toLocaleDateString();
+  }
 
   function syncEmptyState(){
     const has=$messages.children.length>0;
     $shell.classList.toggle("agent-shell--chatting",has);
     $empty.setAttribute("aria-hidden",has?"true":"false");
   }
+
+  function clearMessages(){$messages.innerHTML="";syncEmptyState();}
 
   function appendMessage(role,text,opts){
     opts=opts||{};
@@ -103,61 +162,212 @@
 
   function autoResizeTextarea(){
     $input.style.height="auto";
-    const max=140;
-    $input.style.height=Math.min($input.scrollHeight,max)+"px";
+    $input.style.height=Math.min($input.scrollHeight,140)+"px";
+  }
+
+  function setAgentMeta(){
+    const m=AGENT_META[agentType]||AGENT_META.finance;
+    $title.textContent=m.title;
+    $eyebrow.textContent=m.eyebrow;
+    $input.setAttribute("placeholder",m.placeholder);
+  }
+
+  // ── Sidebar (mobile drawer) ──
+  function openSidebar(){$layout.classList.add("agent-layout--drawer-open");$backdrop.hidden=false;}
+  function closeSidebar(){$layout.classList.remove("agent-layout--drawer-open");$backdrop.hidden=true;}
+
+  // ── Threads ──
+  async function loadThreads(){
+    if(!isPremium){
+      $convos.innerHTML="";
+      $note.hidden=false;
+      $note.textContent="Saved history is a premium feature. This chat works, but won't be stored.";
+      return;
+    }
+    $note.hidden=true;
+    try{
+      const res=await fetch("/api/agent/threads?agent_type="+encodeURIComponent(agentType));
+      const data=await res.json().catch(function(){return{};});
+      renderThreads(data.threads||[]);
+    }catch(e){/* ignore */}
+  }
+
+  function renderThreads(threads){
+    $convos.innerHTML="";
+    if(!threads.length){
+      const empty=document.createElement("p");
+      empty.className="agent-convos-empty";
+      empty.textContent="No conversations yet.";
+      $convos.appendChild(empty);
+      return;
+    }
+    threads.forEach(function(t){
+      const item=document.createElement("div");
+      item.className="agent-convo"+(t.id===currentThreadId?" is-active":"");
+      item.setAttribute("data-id",t.id);
+
+      const main=document.createElement("button");
+      main.type="button";
+      main.className="agent-convo-open";
+      main.innerHTML='<span class="agent-convo-title"></span><span class="agent-convo-time"></span>';
+      main.querySelector(".agent-convo-title").textContent=t.title||"Untitled";
+      main.querySelector(".agent-convo-time").textContent=relTime(t.updated_at);
+      main.addEventListener("click",function(){openThread(t.id);});
+
+      const actions=document.createElement("div");
+      actions.className="agent-convo-actions";
+      const edit=document.createElement("button");
+      edit.type="button";edit.className="agent-convo-act";edit.title="Rename";
+      edit.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+      edit.addEventListener("click",function(e){e.stopPropagation();renameThread(t);});
+      const del=document.createElement("button");
+      del.type="button";del.className="agent-convo-act";del.title="Delete";
+      del.innerHTML='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
+      del.addEventListener("click",function(e){e.stopPropagation();deleteThread(t.id);});
+      actions.appendChild(edit);
+      actions.appendChild(del);
+
+      item.appendChild(main);
+      item.appendChild(actions);
+      $convos.appendChild(item);
+    });
+  }
+
+  function highlightActive(){
+    Array.prototype.forEach.call($convos.querySelectorAll(".agent-convo"),function(el){
+      el.classList.toggle("is-active",Number(el.getAttribute("data-id"))===currentThreadId);
+    });
+  }
+
+  async function openThread(id){
+    currentThreadId=id;
+    highlightActive();
+    closeSidebar();
+    clearMessages();
+    try{
+      const res=await fetch("/api/agent/threads/"+id+"/messages");
+      const data=await res.json().catch(function(){return{};});
+      (data.messages||[]).forEach(function(m){appendMessage(m.role,m.text);});
+    }catch(e){/* ignore */}
+    $input.focus();
+  }
+
+  async function newConversation(){
+    clearMessages();
+    currentThreadId=null;
+    if(isPremium){
+      try{
+        const res=await fetch("/api/agent/threads",{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({agent_type:agentType})
+        });
+        const data=await res.json().catch(function(){return{};});
+        if(res.ok&&data.thread){currentThreadId=data.thread.id;await loadThreads();}
+      }catch(e){/* ignore */}
+    }else{
+      // ephemeral reset for non-premium
+      try{await fetch("/api/agent/new-chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent_type:agentType})});}catch(e){}
+    }
+    closeSidebar();
+    $input.value="";
+    autoResizeTextarea();
+    $input.focus();
+  }
+
+  async function renameThread(t){
+    const next=window.prompt("Rename conversation",t.title||"");
+    if(next===null)return;
+    const title=next.trim();
+    if(!title)return;
+    try{
+      const res=await fetch("/api/agent/threads/"+t.id,{
+        method:"PATCH",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({title:title})
+      });
+      if(res.ok)await loadThreads();
+    }catch(e){/* ignore */}
+  }
+
+  async function deleteThread(id){
+    if(!window.confirm("Delete this conversation? This cannot be undone."))return;
+    try{
+      const res=await fetch("/api/agent/threads/"+id,{method:"DELETE"});
+      if(res.ok){
+        if(id===currentThreadId){currentThreadId=null;clearMessages();}
+        await loadThreads();
+      }
+    }catch(e){/* ignore */}
+  }
+
+  async function ensureThread(){
+    if(!isPremium||currentThreadId!==null)return;
+    try{
+      const res=await fetch("/api/agent/threads",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({agent_type:agentType})
+      });
+      const data=await res.json().catch(function(){return{};});
+      if(res.ok&&data.thread)currentThreadId=data.thread.id;
+    }catch(e){/* ignore */}
   }
 
   async function send(){
     const text=$input.value.trim();
-    if(!text)return;
+    if(!text||busy)return;
+    busy=true;
     $input.value="";
     autoResizeTextarea();
+    await ensureThread();
     appendMessage("user",text);
     const typing=showTyping();
     $send.disabled=true;
     $input.disabled=true;
     try{
+      const payload={message:text,agent_type:agentType};
+      if(currentThreadId!==null)payload.thread_id=currentThreadId;
       const res=await fetch("/api/agent/chat",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({message:text})
+        body:JSON.stringify(payload)
       });
       const data=await res.json().catch(function(){return{};});
       if(typing.parentNode)typing.parentNode.removeChild(typing);
       if(!res.ok){
         appendMessage("assistant",data.error||("Something went wrong ("+res.status+")."),{error:true});
-        return;
+      }else{
+        appendMessage("assistant",data.reply||"");
+        if(isPremium)loadThreads();
       }
-      appendMessage("assistant",data.reply||"");
     }catch(e){
       if(typing.parentNode)typing.parentNode.removeChild(typing);
       appendMessage("assistant","Could not reach the server: "+e.message,{error:true});
     }finally{
+      busy=false;
       $send.disabled=false;
       $input.disabled=false;
       $input.focus();
     }
   }
 
-  async function newConversation(){
-    try{
-      const res=await fetch("/api/agent/new-chat",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-      if(!res.ok)return;
-    }catch(e){return;}
-    $messages.innerHTML="";
-    syncEmptyState();
-    $input.value="";
-    autoResizeTextarea();
-    $input.focus();
+  function switchAgent(next){
+    if(next===agentType)return;
+    agentType=next;
+    Array.prototype.forEach.call($toggle.querySelectorAll(".agent-toggle-btn"),function(b){
+      const on=b.getAttribute("data-agent")===agentType;
+      b.classList.toggle("is-active",on);
+      b.setAttribute("aria-selected",on?"true":"false");
+    });
+    setAgentMeta();
+    currentThreadId=null;
+    clearMessages();
+    loadThreads();
   }
 
+  // ── Wire events ──
   $send.addEventListener("click",send);
   $input.addEventListener("input",autoResizeTextarea);
   $input.addEventListener("keydown",function(e){
-    if(e.key==="Enter"&&!e.shiftKey){
-      e.preventDefault();
-      send();
-    }
+    if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}
   });
   $newChat.addEventListener("click",newConversation);
   $starters.addEventListener("click",function(e){
@@ -166,9 +376,35 @@
     const q=b.getAttribute("data-q")||"";
     if(q){$input.value=q;autoResizeTextarea();send();}
   });
+  $toggle.addEventListener("click",function(e){
+    const b=e.target.closest(".agent-toggle-btn");
+    if(b)switchAgent(b.getAttribute("data-agent"));
+  });
+  $historyToggle.addEventListener("click",openSidebar);
+  $sidebarClose.addEventListener("click",closeSidebar);
+  $backdrop.addEventListener("click",closeSidebar);
 
-  autoResizeTextarea();
-  $input.focus();
+  // ── Init ──
+  async function init(){
+    setAgentMeta();
+    try{
+      const res=await fetch("/api/agent/threads?agent_type="+encodeURIComponent(agentType));
+      const data=await res.json().catch(function(){return{};});
+      isPremium=!!data.premium;
+      if(isPremium){
+        $footnote.textContent="Conversations are saved to your account and persist across sessions.";
+        renderThreads(data.threads||[]);
+        if((data.threads||[]).length){openThread(data.threads[0].id);}
+      }else{
+        $footnote.textContent="Sign up for premium to save your conversation history.";
+        $note.hidden=false;
+        $note.textContent="Saved history is a premium feature. This chat works, but won't be stored.";
+      }
+    }catch(e){/* ignore */}
+    autoResizeTextarea();
+    $input.focus();
+  }
+  init();
 })();
 </script>
 {% endblock %}

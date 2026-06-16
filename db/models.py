@@ -52,3 +52,39 @@ class Log(SQLModel, table=True):
     message: str | None = None
     duration_ms: int | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class RiskProfile(SQLModel, table=True):
+    __tablename__ = "risk_profiles"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True, unique=True)
+    age: int
+    goal: str
+    horizon_years: int
+    risk_tolerance: str
+    tax_bracket: str
+    max_single_order_value: float
+    max_position_pct: float
+    allowed_products: str  # comma-separated e.g. "DELIVERY" or "DELIVERY,INTRADAY"
+    max_daily_trades: int
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ChatThread(SQLModel, table=True):
+    """One persisted agent conversation (sidebar entry).
+
+    Each thread maps to exactly one ADK session via ``adk_session_id``; the
+    conversation turns themselves live in ADK's DatabaseSessionService tables.
+    """
+
+    __tablename__ = "chat_threads"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    agent_type: str = Field(default="finance", index=True)  # "finance" | "trading"
+    adk_session_id: str = Field(index=True, unique=True)
+    title: str = Field(default="New conversation")
+    archived: bool = Field(default=False, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)

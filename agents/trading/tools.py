@@ -14,7 +14,7 @@ from services.broker_service import (
     fetch_market_depth,
     fetch_stock_history_candles,
 )
-from services.risk_profile import risk_profiles
+from services.risk_profile import risk_profiles, load_profile
 from services.trade_proposals import proposal_store
 from services.technical_service import compute_technical_indicators
 
@@ -37,6 +37,24 @@ def make_trading_tools(session_id: str) -> list[Callable[..., Any]]:
     def trading_get_risk_profile() -> dict[str, Any]:
         """Get the client's stored risk profile (age, goal, tolerance, limits)."""
         profile = risk_profiles.get(session_id)
+        if profile is None:
+            # Cache miss — try to load from DB using the logged-in Angel client_id
+            client = _client_or_error(session_id)
+            if client:
+                try:
+                    from db import get_session
+                    from db.models import User
+                    from sqlmodel import select
+                    with get_session() as db:
+                        user = db.exec(
+                            select(User).where(User.angel_client_id == client.client_id)
+                        ).first()
+                    if user:
+                        profile = load_profile(user.id)
+                        if profile:
+                            risk_profiles.set(session_id, profile)
+                except Exception:
+                    pass
         if profile is None:
             return {"error": "No risk profile set. Ask the user to fill in their risk profile first."}
         return profile.to_dict()

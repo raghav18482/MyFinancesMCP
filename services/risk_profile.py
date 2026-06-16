@@ -1,7 +1,9 @@
 """
 Client risk profile storage and validation.
 
-In-memory, keyed by web session id. Same lifecycle as SessionManager.
+In-memory cache (keyed by web session id) backed by a Postgres ``risk_profiles``
+table (keyed by user_id).  Registered users have their profile persisted so it
+survives server restarts and session expiry.
 """
 from __future__ import annotations
 
@@ -135,3 +137,86 @@ class RiskProfileStore:
 
 
 risk_profiles = RiskProfileStore()
+
+
+# ── DB persistence helpers ────────────────────────────────────────────────────
+
+def save_profile(user_id: int, profile: ClientRiskProfile) -> None:
+    """Upsert a ClientRiskProfile into the ``risk_profiles`` DB table.
+
+    Safe to call for any registered user (one with a ``users`` row).
+    Swallows DB errors so a persistence failure never breaks the request path.
+    """
+    try:
+        from db import get_session
+        from db.models import RiskProfile as DBRiskProfile
+        from sqlmodel import select
+        from datetime import datetime
+
+        with get_session() as db:
+            existing = db.exec(
+                select(DBRiskProfile).where(DBRiskProfile.user_id == user_id)
+            ).first()
+            products_str = ",".join(profile.allowed_products)
+            if existing:
+                existing.age = profile.age
+                existing.goal = profile.goal
+                existing.horizon_years = profile.horizon_years
+                existing.risk_tolerance = profile.risk_tolerance
+                existing.tax_bracket = profile.tax_bracket
+                existing.max_single_order_value = profile.max_single_order_value
+                existing.max_position_pct = profile.max_position_pct
+                existing.allowed_products = products_str
+                existing.max_daily_trades = profile.max_daily_trades
+                existing.updated_at = datetime.utcnow()
+                db.add(existing)
+            else:
+                db.add(DBRiskProfile(
+                    user_id=user_id,
+                    age=profile.age,
+                    goal=profile.goal,
+                    horizon_years=profile.horizon_years,
+                    risk_tolerance=profile.risk_tolerance,
+                    tax_bracket=profile.tax_bracket,
+                    max_single_order_value=profile.max_single_order_value,
+                    max_position_pct=profile.max_position_pct,
+                    allowed_products=products_str,
+                    max_daily_trades=profile.max_daily_trades,
+                ))
+            db.commit()
+        logger.info("risk profile saved to DB for user_id=%s", user_id)
+    except Exception:
+        logger.exception("failed to persist risk profile for user_id=%s", user_id)
+
+
+def load_profile(user_id: int) -> Optional[ClientRiskProfile]:
+    """Load a ClientRiskProfile from the DB for a given user_id.
+
+    Returns ``None`` if no row exists or on any DB error.
+    """
+    try:
+        from db import get_session
+        from db.models import RiskProfile as DBRiskProfile
+        from sqlmodel import select
+
+        with get_session() as db:
+            row = db.exec(
+                select(DBRiskProfile).where(DBRiskProfile.user_id == user_id)
+            ).first()
+        if row is None:
+            return None
+        products = [p.strip() for p in row.allowed_products.split(",") if p.strip()]
+        return ClientRiskProfile(
+            age=row.age,
+            goal=row.goal,
+            horizon_years=row.horizon_years,
+            risk_tolerance=row.risk_tolerance,
+            tax_bracket=row.tax_bracket,
+            max_single_order_value=row.max_single_order_value,
+            max_position_pct=row.max_position_pct,
+            allowed_products=products,
+            max_daily_trades=row.max_daily_trades,
+        )
+    except Exception:
+        logger.exception("failed to load risk profile for user_id=%s", user_id)
+        return None

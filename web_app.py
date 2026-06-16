@@ -17,7 +17,7 @@ from sqlmodel import select
 from starlette.middleware.sessions import SessionMiddleware
 
 from db import get_session
-from db.models import Log, Schedule, User
+from db.models import ChatThread, Log, Schedule, User
 
 from services.ai_service import DEFAULT_OPENROUTER_MODEL, ask_question, generate_insights
 from services.fundamental_service import get_stock_fundamentals
@@ -31,12 +31,12 @@ from services.news_service import (
 from services.technical_service import compute_technical_indicators
 from services.prediction_service import predict_direction
 from services.sector_service import get_sector_overview, get_market_breadth
-from services.risk_profile import risk_profiles, build_profile_from_dict
+from services.risk_profile import risk_profiles, build_profile_from_dict, load_profile, save_profile
 from services.trade_proposals import proposal_store, execute_proposal
 from services.realtime_feed import feed_relay, poll_ltp_fallback
 
 from session_manager import sessions
-from services.adk_runner_registry import registry
+from services.adk_runner_registry import app_name_for, registry
 from adminApi import admin_router
 
 logger = logging.getLogger(__name__)
@@ -461,6 +461,10 @@ async def trading_page(request: Request):
 
     if is_premium:
         _ensure_adk_chat_session_id(request, _ADK_TRADING_CHAT_SESSION_KEY)
+        if sid and not risk_profiles.has(sid) and user:
+            _db_profile = load_profile(user.id)
+            if _db_profile:
+                risk_profiles.set(sid, _db_profile)
         ctx["has_risk_profile"] = risk_profiles.has(sid) if sid else False
         ctx["ws_sid"] = sid or ""
         portfolio = _get_portfolio_cached(sid, client)
@@ -1001,9 +1005,201 @@ async def ai_insights(request: Request):
         return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
 
 
+# ── Agent chat persistence (conversation threads) ──────────────────────────
+
+_AGENT_TYPES = ("finance", "trading")
+
+
+def _normalize_agent_type(raw: str | None) -> str:
+    at = (raw or "finance").strip().lower()
+    return at if at in _AGENT_TYPES else "finance"
+
+
+def _thread_to_dict(t: ChatThread) -> dict:
+    return {
+        "id": t.id,
+        "agent_type": t.agent_type,
+        "title": t.title,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+    }
+
+
+def _derive_title(message: str) -> str:
+    """Build a short conversation title from the first user message."""
+    text = " ".join((message or "").split())
+    if len(text) > 60:
+        text = text[:57].rstrip() + "…"
+    return text or "New conversation"
+
+
+def _premium_user(request: Request) -> User | None:
+    """Return the active registered User for the current session, or None."""
+    sid = _sid(request)
+    client = sessions.get_client(sid) if sid else None
+    if client is None:
+        return None
+    user = _registered_user_for_session(client)
+    return user if (user and user.is_active) else None
+
+
+def _touch_thread(thread_id: int, first_message: str) -> None:
+    """Bump updated_at and set the title from the first message if still default."""
+    try:
+        with get_session() as db:
+            t = db.get(ChatThread, thread_id)
+            if not t:
+                return
+            if t.title == "New conversation" and first_message.strip():
+                t.title = _derive_title(first_message)
+            t.updated_at = datetime.utcnow()
+            db.add(t)
+            db.commit()
+    except Exception:
+        logger.warning("Failed to touch chat thread %s", thread_id)
+
+
+@web.get("/api/agent/threads")
+async def api_agent_threads_list(request: Request, agent_type: str = Query("")):
+    """List the current premium user's conversations for the sidebar."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _premium_user(request)
+    if not user:
+        return JSONResponse({"premium": False, "threads": []})
+    with get_session() as db:
+        stmt = select(ChatThread).where(
+            ChatThread.user_id == user.id,
+            ChatThread.archived == False,  # noqa: E712
+        )
+        if agent_type.strip():
+            stmt = stmt.where(ChatThread.agent_type == _normalize_agent_type(agent_type))
+        stmt = stmt.order_by(ChatThread.updated_at.desc())
+        threads = db.exec(stmt).all()
+    return JSONResponse({"premium": True, "threads": [_thread_to_dict(t) for t in threads]})
+
+
+@web.post("/api/agent/threads")
+async def api_agent_threads_create(request: Request):
+    """Create a fresh conversation thread for a premium user."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _premium_user(request)
+    if not user:
+        return JSONResponse(
+            {"error": "Saved conversations are available for premium users."},
+            status_code=403,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    agent_type = _normalize_agent_type(body.get("agent_type"))
+    thread = ChatThread(
+        user_id=user.id,
+        agent_type=agent_type,
+        adk_session_id=uuid.uuid4().hex,
+        title="New conversation",
+    )
+    with get_session() as db:
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+    return JSONResponse({"ok": True, "thread": _thread_to_dict(thread)})
+
+
+@web.get("/api/agent/threads/{thread_id}/messages")
+async def api_agent_thread_messages(request: Request, thread_id: int):
+    """Return the persisted {role, text} messages for one conversation."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _premium_user(request)
+    if not user:
+        return JSONResponse({"messages": []})
+    with get_session() as db:
+        thread = db.get(ChatThread, thread_id)
+        if not thread or thread.user_id != user.id:
+            return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        agent_type = thread.agent_type
+        adk_session_id = thread.adk_session_id
+    try:
+        messages = await registry.get_messages(
+            user_id=f"user-{user.id}",
+            adk_session_id=adk_session_id,
+            app_name=app_name_for(agent_type),
+        )
+    except Exception:
+        logger.exception("Failed to load messages for thread %s", thread_id)
+        messages = []
+    return JSONResponse({"messages": messages, "agent_type": agent_type})
+
+
+@web.patch("/api/agent/threads/{thread_id}")
+async def api_agent_thread_rename(request: Request, thread_id: int):
+    """Rename a conversation thread."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _premium_user(request)
+    if not user:
+        return JSONResponse({"error": "Not authorized"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    title = " ".join((body.get("title") or "").split())[:120].strip()
+    if not title:
+        return JSONResponse({"error": "Title cannot be empty"}, status_code=400)
+    with get_session() as db:
+        thread = db.get(ChatThread, thread_id)
+        if not thread or thread.user_id != user.id:
+            return JSONResponse({"error": "Conversation not found"}, status_code=404)
+        thread.title = title
+        thread.updated_at = datetime.utcnow()
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+        return JSONResponse({"ok": True, "thread": _thread_to_dict(thread)})
+
+
+@web.delete("/api/agent/threads/{thread_id}")
+async def api_agent_thread_delete(request: Request, thread_id: int):
+    """Delete a conversation thread and its persisted ADK session."""
+    sid = _sid(request)
+    if not sid or sessions.get_client(sid) is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = _premium_user(request)
+    if not user:
+        return JSONResponse({"error": "Not authorized"}, status_code=403)
+    with get_session() as db:
+        thread = db.get(ChatThread, thread_id)
+        if not thread or thread.user_id != user.id:
+            return JSONResponse({"ok": True})
+        agent_type = thread.agent_type
+        adk_session_id = thread.adk_session_id
+        db.delete(thread)
+        db.commit()
+    try:
+        await registry.delete_session(
+            user_id=f"user-{user.id}",
+            adk_session_id=adk_session_id,
+            app_name=app_name_for(agent_type),
+        )
+    except Exception:
+        logger.warning("Failed to delete ADK session for thread %s", thread_id)
+    return JSONResponse({"ok": True})
+
+
 @web.post("/api/agent/chat")
 async def api_agent_chat(request: Request):
-    """Run an ADK agent (finance or trading). Uses Angel session from web login."""
+    """Run an ADK agent (finance or trading). Uses Angel session from web login.
+
+    Premium users that pass a ``thread_id`` get a DB-persisted conversation;
+    everyone else falls back to the cookie-scoped ephemeral session.
+    """
     sid = _sid(request)
     if not sid or sessions.get_client(sid) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
@@ -1017,14 +1213,30 @@ async def api_agent_chat(request: Request):
     if not message:
         return JSONResponse({"error": "Message cannot be empty"}, status_code=400)
 
-    agent_type = (body.get("agent_type") or "finance").strip().lower()
+    agent_type = _normalize_agent_type(body.get("agent_type"))
     debug = bool(body.get("debug"))
+    thread_id = body.get("thread_id")
 
-    if agent_type == "trading":
-        session_key = _ADK_TRADING_CHAT_SESSION_KEY
+    user = _premium_user(request)
+    persist = False
+    chat_user_id: str | None = None
+    thread: ChatThread | None = None
+
+    if user and thread_id is not None and str(thread_id).isdigit():
+        with get_session() as db:
+            t = db.get(ChatThread, int(thread_id))
+            if not t or t.user_id != user.id:
+                return JSONResponse({"error": "Conversation not found"}, status_code=404)
+            thread = t
+            adk_session_id = t.adk_session_id
+            agent_type = t.agent_type  # trust the stored thread's agent type
+        persist = True
+        chat_user_id = f"user-{user.id}"
     else:
-        session_key = _ADK_CHAT_SESSION_KEY
-    adk_session_id = _ensure_adk_chat_session_id(request, session_key)
+        session_key = (
+            _ADK_TRADING_CHAT_SESSION_KEY if agent_type == "trading" else _ADK_CHAT_SESSION_KEY
+        )
+        adk_session_id = _ensure_adk_chat_session_id(request, session_key)
 
     approval_result = None
     if agent_type == "trading":
@@ -1041,9 +1253,14 @@ async def api_agent_chat(request: Request):
             message=effective_message,
             agent_type=agent_type,
             debug=debug,
+            user_id=chat_user_id,
+            persist=persist,
         )
         if approval_result:
             result["approval_result"] = approval_result
+        if thread is not None:
+            _touch_thread(thread.id, message)
+            result["thread_id"] = thread.id
         return JSONResponse(result)
     except ValueError as e:
         err = str(e)
@@ -1458,9 +1675,16 @@ async def api_briefing_logs(request: Request):
 @web.get("/api/trading/profile")
 async def api_trading_profile_get(request: Request):
     sid = _sid(request)
-    if not sid or sessions.get_client(sid) is None:
+    client = sessions.get_client(sid) if sid else None
+    if not sid or client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     profile = risk_profiles.get(sid)
+    if profile is None:
+        user = _registered_user_for_session(client)
+        if user:
+            profile = load_profile(user.id)
+            if profile:
+                risk_profiles.set(sid, profile)
     if profile is None:
         return JSONResponse({"has_profile": False})
     return JSONResponse({"has_profile": True, "profile": profile.to_dict()})
@@ -1469,7 +1693,8 @@ async def api_trading_profile_get(request: Request):
 @web.post("/api/trading/profile")
 async def api_trading_profile_set(request: Request):
     sid = _sid(request)
-    if not sid or sessions.get_client(sid) is None:
+    client = sessions.get_client(sid) if sid else None
+    if not sid or client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         body = await request.json()
@@ -1478,6 +1703,9 @@ async def api_trading_profile_set(request: Request):
     try:
         profile = build_profile_from_dict(body)
         risk_profiles.set(sid, profile)
+        user = _registered_user_for_session(client)
+        if user:
+            save_profile(user.id, profile)
         return JSONResponse({"ok": True, "profile": profile.to_dict()})
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
