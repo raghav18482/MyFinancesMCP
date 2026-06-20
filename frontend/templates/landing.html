@@ -52,6 +52,95 @@
   </div>
 </section>
 
+<section class="feedback-section" aria-labelledby="feedback-title">
+  <div class="feedback-card">
+    <div class="feedback-head">
+      <span class="feedback-eyebrow">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        See the AI live
+      </span>
+      <h2 id="feedback-title" class="feedback-title">Tell us what you think. <span class="feedback-grad">Get a reply on WhatsApp.</span></h2>
+      <p class="feedback-sub">Drop your feedback below and our AI will craft a personal response and send it straight to your WhatsApp — a quick taste of the assistant that powers MyFinanceMCP.</p>
+    </div>
+
+    <form id="feedback-form" class="feedback-form" novalidate>
+      <input type="hidden" name="token" value="{{ feedback_token }}">
+      <div class="feedback-hp" aria-hidden="true">
+        <label>Leave this empty<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+      </div>
+      <div class="feedback-row">
+        <div class="field">
+          <label for="fb-name">Name <span class="field-optional">(optional)</span></label>
+          <input type="text" id="fb-name" name="name" maxlength="80" placeholder="Your name" autocomplete="name">
+        </div>
+        <div class="field">
+          <label for="fb-phone">WhatsApp number</label>
+          <input type="tel" id="fb-phone" name="phone" required placeholder="e.g. +91 81070 37133" autocomplete="tel" inputmode="tel">
+        </div>
+      </div>
+      <div class="field">
+        <label for="fb-message">Your feedback</label>
+        <textarea id="fb-message" name="feedback" required rows="4" maxlength="1000" placeholder="What do you love, what's missing, what should we build next?"></textarea>
+      </div>
+      <div class="feedback-actions">
+        <button type="submit" id="fb-submit" class="btn btn-primary btn-glow">Send feedback</button>
+        <p id="fb-status" class="feedback-status" role="status" aria-live="polite"></p>
+      </div>
+      <p class="feedback-fineprint">We use your number only to send this one reply. Standard WhatsApp messaging applies.</p>
+    </form>
+  </div>
+</section>
+
+<script>
+(function () {
+  var form = document.getElementById('feedback-form');
+  if (!form) return;
+  var submitBtn = document.getElementById('fb-submit');
+  var statusEl = document.getElementById('fb-status');
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg || '';
+    statusEl.className = 'feedback-status' + (kind ? ' feedback-status--' + kind : '');
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var phone = (form.phone.value || '').trim();
+    var feedback = (form.feedback.value || '').trim();
+    if (!feedback) { setStatus('Please enter your feedback.', 'error'); return; }
+    if (!phone) { setStatus('Please enter your WhatsApp number.', 'error'); return; }
+
+    submitBtn.disabled = true;
+    setStatus('Sending…', '');
+    try {
+      var res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: form.token.value,
+          name: form.name.value,
+          phone: phone,
+          feedback: feedback,
+          website: form.website.value,
+        }),
+      });
+      var data = await res.json();
+      if (res.ok && data.ok) {
+        setStatus(data.message || 'Sent! Check your WhatsApp.', 'success');
+        form.reset();
+        submitBtn.textContent = 'Sent ✓';
+      } else {
+        setStatus(data.error || 'Something went wrong. Please try again.', 'error');
+        submitBtn.disabled = false;
+      }
+    } catch (err) {
+      setStatus('Network error: ' + err.message, 'error');
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
+
 {% set premium_items = [
   ('whatsapp', 'Daily WhatsApp briefings', 'Wake up to a personalised market summary, portfolio P&L, and the news that actually moves your holdings — delivered to your phone every morning.', ''),
   ('ml', 'ML predictive models', 'Multi-timeframe directional forecasts powered by ensemble learning across price action, volatility regimes, and macro signals.', '*'),
