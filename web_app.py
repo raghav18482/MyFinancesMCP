@@ -34,6 +34,8 @@ from services.sector_service import get_sector_overview, get_market_breadth
 from services.risk_profile import risk_profiles, build_profile_from_dict, load_profile, save_profile
 from services.trade_proposals import proposal_store, execute_proposal
 from services.realtime_feed import feed_relay, poll_ltp_fallback
+from services import feedback as feedback_service
+from services.schedular import whatsapp
 
 from session_manager import sessions
 from services.adk_runner_registry import app_name_for, registry
@@ -113,7 +115,14 @@ def _registered_user_for_session(client) -> User | None:
 async def landing(request: Request):
     if _sid(request) and sessions.get_client(_sid(request)):
         return RedirectResponse("/dashboard", status_code=302)
-    return templates.TemplateResponse(request, "landing.html", _ctx(request))
+    ctx = _ctx(request)
+    try:
+        ctx["feedback_token"] = feedback_service.issue_feedback_token()
+    except Exception:
+        # ENCRYPTION_KEY missing/misconfigured: render page without the form token.
+        logger.exception("Could not issue feedback token")
+        ctx["feedback_token"] = ""
+    return templates.TemplateResponse(request, "landing.html", ctx)
 
 
 @web.get("/setup", response_class=HTMLResponse)
@@ -163,6 +172,66 @@ async def logout(request: Request):
         sessions.remove_session(sid)
     request.session.clear()
     return RedirectResponse("/", status_code=302)
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client IP, honouring a single proxy hop (Render/X-Forwarded-For)."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@web.post("/api/feedback")
+async def api_feedback(request: Request):
+    """Public landing-page feedback → AI reply → WhatsApp.
+
+    Guarded by an ENCRYPTION_KEY-signed, single-use, short-lived token issued at
+    landing render time, plus per-IP rate limiting.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    # Honeypot: real users never fill this hidden field.
+    if (body.get("website") or "").strip():
+        return JSONResponse({"ok": True, "message": "Thanks for your feedback!"})
+
+    token = (body.get("token") or "").strip()
+    phone = (body.get("phone") or "").strip()
+    feedback = (body.get("feedback") or "").strip()
+    name = (body.get("name") or "").strip() or None
+
+    try:
+        feedback_service.consume_feedback_token(token)
+        feedback_service.check_rate_limit(_client_ip(request))
+    except feedback_service.FeedbackError as e:
+        return JSONResponse({"error": e.message}, status_code=e.status_code)
+
+    if not feedback:
+        return JSONResponse({"error": "Please enter your feedback."}, status_code=400)
+    if len(feedback) > feedback_service._MAX_FEEDBACK_CHARS:
+        return JSONResponse({"error": "Feedback is too long."}, status_code=400)
+
+    try:
+        normalised_phone = whatsapp._normalise_phone(phone)
+    except ValueError:
+        return JSONResponse(
+            {"error": "Please enter a valid WhatsApp number."}, status_code=400
+        )
+
+    try:
+        reply = await feedback_service.generate_reply(feedback, name)
+        await whatsapp.send(normalised_phone, reply)
+    except Exception:
+        logger.exception("Feedback WhatsApp send failed")
+        return JSONResponse(
+            {"error": "Could not send the message right now. Please try again later."},
+            status_code=502,
+        )
+
+    return JSONResponse({"ok": True, "message": "Sent! Check your WhatsApp."})
 
 
 # ── Authenticated routes ───────────────────────────────────────────────────

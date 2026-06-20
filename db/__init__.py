@@ -7,7 +7,7 @@ Public surface kept tiny on purpose:
 """
 from __future__ import annotations
 
-from .crypto import decrypt_value, encrypt_value
+from .crypto import decrypt_value, encrypt_value, sign_token, unsign_token
 from .engine import DATABASE_URL, engine, get_session, init_db
 from .models import ChatThread, Log, RiskProfile, Schedule, User
 
@@ -23,4 +23,6 @@ __all__ = [
     "ChatThread",
     "encrypt_value",
     "decrypt_value",
+    "sign_token",
+    "unsign_token",
 ]
