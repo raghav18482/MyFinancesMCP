@@ -261,10 +261,10 @@ curl -X POST http://localhost:8000/api/admin/users \
   -H "Content-Type: application/json" \
   -d '{
     "whatsapp_number": "918107037133",
-    "angel_api_key": "Z0hsKZYf",
-    "angel_client_id": "PPSU16696",
-    "angel_password": "8107",
-    "angel_totp_secret": "FP4O3EVUYXZ5Q3WTF6I7JR772Y"
+    "angel_api_key": "",
+    "angel_client_id": "",
+    "angel_password": "",
+    "angel_totp_secret": ""
   }'
 ```
 

@@ -1,0 +1,2 @@
+[mcp_servers.angelone-portfolio]
+url = "http://localhost:8000/mcp/sse"
