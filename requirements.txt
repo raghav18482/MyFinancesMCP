@@ -1,31 +1,56 @@
-smartapi-python
-logzero
-websocket-client
-six
-pyotp
-mcp
-python-dotenv
-fastapi
-uvicorn[standard]
-jinja2
-python-multipart
-itsdangerous
-openai
-gnews
-requests
-yfinance
-nselib
-pandas
-ta
-transformers
-torch
-lightgbm
-scikit-learn
-joblib
-google-adk
+# Pinned to exact versions. An unpinned google-adk resolved to a release
+# without google.adk.errors.already_exists_error and broke a deploy at import
+# time; every dependency here is now pinned so a deploy installs the same
+# versions that were tested locally.
+#
+# To upgrade: change the pin, reinstall, run tests/, then deploy.
+# Every version below has a linux x86_64 / cp312 wheel, matching the
+# python:3.12-slim base image in the Dockerfile.
+
+# ── Broker (Angel One SmartAPI) ────────────────────────────────────────────
+smartapi-python==1.5.5
+logzero==1.7.0
+websocket-client==1.9.2
+six==1.17.0
+pyotp==2.10.0
+
+# ── Web dashboard ──────────────────────────────────────────────────────────
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.32
+itsdangerous==2.2.0
+httpx==0.28.1
+
+# ── MCP server ─────────────────────────────────────────────────────────────
+mcp==1.30.0
+
+# ── Agents and LLM access ──────────────────────────────────────────────────
+google-adk==2.10.0
+# litellm is held back deliberately: 1.82.7 and 1.82.8 were compromised in the
+# March 2026 supply-chain incident. See agents/config.py.
 litellm==1.82.6
-sqlmodel
-psycopg[binary]
-cryptography
-httpx>=0.27.0
-apscheduler
+openai==3.19.2
+
+# ── Market data, research and news ─────────────────────────────────────────
+yfinance==1.7.0
+nselib==2.5.1
+gnews==0.8.2
+requests==2.34.2
+
+# ── Analysis and ML ────────────────────────────────────────────────────────
+pandas==3.0.6
+ta==0.11.0
+scikit-learn==1.9.1
+lightgbm==4.7.0
+joblib==1.6.0
+# FinBERT sentiment. torch is large; drop both if sentiment is disabled.
+transformers==5.17.0
+torch==2.14.0
+
+# ── Persistence and scheduling ─────────────────────────────────────────────
+sqlmodel==0.0.47
+psycopg[binary]==3.3.6
+cryptography==50.0.1
+apscheduler==3.11.3
+python-dotenv==1.2.3
