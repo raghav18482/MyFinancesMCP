@@ -2,7 +2,7 @@
 In-process ADK runners for the web UI: one InMemoryRunner per (Angel web session, agent_type).
 
 Broker tools are bound to sid at agent build time; chat state uses ADK session ids stored
-in the Starlette session (see web_app).
+in the Starlette session (see web.routers.agent).
 """
 from __future__ import annotations
 
