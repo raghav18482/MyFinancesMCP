@@ -182,12 +182,9 @@
         <div id="rt-chart" class="rt-chart"></div>
       </section>
 
-      <div id="rt-boot" hidden data-ws-sid="{{ ws_sid|e }}"></div>
       <script type="application/json" id="rt-holdings-json">{{ holdings_json|safe }}</script>
       <script>
         (function () {
-          var boot = document.getElementById('rt-boot');
-          window.__WS_SID__ = boot ? boot.getAttribute('data-ws-sid') || '' : '';
           try {
             window.__HOLDINGS__ = JSON.parse(document.getElementById('rt-holdings-json').textContent);
           } catch (e) {

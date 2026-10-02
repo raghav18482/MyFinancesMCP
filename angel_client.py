@@ -63,6 +63,17 @@ class AngelOneClient:
     def feed_token(self) -> Optional[str]:
         return self._feed_token
 
+    @property
+    def auth_token(self) -> Optional[str]:
+        """JWT from the active session, required by SmartWebSocketV2 headers."""
+        if not self._session_data:
+            return None
+        return (self._session_data.get("data") or {}).get("jwtToken")
+
+    @property
+    def client_code(self) -> str:
+        return self.client_id
+
     # ── Portfolio ──────────────────────────────────────────────
 
     def get_profile(self) -> dict:

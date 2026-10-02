@@ -34,13 +34,15 @@ from mcp_server import mcp     # noqa: E402  — MCP FastMCP instance
 from web_app import web         # noqa: E402  — FastAPI web dashboard
 from session_manager import sessions  # noqa: E402
 from services.trade_proposals import proposal_store  # noqa: E402
+from services.realtime_feed import feed_relay  # noqa: E402
 
 
 async def _cleanup_loop():
     """Periodically remove expired sessions and stale proposals."""
     while True:
         await asyncio.sleep(600)
-        sessions.cleanup_expired()
+        for sid in sessions.cleanup_expired():
+            feed_relay.stop_feed(sid)
         proposal_store.cleanup_expired()
 
 
@@ -75,6 +77,7 @@ async def _lifespan(_app: Starlette):
                 stop_scheduler()
             except Exception:
                 logger.exception("scheduler failed to stop cleanly")
+        feed_relay.stop_all()
         task.cancel()
         try:
             await task

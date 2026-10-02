@@ -58,7 +58,12 @@ class SessionManager:
         self._created_at.pop(session_id, None)
         logger.info("Session removed: %s", session_id[:8])
 
-    def cleanup_expired(self):
+    def cleanup_expired(self) -> list[str]:
+        """Drop expired sessions and return the ids removed.
+
+        Callers use the return value to release per-session resources such as
+        the market data feed in ``services.realtime_feed``.
+        """
         now = time.time()
         with self._lock:
             expired = [
@@ -69,6 +74,7 @@ class SessionManager:
                 self._remove_unlocked(sid)
         if expired:
             logger.info("Cleaned up %d expired sessions", len(expired))
+        return expired
 
     @property
     def active_count(self) -> int:

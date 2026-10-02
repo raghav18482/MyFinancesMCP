@@ -28,10 +28,8 @@
   var $changeDisplay  = document.getElementById('rt-change');
   var $symbolLabel    = document.getElementById('rt-symbol-label');
 
-  var wsSid = (window.__WS_SID__ || '').trim();
-
   var chartState = null;
-  var ws = null;
+  var feed = null;
   var baseLtp = null;
   var holdingsCache = [];
   var loadGeneration = 0;
@@ -205,9 +203,9 @@
     if (!symbol) return;
     var gen = ++loadGeneration;
 
-    if (ws) {
-      try { ws.close(); } catch (e) { /* ignore */ }
-      ws = null;
+    if (feed) {
+      try { feed.close(); } catch (e) { /* ignore */ }
+      feed = null;
     }
     if (chartState && chartState.chart) {
       try { chartState.chart.dispose(); } catch (e) { /* ignore */ }
@@ -260,41 +258,57 @@
   }
 
   function startLiveFeed(symbol, gen) {
-    if (!wsSid) return;
     var h = holdingsCache.find(function (x) { return x.symbol === symbol; });
     var tok = h && h.symboltoken ? String(h.symboltoken).trim() : '';
-    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var url = proto + '//' + location.host + '/ws/market/' + encodeURIComponent(symbol) + '?sid=' + encodeURIComponent(wsSid);
-    if (tok && /^\d+$/.test(tok)) {
-      url += '&symboltoken=' + encodeURIComponent(tok);
-    }
-    var socket = new WebSocket(url);
-    ws = socket;
 
-    socket.onmessage = function (e) {
-      if (gen !== loadGeneration || socket !== ws) return;
+    var url = '/api/market/stream?symbols=' + encodeURIComponent(symbol);
+    if (tok && /^\d+$/.test(tok)) {
+      url += '&tokens=' + encodeURIComponent(tok);
+    }
+
+    // Same-origin EventSource sends the session cookie, so no session id
+    // needs to appear in the URL. Reconnection is handled by the browser.
+    var source = new EventSource(url);
+    feed = source;
+
+    function stale() {
+      return gen !== loadGeneration || source !== feed;
+    }
+
+    source.addEventListener('subscribed', function (e) {
+      if (stale()) return;
       try {
-        var msg = JSON.parse(e.data);
-        if (msg.error) {
-          console.warn('Live feed:', msg.error);
-          return;
+        var info = JSON.parse(e.data);
+        if (info.unresolved && info.unresolved.length) {
+          console.warn('Live feed could not resolve:', info.unresolved.join(', '));
         }
-        if (msg.status === 'subscribed') return;
-        if (msg.ltp && msg.ltp > 0) {
-          $ltpDisplay.textContent = formatCurrency(msg.ltp);
-          if (baseLtp && baseLtp > 0) {
-            var change = msg.ltp - baseLtp;
-            var pct = (change / baseLtp * 100).toFixed(2);
-            var sign = change >= 0 ? '+' : '';
-            $changeDisplay.textContent = sign + change.toFixed(2) + ' (' + sign + pct + '%)';
-            $changeDisplay.className = 'rt-change ' + (change >= 0 ? 'rt-change--up' : 'rt-change--down');
-          }
-          pushLiveTick(chartState, msg);
-        }
-      } catch (err) { /* ignore parse errors */ }
+      } catch (err) { /* ignore */ }
+    });
+
+    source.addEventListener('tick', function (e) {
+      if (stale()) return;
+      var msg;
+      try { msg = JSON.parse(e.data); } catch (err) { return; }
+      if (!msg.ltp || msg.ltp <= 0) return;
+
+      $ltpDisplay.textContent = formatCurrency(msg.ltp);
+      if (baseLtp && baseLtp > 0) {
+        var change = msg.ltp - baseLtp;
+        var pct = (change / baseLtp * 100).toFixed(2);
+        var sign = change >= 0 ? '+' : '';
+        $changeDisplay.textContent = sign + change.toFixed(2) + ' (' + sign + pct + '%)';
+        $changeDisplay.className = 'rt-change ' + (change >= 0 ? 'rt-change--up' : 'rt-change--down');
+      }
+      pushLiveTick(chartState, msg);
+    });
+
+    source.onerror = function () {
+      if (source.readyState === EventSource.CLOSED) {
+        console.warn('Live feed closed for', symbol);
+      } else {
+        console.debug('Live feed reconnecting for', symbol);
+      }
     };
-    socket.onerror = function () { console.warn('WS error for', symbol); };
-    socket.onclose = function () { console.debug('WS closed for', symbol); };
   }
 
   // ── Event listeners ─────────────────────────────────────
