@@ -193,6 +193,7 @@ Edit `.env` with your values:
 | `ADMIN_API_KEY` | Yes | Static key protecting all `/api/admin/*` endpoints |
 | `SCHEDULER_ENABLED` | Yes (for briefings) | Set to `1` to start the APScheduler tick on process startup |
 | `SESSION_SECRET` | Recommended | Signs session cookies. Random key generated on each restart if unset (invalidates existing cookies) |
+| `ALLOWED_HOSTS` | Recommended | Comma-separated hostnames the app answers to. Unset accepts any `Host` header, which leaves Host-header reflection open in production |
 
 > **Note on two OpenRouter keys:** The server `OPENROUTER_API_KEY` is used by the ADK agents and the daily briefing pipeline. There is a separate *optional* per-browser OpenRouter key for **Dashboard → AI Insights / Ask AI** (`/api/ai/*`) — that is stored only in the browser and never sent to the server's env.
 
@@ -257,7 +258,7 @@ All endpoints require the `X-Admin-Key: <your ADMIN_API_KEY>` header. Browse to 
 
 ```bash
 curl -X POST http://localhost:8000/api/admin/users \
-  -H "X-Admin-Key: admin123" \
+  -H "X-Admin-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "whatsapp_number": "918107037133",

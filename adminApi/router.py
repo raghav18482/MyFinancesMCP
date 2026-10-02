@@ -3,7 +3,7 @@
 All endpoints require the ``X-Admin-Key`` header to match the ``ADMIN_API_KEY``
 env var.  Never returns decrypted secrets in any response.
 
-Mount in web_app.py with::
+Mount in web/app.py with::
 
     from adminApi import admin_router
     web.include_router(admin_router)
@@ -14,15 +14,17 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlmodel import select
 
-from db import decrypt_value, encrypt_value, get_session
-from db.models import Log, Schedule, User
+from .service import UserAlreadyExists, UserNotFound
+from . import service
+from db import get_session
+from db.models import Schedule, User
 
 logger = logging.getLogger(__name__)
 
@@ -125,27 +127,17 @@ def create_user(
     body: UserCreateRequest,
     _: None = Depends(check_admin_key),
 ) -> UserResponse:
-    with get_session() as session:
-        existing = session.exec(
-            select(User).where(User.angel_client_id == body.angel_client_id)
-        ).first()
-        if existing:
-            raise HTTPException(
-                status_code=409,
-                detail=f"User with angel_client_id '{body.angel_client_id}' already exists (id={existing.id}).",
-            )
-        user = User(
-            whatsapp_number=body.whatsapp_number.strip(),
-            angel_api_key=body.angel_api_key.strip(),
-            angel_client_id=body.angel_client_id.strip(),
-            angel_password_encrypted=encrypt_value(body.angel_password),
-            angel_totp_secret_encrypted=encrypt_value(body.angel_totp_secret),
+    try:
+        view = service.create_user(
+            whatsapp_number=body.whatsapp_number,
+            angel_api_key=body.angel_api_key,
+            angel_client_id=body.angel_client_id,
+            angel_password=body.angel_password,
+            angel_totp_secret=body.angel_totp_secret,
         )
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-        logger.info("admin: created user id=%s client_id=%s", user.id, user.angel_client_id)
-        return UserResponse.model_validate(user)
+    except UserAlreadyExists as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return UserResponse.model_validate(view)
 
 
 @admin_router.get(
@@ -154,9 +146,7 @@ def create_user(
     summary="List all users (no secrets returned)",
 )
 def list_users(_: None = Depends(check_admin_key)) -> list[UserResponse]:
-    with get_session() as session:
-        users = session.exec(select(User)).all()
-        return [UserResponse.model_validate(u) for u in users]
+    return [UserResponse.model_validate(v) for v in service.list_users()]
 
 
 @admin_router.get(
@@ -165,11 +155,10 @@ def list_users(_: None = Depends(check_admin_key)) -> list[UserResponse]:
     summary="Get a single user by ID",
 )
 def get_user(user_id: int, _: None = Depends(check_admin_key)) -> UserResponse:
-    with get_session() as session:
-        user = session.get(User, user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
-        return UserResponse.model_validate(user)
+    try:
+        return UserResponse.model_validate(service.get_user(user_id))
+    except UserNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @admin_router.put(
@@ -182,26 +171,18 @@ def update_user(
     body: UserUpdateRequest,
     _: None = Depends(check_admin_key),
 ) -> UserResponse:
-    with get_session() as session:
-        user = session.get(User, user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
-        if body.whatsapp_number is not None:
-            user.whatsapp_number = body.whatsapp_number.strip()
-        if body.angel_api_key is not None:
-            user.angel_api_key = body.angel_api_key.strip()
-        if body.angel_password is not None:
-            user.angel_password_encrypted = encrypt_value(body.angel_password)
-        if body.angel_totp_secret is not None:
-            user.angel_totp_secret_encrypted = encrypt_value(body.angel_totp_secret)
-        if body.is_active is not None:
-            user.is_active = body.is_active
-        user.updated_at = datetime.utcnow()
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-        logger.info("admin: updated user id=%s", user.id)
-        return UserResponse.model_validate(user)
+    try:
+        view = service.update_user(
+            user_id,
+            whatsapp_number=body.whatsapp_number,
+            angel_api_key=body.angel_api_key,
+            angel_password=body.angel_password,
+            angel_totp_secret=body.angel_totp_secret,
+            is_active=body.is_active,
+        )
+    except UserNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return UserResponse.model_validate(view)
 
 
 @admin_router.delete(
@@ -209,16 +190,11 @@ def update_user(
     summary="Soft-delete a user (sets is_active=False, keeps DB row for logs FK integrity)",
 )
 def deactivate_user(user_id: int, _: None = Depends(check_admin_key)) -> dict:
-    with get_session() as session:
-        user = session.get(User, user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User {user_id} not found.")
-        user.is_active = False
-        user.updated_at = datetime.utcnow()
-        session.add(user)
-        session.commit()
-        logger.info("admin: deactivated user id=%s", user_id)
-        return {"ok": True, "user_id": user_id, "is_active": False}
+    try:
+        service.deactivate_user(user_id)
+    except UserNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"ok": True, "user_id": user_id, "is_active": False}
 
 
 # ── Schedule endpoints ────────────────────────────────────────────────────────

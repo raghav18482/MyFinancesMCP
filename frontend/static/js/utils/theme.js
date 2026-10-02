@@ -51,12 +51,28 @@ function formatPercent(val) {
 }
 
 function initChart(container) {
+  // ECharts registers instances against the DOM node, so re-rendering into a
+  // container whose innerHTML was replaced (a loading spinner, an empty state)
+  // leaves a stale instance behind. echarts.init then returns that stale
+  // instance instead of a new one, and setOption draws into a canvas that is
+  // no longer on the page — the chart silently never appears. Dispose first.
+  const existing = echarts.getInstanceByDom(container);
+  if (existing) {
+    if (existing.__autoResizeObserver) {
+      existing.__autoResizeObserver.disconnect();
+      existing.__autoResizeObserver = null;
+    }
+    existing.dispose();
+  }
   return echarts.init(container, null, { renderer: 'canvas' });
 }
 
 function autoResize(chart, container) {
   const ro = new ResizeObserver(() => chart.resize());
   ro.observe(container);
+  // Remembered so initChart can disconnect it when this chart is replaced,
+  // otherwise one observer leaks per re-render.
+  chart.__autoResizeObserver = ro;
   return ro;
 }
 
