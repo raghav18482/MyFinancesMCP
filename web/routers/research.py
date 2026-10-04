@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Request, Query
 from fastapi.responses import JSONResponse
 
 
+from services.ai_service import DEFAULT_OPENROUTER_MODEL, summarize_fundamentals
 from services.fundamental_service import get_stock_fundamentals
 from services.technical_service import compute_technical_indicators
 from services.market_data import (
@@ -26,6 +28,19 @@ from web.dependencies import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Summaries are cached per (symbol, model) so flipping between stock pills does
+# not re-bill the user's OpenRouter key. The prompt holds only public company
+# data — no holdings, no account — so a process-wide cache leaks nothing.
+_summary_cache: dict[tuple[str, str], dict] = {}
+_SUMMARY_TTL = 6 * 3600  # matches the fundamental data cache
+
+
+def _summary_cached(key: tuple[str, str]) -> str | None:
+    entry = _summary_cache.get(key)
+    if entry and (time.time() - entry["ts"]) < _SUMMARY_TTL:
+        return entry["summary"]
+    return None
 
 
 
@@ -48,6 +63,57 @@ async def api_research_fundamental(
     except Exception as e:
         logger.exception("Fundamental API error for %s", symbol)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+
+@router.post("/api/research/fundamental/summary")
+async def api_research_fundamental_summary(request: Request):
+    """Plain-English LLM summary of one stock's fundamentals, for beginners.
+
+    The 0-100 score itself is computed in Python and already present on
+    ``GET /api/research/fundamental`` — this only adds the prose explanation, so
+    the page stays fully useful without an API key.
+    """
+    client = require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    symbol = (body.get("symbol") or "").strip()
+    if not symbol:
+        return JSONResponse({"error": "symbol is required"}, status_code=400)
+
+    api_key = body.get("api_key", "")
+    if not api_key:
+        return JSONResponse(
+            {"error": "Please enter your OpenRouter API key"}, status_code=400
+        )
+
+    model = body.get("model") or DEFAULT_OPENROUTER_MODEL
+    cache_key = (symbol, model)
+
+    if not body.get("refresh"):
+        cached = _summary_cached(cache_key)
+        if cached:
+            return JSONResponse({"summary": cached, "cached": True})
+
+    try:
+        fundamentals = await asyncio.to_thread(get_stock_fundamentals, symbol)
+        if fundamentals.get("error"):
+            return JSONResponse({"error": fundamentals["error"]}, status_code=400)
+
+        summary = await summarize_fundamentals(api_key, fundamentals, model)
+        _summary_cache[cache_key] = {"summary": summary, "ts": time.time()}
+        return JSONResponse({"summary": summary, "cached": False})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.exception("Fundamental summary error for %s", symbol)
+        return JSONResponse({"error": f"Something went wrong: {e}"}, status_code=500)
 
 
 

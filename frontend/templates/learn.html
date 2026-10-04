@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Metrics Guide{% endblock %}
+{% block content %}
+<div class="container learn-page">
+
+  <div class="learn-hero">
+    <p class="page-kicker">Plain-English guide</p>
+    <h1 class="page-title">What the numbers actually mean</h1>
+    <p class="page-sub">
+      Every metric on the Research page explained without jargon &mdash; what it measures,
+      what counts as a good number, and what it quietly hides. None of this page is
+      written by AI: the thresholds here are the exact ones used to score your stocks.
+    </p>
+  </div>
+
+  <div id="learn-loading" class="loading"><div class="spinner"></div></div>
+  <div id="learn-error" class="alert alert-error" style="display:none"></div>
+
+  <div id="learn-content" style="display:none">
+
+    <!-- Six ground rules -->
+    <section class="learn-section">
+      <h2 class="learn-section-title">Before you read a single ratio</h2>
+      <div class="learn-rules" id="learn-intro"></div>
+    </section>
+
+    <!-- Jump links. Deliberately a div: the stylesheet styles every <nav> as a
+         sticky site header, which would pin this over the content. -->
+    <div class="learn-toc" id="learn-toc" role="navigation" aria-label="Jump to a metric"></div>
+
+    <!-- One section per pillar, metrics inside -->
+    <div id="learn-pillars"></div>
+
+    <!-- How the score works -->
+    <section class="learn-section" id="how-it-works">
+      <h2 class="learn-section-title">How the Fundamental Score is calculated</h2>
+      <div class="card learn-scoring">
+        <ol class="learn-steps" id="learn-steps"></ol>
+        <div class="learn-grades" id="learn-grades"></div>
+        <div class="learn-limits" id="learn-limits"></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script type="module" src="{{ asset('/static/js/learn.js') }}"></script>
+{% endblock %}

@@ -198,7 +198,21 @@ async def research_page(request: Request):
     client = require_login(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse(request, "research.html", template_context(request, "research"))
+    ctx = template_context(request, "research")
+    # The AI summary card decrypts the saved OpenRouter key with the client id
+    # as the passphrase, the same way the dashboard does.
+    ctx["client_id"] = client.client_id
+    return templates.TemplateResponse(request, "research.html", ctx)
+
+
+
+@router.get("/learn", response_class=HTMLResponse)
+async def learn_page(request: Request):
+    """Glossary of every fundamental metric, rendered from data/metric_glossary.json."""
+    client = require_login(request)
+    if client is None:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse(request, "learn.html", template_context(request, "learn"))
 
 
 

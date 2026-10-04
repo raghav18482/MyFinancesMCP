@@ -27,6 +27,26 @@ _dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _frontend_dir = os.path.join(_dir, "frontend")
 
 
+class RevalidatingStaticFiles(StaticFiles):
+    """StaticFiles that makes browsers check before reusing a cached asset.
+
+    Starlette sends ``last-modified`` and ``etag`` but no ``Cache-Control``.
+    With no explicit freshness a browser falls back to *heuristic* caching —
+    about 10% of the file's age — so a stylesheet left alone for a week keeps
+    being served from cache for hours after it changes, without ever asking us.
+    The result is an edit that appears to have no effect until a hard reload.
+
+    ``no-cache`` does not mean "do not cache": it means "cache, but revalidate
+    first". Combined with the ETag already being sent, an unchanged file costs
+    one small 304 and no body, while a changed one is picked up immediately.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
 def _allowed_hosts() -> list[str]:
     """Hostnames this app will answer to, from ``ALLOWED_HOSTS`` (comma-separated).
 
@@ -71,8 +91,8 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 
-    app.mount("/static/data", StaticFiles(directory=os.path.join(_dir, "data")), name="data")
-    app.mount("/static", StaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
+    app.mount("/static/data", RevalidatingStaticFiles(directory=os.path.join(_dir, "data")), name="data")
+    app.mount("/static", RevalidatingStaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
 
     app.include_router(admin_router)
     for router in all_routers:

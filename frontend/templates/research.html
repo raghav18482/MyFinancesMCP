@@ -36,16 +36,43 @@
     <div id="fundamental-error" class="alert alert-error" style="display:none"></div>
     <div id="fundamental-content" style="display:none">
 
+      <!-- Fundamental Score -->
+      <div class="card score-card" id="score-card">
+        <div class="score-card-head">
+          <div>
+            <h2>Fundamental Score</h2>
+            <span class="score-sub">Graded against fixed thresholds &mdash; no AI involved, so the same numbers always give the same score.</span>
+          </div>
+          <a href="/learn#how-it-works" class="score-how-link">How is this calculated?</a>
+        </div>
+        <div class="score-body" id="score-body"></div>
+      </div>
+
+      <!-- AI Summary -->
+      <div class="card ai-card" id="summary-card">
+        <div class="ai-card-header">
+          <h2>What this means, in plain English</h2>
+          <button class="btn btn-sm btn-accent" id="summary-regenerate" disabled>Regenerate</button>
+        </div>
+        <div id="summary-content" class="ai-response">
+          <div class="ai-placeholder">
+            Save your OpenRouter API key on the <a href="/dashboard">Dashboard</a> to get a plain-English summary of this stock.
+          </div>
+        </div>
+      </div>
+
       <div class="research-grid">
         <!-- Valuation Metrics -->
         <div class="card research-card">
           <h2>Valuation Metrics</h2>
+          <p class="research-card-hint">Tap any <span class="metric-info-inline">i</span> to see what the metric means and its ideal range.</p>
           <div class="metric-list" id="valuation-metrics"></div>
         </div>
 
         <!-- Financial Health -->
         <div class="card research-card">
           <h2>Financial Health</h2>
+          <p class="research-card-hint">New to these? Start with the <a href="/learn">metrics guide</a>.</p>
           <div class="metric-list" id="health-metrics"></div>
         </div>
       </div>
@@ -119,5 +146,9 @@
   </div>
 </div>
 
-<script type="module" src="/static/js/research.js"></script>
+<!-- Metric explainer popover, positioned next to whichever ⓘ was clicked -->
+<div class="metric-popover" id="metric-popover" role="dialog" aria-modal="false" hidden></div>
+
+<script>window.CLIENT_ID = "{{ client_id }}";</script>
+<script type="module" src="{{ asset('/static/js/research.js') }}"></script>
 {% endblock %}

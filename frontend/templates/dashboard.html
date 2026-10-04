@@ -130,80 +130,16 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+// Key storage, model choice and the AI fetch helper live in utils/ai-key.js so
+// the research page can reuse the same saved key.
+import {
+  PRESET_MODELS, saveKey, hasStoredKey, clearStoredKey,
+  storedModel, storeModel, callAI, renderAiText,
+} from "{{ asset('/static/js/utils/ai-key.js') }}";
+
 (function(){
   const CLIENT_ID = "{{ client_id }}";
-  const LS_KEY = "mfmcp_ai_key";
-  const MODEL_LS_KEY = "mfmcp_ai_model";
-  const PRESET_MODELS = ["openai/gpt-4o-mini","openai/gpt-4o","anthropic/claude-3.5-haiku","google/gemini-2.0-flash-001"];
-  const HAS_SUBTLE = !!(window.crypto && window.crypto.subtle);
-
-  // ── Shared helpers ──
-  function strToBytes(s){return new TextEncoder().encode(s);}
-  function bytesToStr(buf){return new TextDecoder().decode(buf);}
-  function b64Encode(buf){
-    const bytes=new Uint8Array(buf);
-    let binary="";
-    for(let i=0;i<bytes.length;i++) binary+=String.fromCharCode(bytes[i]);
-    return btoa(binary);
-  }
-  function b64Decode(s){
-    const binary=atob(s);
-    const bytes=new Uint8Array(binary.length);
-    for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-    return bytes;
-  }
-
-  // ── AES-GCM path (secure contexts: HTTPS / localhost) ──
-  async function aesEncrypt(plaintext,clientId){
-    const salt=crypto.getRandomValues(new Uint8Array(16));
-    const iv=crypto.getRandomValues(new Uint8Array(12));
-    const raw=await crypto.subtle.importKey("raw",strToBytes(clientId),"PBKDF2",false,["deriveKey"]);
-    const key=await crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:100000,hash:"SHA-256"},raw,{name:"AES-GCM",length:256},false,["encrypt"]);
-    const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,strToBytes(plaintext));
-    return JSON.stringify({v:2,s:b64Encode(salt),i:b64Encode(iv),c:b64Encode(ct)});
-  }
-  async function aesDecrypt(stored,clientId){
-    const{s,i,c}=JSON.parse(stored);
-    const salt=b64Decode(s),iv=b64Decode(i),ct=b64Decode(c);
-    const raw=await crypto.subtle.importKey("raw",strToBytes(clientId),"PBKDF2",false,["deriveKey"]);
-    const key=await crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:100000,hash:"SHA-256"},raw,{name:"AES-GCM",length:256},false,["decrypt"]);
-    const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv},key,ct);
-    return bytesToStr(pt);
-  }
-
-  // ── XOR fallback (non-secure HTTP contexts) ──
-  function xorWithKey(input,secret){
-    const out=new Uint8Array(input.length);
-    for(let i=0;i<input.length;i++) out[i]=input[i]^secret.charCodeAt(i%secret.length);
-    return out;
-  }
-  function xorEncrypt(plaintext,clientId){
-    const data=strToBytes(plaintext);
-    return JSON.stringify({v:1,d:b64Encode(xorWithKey(data,clientId))});
-  }
-  function xorDecrypt(stored,clientId){
-    const{d}=JSON.parse(stored);
-    return bytesToStr(xorWithKey(b64Decode(d),clientId));
-  }
-
-  // ── Unified encrypt / decrypt ──
-  async function encryptKey(plaintext,clientId){
-    return HAS_SUBTLE ? aesEncrypt(plaintext,clientId) : xorEncrypt(plaintext,clientId);
-  }
-  async function decryptKey(clientId){
-    const raw=localStorage.getItem(LS_KEY);
-    if(!raw) return null;
-    try{
-      const obj=JSON.parse(raw);
-      if(obj.v===2 && HAS_SUBTLE) return await aesDecrypt(raw,clientId);
-      if(obj.v===1) return xorDecrypt(raw,clientId);
-      return null;
-    }catch(e){
-      console.warn("Decrypt failed",e);
-      return null;
-    }
-  }
 
   // ── UI refs ──
   const $keyInput=document.getElementById("aiKeyInput");
@@ -227,10 +163,10 @@
     return $modelSelect.value;
   }
   function persistModelChoice(){
-    localStorage.setItem(MODEL_LS_KEY,getEffectiveModel());
+    storeModel(getEffectiveModel());
   }
   function applyStoredModel(){
-    const stored=localStorage.getItem(MODEL_LS_KEY)||PRESET_MODELS[0];
+    const stored=storedModel();
     if(PRESET_MODELS.includes(stored)){
       $modelSelect.value=stored;
       $modelCustom.style.display="none";
@@ -261,20 +197,7 @@
   function showSpinner(el){el.innerHTML='<div class="loading"><div class="spinner"></div></div>';}
   function showError(el,msg){el.innerHTML='<div class="ai-error">'+msg+'</div>';}
   function showText(el,text){
-    const escaped=text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-    const html=escaped
-      .replace(/\*\*(.*?)\*\*/g,"<strong>$1</strong>")
-      .replace(/\n/g,"<br>");
-    el.innerHTML='<div class="ai-text">'+html+'</div>';
-  }
-
-  async function callAI(endpoint,body,errorTarget){
-    const apiKey=await decryptKey(CLIENT_ID);
-    if(!apiKey){showError(errorTarget||$insContent,"Could not decrypt API key. Please re-save your key.");return null;}
-    body.api_key=apiKey;
-    body.model=getEffectiveModel();
-    const res=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    return res.json();
+    el.innerHTML='<div class="ai-text">'+renderAiText(text)+'</div>';
   }
 
   // ── Key management ──
@@ -282,15 +205,14 @@
     const val=$keyInput.value.trim();
     if(!val){$keyInput.focus();return;}
     try{
-      const enc=await encryptKey(val,CLIENT_ID);
-      localStorage.setItem(LS_KEY,enc);
+      await saveKey(val,CLIENT_ID);
       $keyInput.value="";
       setStatus(true);
       loadInsights();
     }catch(e){alert("Encryption failed: "+e.message);}
   });
   $keyClear.addEventListener("click",()=>{
-    localStorage.removeItem(LS_KEY);
+    clearStoredKey();
     setStatus(false);
     $insContent.innerHTML='<div class="ai-placeholder">Enter your OpenRouter API key above to unlock AI insights.</div>';
     $askContent.style.display="none";
@@ -300,8 +222,10 @@
   async function loadInsights(){
     showSpinner($insContent);
     try{
-      const data=await callAI("/api/ai/insights",{},$insContent);
-      if(!data)return;
+      // Persist first: callAI reads the model from storage, and a model typed
+      // into the custom box may not have fired its change handler yet.
+      persistModelChoice();
+      const data=await callAI("/api/ai/insights",{},CLIENT_ID);
       if(data.error){showError($insContent,data.error);return;}
       showText($insContent,data.insight);
     }catch(e){showError($insContent,"Request failed: "+e.message);}
@@ -313,8 +237,8 @@
     $askContent.style.display="block";
     showSpinner($askContent);
     try{
-      const data=await callAI("/api/ai/ask",{question},$askContent);
-      if(!data)return;
+      persistModelChoice();
+      const data=await callAI("/api/ai/ask",{question},CLIENT_ID);
       if(data.error){showError($askContent,data.error);return;}
       showText($askContent,data.answer);
     }catch(e){showError($askContent,"Request failed: "+e.message);}
@@ -335,7 +259,7 @@
   // ── Init ──
   (async()=>{
     applyStoredModel();
-    const hasKey=!!localStorage.getItem(LS_KEY);
+    const hasKey=hasStoredKey();
     setStatus(hasKey);
     if(hasKey)loadInsights();
   })();

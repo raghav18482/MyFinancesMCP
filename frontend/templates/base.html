@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ asset('/static/style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
 <body>
@@ -22,6 +22,7 @@
         <a href="/orders" class="{{ 'active' if active == 'orders' }}">Orders</a>
         <a href="/analytics" class="{{ 'active' if active == 'analytics' }}">Analytics</a>
         <a href="/research" class="{{ 'active' if active == 'research' }}">Research</a>
+        <a href="/learn" class="{{ 'active' if active == 'learn' }}">Learn</a>
         <a href="/sectors" class="{{ 'active' if active == 'sectors' }}">Sectors</a>
         <a href="/news" class="{{ 'active' if active == 'news' }}">News</a>
         <a href="/agent" class="{{ 'active' if active == 'agent' }}">Agent</a>

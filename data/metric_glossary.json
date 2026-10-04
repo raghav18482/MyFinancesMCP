@@ -1,0 +1,724 @@
+{
+  "_about": {
+    "note": "Single source of truth for the fundamental score thresholds AND the /learn page copy. services/fundamental_scoring.py grades against 'bands'; frontend/static/js/learn.js and the research-page info popovers render the prose. Edit a threshold here and both move together.",
+    "verdicts": "good | neutral | bad — these drive the colour shown in the UI. By default they award 1.0 / 0.55 / 0.10 of the metric weight.",
+    "bands": "Evaluated in order; the first band whose 'max' is >= the value wins. A band with max=null is the catch-all and must come last.",
+    "points": "Optional per-band override of the verdict's default award, between 0 and 1. Lets 'fairly valued' score below 'cheap' without needing a fourth verdict colour, so a genuinely excellent company reaches 100 and a merely solid one does not."
+  },
+  "intro": [
+    {
+      "title": "Quality first, then price",
+      "body": "Work out whether it is a good business (ROE, ROCE, margins, cash flow). Only then ask whether the price is fair (P/E, P/B, EV/EBITDA). A wonderful business at a fair price beats a poor business at a cheap one."
+    },
+    {
+      "title": "A ratio on its own means nothing",
+      "body": "Every number needs two comparisons: the same metric for rivals in the same industry, and the same company's own last five years. A P/E of 30 is cheap for an IT firm and expensive for a steel plant."
+    },
+    {
+      "title": "One year is noise, three to five years is a trend",
+      "body": "A single great year can be a land sale, a tax refund, or a one-off order. Look at the direction across several years before believing any number."
+    },
+    {
+      "title": "Cheap is not the same as good",
+      "body": "The most common beginner mistake is buying a low P/E on a business whose sales are shrinking. That is a value trap: the ratio is low because the market expects profits to fall."
+    },
+    {
+      "title": "Fundamentals tell you what to buy, not when",
+      "body": "None of these numbers say anything about timing. That is what the Technical tab is for. A great company can still be a bad entry today."
+    },
+    {
+      "title": "Check the source before you act",
+      "body": "This data comes from Yahoo Finance and for NSE tickers it can be stale, missing, or simply wrong. Before any real money moves, verify the figure in the company's own quarterly filing or on the NSE site."
+    }
+  ],
+  "pillars": {
+    "valuation": {
+      "label": "Valuation",
+      "tagline": "What you are paying",
+      "body": "These ratios compare the share price to something real — profit, assets, or cash flow. They answer 'is this expensive?', never 'is this a good company?'."
+    },
+    "profitability": {
+      "label": "Profitability",
+      "tagline": "How good the business is",
+      "body": "These measure how much profit the company squeezes out of the money and sales it has. This is where you find genuinely high-quality businesses."
+    },
+    "balance_sheet": {
+      "label": "Balance sheet",
+      "tagline": "Can it survive a bad year",
+      "body": "Debt and cash. A profitable company with too much borrowing can still go under; a company sitting on net cash can ride out a downturn and buy rivals cheaply."
+    },
+    "growth": {
+      "label": "Growth & ownership",
+      "tagline": "Which way it is heading",
+      "body": "Sales and profit direction, plus how much of the company the founders still own. Growth justifies a high valuation — its absence makes a cheap stock a trap."
+    }
+  },
+  "metrics": {
+    "pe_ratio": {
+      "label": "P/E Ratio",
+      "full_name": "Price to Earnings",
+      "pillar": "valuation",
+      "unit": "x",
+      "weight": 1.0,
+      "formula": "Share price ÷ earnings per share",
+      "plain": "How many years of the company's current profit you are paying for one share. A ₹2,400 share on a company earning ₹100 per share a year has a P/E of 24 — at today's profit it takes 24 years to earn your money back.",
+      "ideal": "15–25 for most Indian companies",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Negative — the company is loss-making"
+        },
+        {
+          "max": 10,
+          "verdict": "good",
+          "note": "Very cheap — check why the market is pessimistic",
+          "points": 0.9
+        },
+        {
+          "max": 25,
+          "verdict": "good",
+          "note": "Fairly valued"
+        },
+        {
+          "max": 40,
+          "verdict": "neutral",
+          "note": "Expensive — needs strong growth to justify"
+        },
+        {
+          "max": null,
+          "verdict": "bad",
+          "note": "Very expensive at this level of profit"
+        }
+      ],
+      "caveat": "The sector decides what counts as normal: IT and branded FMCG routinely trade at 35–50, PSU banks at 6–12. A blank P/E means there was no profit to divide by.",
+      "watch_out": "A low P/E on a company whose revenue is falling is a value trap, not a bargain."
+    },
+    "forward_pe": {
+      "label": "Forward P/E",
+      "full_name": "Forward Price to Earnings",
+      "pillar": "valuation",
+      "unit": "x",
+      "weight": 0,
+      "formula": "Share price ÷ next year's estimated earnings per share",
+      "plain": "The same idea as P/E, but using what analysts think the company will earn next year instead of what it earned last year.",
+      "ideal": "Lower than the trailing P/E — that means profits are expected to grow",
+      "caveat": "This is a forecast, not a fact, and the forecasts are often wrong. It is shown for context and deliberately left out of the score.",
+      "watch_out": "A forward P/E far below the trailing one can mean last year had a one-off gain that nobody expects to repeat."
+    },
+    "pb_ratio": {
+      "label": "P/B Ratio",
+      "full_name": "Price to Book",
+      "pillar": "valuation",
+      "unit": "x",
+      "weight": 1.0,
+      "formula": "Share price ÷ book value per share (assets minus liabilities)",
+      "plain": "What you pay for ₹1 of the company's net assets — everything it owns minus everything it owes. A P/B of 3 means you are paying ₹3 for ₹1 of accounting net worth.",
+      "ideal": "Under 3 for asset-heavy businesses",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Negative book value — liabilities exceed assets"
+        },
+        {
+          "max": 1,
+          "verdict": "good",
+          "note": "Trading below net asset value",
+          "points": 0.95
+        },
+        {
+          "max": 3,
+          "verdict": "good",
+          "note": "Reasonable"
+        },
+        {
+          "max": 6,
+          "verdict": "neutral",
+          "note": "Rich, unless the business is asset-light"
+        },
+        {
+          "max": null,
+          "verdict": "bad",
+          "note": "Very high relative to net assets"
+        }
+      ],
+      "caveat": "Nearly meaningless for IT and services companies — their value is people and contracts, not factories, so 10x book and above is normal there. The score relaxes this ceiling for the IT sector.",
+      "watch_out": "For a bank, a P/B under 1 is either a real bargain or the market telling you the loan book is worth less than reported."
+    },
+    "ev_ebitda": {
+      "label": "EV/EBITDA",
+      "full_name": "Enterprise Value to EBITDA",
+      "pillar": "valuation",
+      "unit": "x",
+      "weight": 1.0,
+      "formula": "(Market cap + debt − cash) ÷ earnings before interest, tax, depreciation and amortisation",
+      "plain": "The price to buy the whole business including taking on its debts, divided by its rough operating cash profit. Think of it as the price a buyer would pay for the entire company rather than one share.",
+      "ideal": "Under 10 attractive, 10–18 fair, over 25 rich",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Negative — the business is not generating operating profit"
+        },
+        {
+          "max": 10,
+          "verdict": "good",
+          "note": "Attractively priced"
+        },
+        {
+          "max": 18,
+          "verdict": "good",
+          "note": "Fair",
+          "points": 0.8
+        },
+        {
+          "max": 25,
+          "verdict": "neutral",
+          "note": "Rich"
+        },
+        {
+          "max": null,
+          "verdict": "bad",
+          "note": "Very expensive"
+        }
+      ],
+      "caveat": "Fairer than P/E when comparing companies with different debt loads or tax rates, because it ignores both. Not used for banks and NBFCs — the score drops it for them.",
+      "watch_out": "EBITDA ignores the cost of replacing worn-out equipment, so it flatters capital-hungry businesses."
+    },
+    "peg_ratio": {
+      "label": "PEG Ratio",
+      "full_name": "Price/Earnings to Growth",
+      "pillar": "valuation",
+      "unit": "x",
+      "weight": 0.75,
+      "formula": "P/E ratio ÷ expected annual earnings growth rate (in %)",
+      "plain": "Puts the P/E in context of growth. A P/E of 30 is perfectly reasonable if profits are growing 30% a year — that is a PEG of 1.",
+      "ideal": "Under 1 attractive, 1–2 fair, over 2 expensive",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Negative — earnings or growth estimate is negative"
+        },
+        {
+          "max": 1,
+          "verdict": "good",
+          "note": "Growth more than justifies the P/E"
+        },
+        {
+          "max": 2,
+          "verdict": "neutral",
+          "note": "Fairly priced for its growth"
+        },
+        {
+          "max": null,
+          "verdict": "bad",
+          "note": "Expensive even allowing for growth"
+        }
+      ],
+      "caveat": "Only as good as the growth estimate behind it, which is often missing entirely for Indian mid and small caps.",
+      "watch_out": "Useless for companies with lumpy or cyclical earnings — the growth figure swings wildly year to year."
+    },
+    "dividend_yield": {
+      "label": "Dividend Yield",
+      "full_name": "Dividend Yield",
+      "pillar": "valuation",
+      "unit": "%",
+      "weight": 0,
+      "formula": "Annual dividend per share ÷ share price × 100",
+      "plain": "The cash the company pays you each year, as a percentage of what you paid for the share. Buy at ₹1,000 and collect ₹20 a year and the yield is 2%.",
+      "ideal": "1–3% is typical in India",
+      "caveat": "A 0% yield is not bad — a fast-growing company reinvesting every rupee is often the better investment. Left out of the score for that reason.",
+      "watch_out": "A yield above 6% usually means the share price crashed, not that the dividend rose. Check whether the company can actually keep paying it."
+    },
+    "trailing_eps": {
+      "label": "Trailing EPS",
+      "full_name": "Trailing Earnings Per Share",
+      "pillar": "valuation",
+      "unit": "₹",
+      "weight": 0,
+      "formula": "Net profit over the last 12 months ÷ number of shares",
+      "plain": "Each share's slice of last year's profit, in rupees. This is the 'E' underneath the P/E.",
+      "ideal": "Rising year on year",
+      "caveat": "The absolute level tells you nothing on its own — it depends entirely on how many shares exist. Only the direction matters, so it is not scored.",
+      "watch_out": "A share split or bonus issue cuts EPS overnight without anything changing about the business."
+    },
+    "market_cap": {
+      "label": "Market Cap",
+      "full_name": "Market Capitalisation",
+      "pillar": "valuation",
+      "unit": "₹",
+      "weight": 0,
+      "formula": "Share price × total number of shares",
+      "plain": "What the market says the entire company is worth. It is the single most useful number for setting your expectations about volatility.",
+      "ideal": "Not better or worse — just different risk",
+      "caveat": "Rough India guide: large cap above ₹20,000 Cr (stable, heavily researched), mid cap ₹5,000–20,000 Cr, small cap below ₹5,000 Cr (can move 10% on no news at all). SEBI's official split is by rank, not rupees: top 100 companies are large cap, 101–250 mid cap, the rest small cap.",
+      "watch_out": "Small caps look cheap on every ratio far more often, because the risk of being wrong is higher."
+    },
+    "roe": {
+      "label": "ROE",
+      "full_name": "Return on Equity",
+      "pillar": "profitability",
+      "unit": "%",
+      "weight": 1.0,
+      "formula": "Net profit ÷ shareholders' equity × 100",
+      "plain": "The return the company earns on the money its owners put in. ₹100 of shareholder money producing ₹18 of profit a year is an ROE of 18%. It is the closest thing to an interest rate on your share of the business.",
+      "ideal": "Above 15% consistently; above 20% is excellent",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Loss-making"
+        },
+        {
+          "max": 10,
+          "verdict": "bad",
+          "note": "Weak — barely beats a fixed deposit"
+        },
+        {
+          "max": 15,
+          "verdict": "neutral",
+          "note": "Acceptable"
+        },
+        {
+          "max": 20,
+          "verdict": "good",
+          "note": "Strong",
+          "points": 0.85
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Excellent"
+        }
+      ],
+      "caveat": "Debt inflates ROE. Always read it alongside debt-to-equity — a 25% ROE built on heavy borrowing is riskier than an 18% ROE with none.",
+      "watch_out": "Companies that buy back lots of shares shrink their equity base, which lifts ROE without the business improving."
+    },
+    "roce": {
+      "label": "ROCE",
+      "full_name": "Return on Capital Employed",
+      "pillar": "profitability",
+      "unit": "%",
+      "weight": 1.0,
+      "formula": "EBIT ÷ (total assets − current liabilities) × 100",
+      "plain": "The same idea as ROE but measured on all the money the business uses — the owners' and the borrowed. This is the honest version, because it cannot be flattered by taking on debt.",
+      "ideal": "Above 15%, and it must comfortably beat the ~9–10% it costs to borrow in India",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Operating losses"
+        },
+        {
+          "max": 10,
+          "verdict": "bad",
+          "note": "Below the cost of borrowing — growth destroys value here"
+        },
+        {
+          "max": 15,
+          "verdict": "neutral",
+          "note": "Acceptable"
+        },
+        {
+          "max": 20,
+          "verdict": "good",
+          "note": "Strong",
+          "points": 0.85
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Excellent"
+        }
+      ],
+      "caveat": "ROCE above ROE usually signals very little debt. ROE far above ROCE means leverage, not the business, is doing the work. Not used for banks and NBFCs — their capital employed is mostly customer deposits, which makes even a healthy lender look unprofitable here.",
+      "watch_out": "If ROCE sits below the interest rate the company pays, every rupee it borrows to expand makes shareholders poorer."
+    },
+    "profit_margin": {
+      "label": "Profit Margin",
+      "full_name": "Net Profit Margin",
+      "pillar": "profitability",
+      "unit": "%",
+      "weight": 1.0,
+      "formula": "Net profit ÷ revenue × 100",
+      "plain": "Out of every ₹100 of sales, how much the company actually keeps as final profit after every cost, interest payment and tax.",
+      "ideal": "Only comparable within an industry",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Loss-making"
+        },
+        {
+          "max": 5,
+          "verdict": "neutral",
+          "note": "Thin — normal for retail and distribution"
+        },
+        {
+          "max": 10,
+          "verdict": "neutral",
+          "note": "Moderate"
+        },
+        {
+          "max": 20,
+          "verdict": "good",
+          "note": "Healthy",
+          "points": 0.85
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Excellent"
+        }
+      ],
+      "caveat": "Wildly sector-dependent: 20%+ is normal for IT and branded FMCG, 5–10% for manufacturing, 1–3% for retail and distribution. A 2% margin supermarket is not a worse business than a 25% margin software firm — it just runs a different model.",
+      "watch_out": "A sudden margin jump is often a one-off: an asset sale, an insurance payout, or a tax credit."
+    },
+    "operating_margin": {
+      "label": "Operating Margin",
+      "full_name": "Operating Profit Margin",
+      "pillar": "profitability",
+      "unit": "%",
+      "weight": 1.0,
+      "formula": "Operating profit ÷ revenue × 100",
+      "plain": "Profit from the core business before interest payments and tax muddy the picture. The cleanest read on whether the actual operation makes money.",
+      "ideal": "Stable or rising, and comparable to industry peers",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "The core operation is losing money"
+        },
+        {
+          "max": 8,
+          "verdict": "neutral",
+          "note": "Thin"
+        },
+        {
+          "max": 15,
+          "verdict": "neutral",
+          "note": "Moderate"
+        },
+        {
+          "max": 25,
+          "verdict": "good",
+          "note": "Healthy",
+          "points": 0.85
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Excellent — signals real pricing power"
+        }
+      ],
+      "caveat": "Compare it to the net margin. A wide gap between the two means interest costs are eating the profit — go and look at the debt.",
+      "watch_out": "Falling operating margin while revenue grows means the company is buying growth with discounts."
+    },
+    "debt_to_equity": {
+      "label": "Debt to Equity",
+      "full_name": "Debt to Equity Ratio",
+      "pillar": "balance_sheet",
+      "unit": "x100",
+      "weight": 1.0,
+      "formula": "Total debt ÷ shareholders' equity",
+      "plain": "How many rupees the company has borrowed for every ₹1 of owner money. Shown here multiplied by 100, so a reading of 80 means 0.8x and 250 means 2.5x.",
+      "ideal": "Under 50 (0.5x) comfortable, 50–100 manageable, over 200 risky",
+      "bands": [
+        {
+          "max": 25,
+          "verdict": "good",
+          "note": "Virtually debt-free"
+        },
+        {
+          "max": 75,
+          "verdict": "good",
+          "note": "Comfortable",
+          "points": 0.85
+        },
+        {
+          "max": 150,
+          "verdict": "neutral",
+          "note": "Manageable — watch interest costs"
+        },
+        {
+          "max": 250,
+          "verdict": "bad",
+          "note": "High — vulnerable in a downturn"
+        },
+        {
+          "max": null,
+          "verdict": "bad",
+          "note": "Very high — serious solvency risk"
+        }
+      ],
+      "caveat": "Ignore this entirely for banks and NBFCs — borrowing is their raw material and 5–10x is completely routine. The score drops it for those sectors.",
+      "watch_out": "For every other kind of company this is the single best early warning of real trouble. Debt is what turns a bad year into bankruptcy."
+    },
+    "free_cash_flow": {
+      "label": "Free Cash Flow",
+      "full_name": "Free Cash Flow",
+      "pillar": "balance_sheet",
+      "unit": "₹",
+      "weight": 1.0,
+      "formula": "Operating cash flow − capital expenditure",
+      "plain": "The cash genuinely left over after running the business and paying for the new equipment it needs. This is the money actually available to pay down debt, pay dividends, or buy something.",
+      "ideal": "Positive and growing",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Burning cash"
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Generating surplus cash"
+        }
+      ],
+      "caveat": "Profit is an opinion shaped by accounting choices; cash is a fact. When the two disagree over several years, trust the cash. Not used for banks and NBFCs — a lender growing its loan book reports deeply negative cash flow precisely when business is good.",
+      "watch_out": "Years of healthy reported profit alongside negative free cash flow is the classic accounting warning sign. A single negative year during a big expansion is normal."
+    },
+    "net_cash": {
+      "label": "Net Cash Position",
+      "full_name": "Net Cash (cash minus debt)",
+      "pillar": "balance_sheet",
+      "unit": "₹",
+      "weight": 0.75,
+      "formula": "Total cash − total debt",
+      "plain": "What is left if the company used all its cash to clear all its borrowings. Positive means it could pay off every lender tomorrow and still have money in the bank.",
+      "ideal": "Positive — net cash rather than net debt",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "neutral",
+          "note": "Net debt — normal, but read it with debt-to-equity"
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Net cash — a fortress balance sheet"
+        }
+      ],
+      "caveat": "Gives the raw amounts behind the debt-to-equity ratio. A company with ₹5,000 Cr of debt and ₹6,000 Cr of cash has no debt problem at all.",
+      "watch_out": "Net debt is not automatically bad — cheap borrowing to fund a high-ROCE expansion creates value. It is net debt plus weak cash flow that kills."
+    },
+    "cash_conversion": {
+      "label": "Earnings Quality",
+      "full_name": "Operating cash flow vs reported profit",
+      "pillar": "balance_sheet",
+      "unit": "ratio",
+      "weight": 0.75,
+      "formula": "Operating cash flow ÷ net profit (net profit derived from margin × revenue)",
+      "plain": "Checks whether the reported profit actually arrived as cash. A ratio near or above 1 means the profit is real money in the bank, not just an invoice someone has yet to pay.",
+      "ideal": "0.8 and above",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Operating cash flow is negative while profit is reported"
+        },
+        {
+          "max": 0.5,
+          "verdict": "bad",
+          "note": "Little of the reported profit is turning into cash"
+        },
+        {
+          "max": 0.8,
+          "verdict": "neutral",
+          "note": "Some gap between profit and cash"
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Profit is backed by real cash"
+        }
+      ],
+      "caveat": "Can swing around in a single year as customers pay early or late. Worth checking over several years before drawing conclusions.",
+      "watch_out": "Profit rising while operating cash flow stays flat means sales are being booked but not collected. Question the earnings."
+    },
+    "revenue_growth": {
+      "label": "Revenue Growth",
+      "full_name": "Year-on-Year Revenue Growth",
+      "pillar": "growth",
+      "unit": "%",
+      "weight": 1.0,
+      "formula": "(This year's revenue ÷ last year's revenue − 1) × 100",
+      "plain": "How much the company's sales grew compared with last year. Sales are the top line — everything else is a slice of it.",
+      "ideal": "Above 15% strong, 8–15% steady, under 5% stagnating",
+      "bands": [
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Sales are shrinking"
+        },
+        {
+          "max": 5,
+          "verdict": "bad",
+          "note": "Stagnant — barely keeping up with inflation"
+        },
+        {
+          "max": 15,
+          "verdict": "neutral",
+          "note": "Steady"
+        },
+        {
+          "max": 30,
+          "verdict": "good",
+          "note": "Strong",
+          "points": 0.9
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Very strong"
+        }
+      ],
+      "caveat": "Revenue is much harder to massage than profit, so trust this more than earnings growth when the two disagree.",
+      "watch_out": "Growth bought through acquisitions is not the same as the existing business growing. Check whether the company bought its way there."
+    },
+    "earnings_growth": {
+      "label": "Earnings Growth",
+      "full_name": "Year-on-Year Earnings Growth",
+      "pillar": "growth",
+      "unit": "%",
+      "weight": 1.0,
+      "formula": "(This year's profit ÷ last year's profit − 1) × 100",
+      "plain": "How much profit grew compared with last year. Ideally it grows faster than revenue, which means each rupee of sales is becoming more profitable.",
+      "ideal": "Positive and ideally faster than revenue growth",
+      "bands": [
+        {
+          "max": -10,
+          "verdict": "bad",
+          "note": "Profits falling sharply"
+        },
+        {
+          "max": 0,
+          "verdict": "bad",
+          "note": "Profits declining"
+        },
+        {
+          "max": 10,
+          "verdict": "neutral",
+          "note": "Modest"
+        },
+        {
+          "max": 25,
+          "verdict": "good",
+          "note": "Strong",
+          "points": 0.9
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Very strong — verify it is not a one-off",
+          "points": 0.95
+        }
+      ],
+      "caveat": "The lumpiest number on this page. A single asset sale, write-off or tax change can make it meaningless — always check three to five years.",
+      "watch_out": "Earnings growing much faster than revenue year after year cannot continue forever; margins have a ceiling."
+    },
+    "revenue_consistency": {
+      "label": "Revenue Consistency",
+      "full_name": "Multi-year revenue trend",
+      "pillar": "growth",
+      "unit": "ratio",
+      "weight": 0.75,
+      "formula": "Share of years in which revenue rose, across the annual history available",
+      "plain": "Out of the last few years, how often sales actually went up. Steady year-after-year growth is far more valuable than one spectacular year surrounded by flat ones.",
+      "ideal": "Revenue rising in most years",
+      "bands": [
+        {
+          "max": 0.34,
+          "verdict": "bad",
+          "note": "Revenue fell in most years"
+        },
+        {
+          "max": 0.67,
+          "verdict": "neutral",
+          "note": "Mixed record"
+        },
+        {
+          "max": null,
+          "verdict": "good",
+          "note": "Consistently growing"
+        }
+      ],
+      "caveat": "Computed from the annual figures in the Revenue & Profit Trend chart below, so it only covers the years Yahoo Finance supplies — usually four.",
+      "watch_out": "Cyclical businesses (metals, chemicals, real estate) will always look inconsistent here. That is the nature of the sector, not a defect."
+    },
+    "promoter_holding": {
+      "label": "Promoter Holding",
+      "full_name": "Promoter / Insider Shareholding",
+      "pillar": "growth",
+      "unit": "%",
+      "weight": 0.75,
+      "formula": "Shares held by founders or the parent company ÷ total shares × 100",
+      "plain": "How much of the company the founders or parent still own. High promoter holding means the people running it lose money alongside you when they get it wrong.",
+      "ideal": "Above 50% is strong skin in the game; 30–50% is fine",
+      "bands": [
+        {
+          "max": 25,
+          "verdict": "neutral",
+          "note": "Low — common in professionally run and older listed companies"
+        },
+        {
+          "max": 50,
+          "verdict": "good",
+          "note": "Solid alignment",
+          "points": 0.85
+        },
+        {
+          "max": 75,
+          "verdict": "good",
+          "note": "Strong skin in the game"
+        },
+        {
+          "max": null,
+          "verdict": "neutral",
+          "note": "Very high — little free float, so the price can be volatile"
+        }
+      ],
+      "caveat": "This figure comes from Yahoo Finance's 'insider holding' field, which is an imperfect proxy for the Indian promoter-holding disclosure. Verify it on the NSE site before relying on it.",
+      "watch_out": "The direction matters far more than the level. Steady promoter selling quarter after quarter, or a high percentage that turns out to be pledged against loans, is the real red flag."
+    }
+  },
+  "scoring": {
+    "grades": [
+      {
+        "min": 80,
+        "grade": "A",
+        "label": "Strong"
+      },
+      {
+        "min": 65,
+        "grade": "B",
+        "label": "Good"
+      },
+      {
+        "min": 50,
+        "grade": "C",
+        "label": "Average"
+      },
+      {
+        "min": 35,
+        "grade": "D",
+        "label": "Weak"
+      },
+      {
+        "min": 0,
+        "grade": "E",
+        "label": "Poor"
+      }
+    ],
+    "how_it_works": [
+      "Four pillars — Valuation, Profitability, Balance sheet, Growth & ownership — worth 25 points each, for a total of 100.",
+      "Each metric is graded against the bands listed above: good scores its full weight, neutral 55%, bad 10%.",
+      "Metrics with no data are excluded and the pillar rescales to 25, so a stock with patchy data is not silently punished.",
+      "Banks and NBFCs skip EV/EBITDA and debt-to-equity, because borrowing is their business rather than a risk. IT companies get a relaxed price-to-book ceiling, since they own few physical assets.",
+      "The confidence label tells you how many of the metrics actually had data. A low-confidence score is a provisional reading, not a verdict."
+    ],
+    "limits": "This score only measures what is in these numbers. It knows nothing about management quality, competition, pending litigation, pledged promoter shares, related-party transactions, or whether today's price is sensible against the next five years. It is a reading aid to help you learn what the metrics mean — not a recommendation, and not a substitute for reading the company's own filings."
+  }
+}
