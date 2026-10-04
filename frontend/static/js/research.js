@@ -1,4 +1,16 @@
+import { callAI, hasStoredKey, renderAiText } from '/static/js/utils/ai-key.js';
+
 const $ = id => document.getElementById(id);
+
+const CLIENT_ID = window.CLIENT_ID || '';
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 function showLoading(el) { el.style.display = 'flex'; }
 function hideLoading(el) { el.style.display = 'none'; }
@@ -20,6 +32,24 @@ function fmtCrore(v) {
 
 let holdings = [];
 let currentSymbol = null;
+
+// Glossary is fetched once and reused for every metric popover.
+let _glossary = null;
+let _glossaryPromise = null;
+
+// Verdict for each metric on the current stock, flattened from the score's
+// pillars so a metric row can be coloured without walking them again.
+let _verdicts = {};
+
+async function loadGlossary() {
+  if (_glossary) return _glossary;
+  if (!_glossaryPromise) {
+    _glossaryPromise = fetchJSON('/static/data/metric_glossary.json')
+      .then(g => { _glossary = g; return g; })
+      .catch(err => { _glossaryPromise = null; throw err; });
+  }
+  return _glossaryPromise;
+}
 
 let _priceChart = null;
 let _rsiChart = null;
@@ -88,6 +118,7 @@ function renderPills() {
 
 function selectStock(symbol) {
   currentSymbol = symbol;
+  closePopover();  // the open explainer belongs to the previous stock
   document.querySelectorAll('.stock-pill').forEach(p => {
     p.classList.toggle('active', p.dataset.symbol === symbol);
   });
@@ -124,54 +155,290 @@ async function loadFundamental(symbol) {
       return;
     }
 
+    _verdicts = flattenVerdicts(data.score);
+    renderScoreCard(data.score);
     renderValuationMetrics(data.valuation || {});
     renderHealthMetrics(data.health || {});
     renderFinancialsChart(data.revenue_trend || [], data.profit_trend || []);
 
     $('fundamental-content').style.display = 'block';
+    loadAiSummary(symbol);
   } catch (err) {
     hideLoading($('fundamental-loading'));
     showError($('fundamental-error'), 'Failed to load fundamental data: ' + err.message);
   }
 }
 
+// ── Score card ──
+
+function flattenVerdicts(score) {
+  const out = {};
+  for (const pillar of (score && score.pillars) || []) {
+    for (const row of pillar.metrics || []) out[row.key] = row;
+  }
+  return out;
+}
+
+const GRADE_CLASS = { A: 'grade-a', B: 'grade-b', C: 'grade-c', D: 'grade-d', E: 'grade-e' };
+
+const CONFIDENCE_COPY = {
+  high: 'Based on most of the metrics — a solid reading.',
+  medium: 'Some metrics were unavailable, so treat this as approximate.',
+  low: 'Provisional: too few metrics had data to score this reliably.',
+};
+
+function renderScoreCard(score) {
+  const el = $('score-body');
+
+  if (!score || score.total == null) {
+    el.innerHTML = `<div class="score-empty">${escapeHtml(
+      (score && score.note) || 'Not enough fundamental data to score this stock.'
+    )}</div>`;
+    return;
+  }
+
+  // A score built on a handful of metrics must not *look* like a verdict: the
+  // colour is what a beginner reads first, so a provisional score goes grey
+  // instead of green, however high the number happens to be.
+  const provisional = score.confidence === 'low';
+  const gradeClass = provisional ? 'grade-unknown' : (GRADE_CLASS[score.grade] || 'grade-c');
+
+  const pillars = (score.pillars || []).map(p => {
+    const pct = p.score == null ? 0 : (p.score / p.max) * 100;
+    const value = p.score == null ? 'No data' : `${p.score} / ${p.max}`;
+    return `
+      <div class="score-pillar">
+        <div class="score-pillar-head">
+          <span class="score-pillar-label">${escapeHtml(p.label)}</span>
+          <span class="score-pillar-value ${p.score == null ? 'is-empty' : ''}">${escapeHtml(value)}</span>
+        </div>
+        <div class="score-bar"><div class="score-bar-fill ${gradeClass}" style="width:${pct.toFixed(0)}%"></div></div>
+        <div class="score-pillar-sub">${escapeHtml(p.tagline || '')}</div>
+      </div>`;
+  }).join('');
+
+  const list = (items, cls, heading) => {
+    if (!items || !items.length) return '';
+    return `
+      <div class="score-notes ${cls}">
+        <span class="score-notes-head">${heading}</span>
+        <ul>${items.map(t => `<li>${escapeHtml(t)}</li>`).join('')}</ul>
+      </div>`;
+  };
+
+  const lowConfidence = score.confidence !== 'high'
+    ? `<div class="score-confidence conf-${escapeHtml(score.confidence)}">
+         ${escapeHtml(CONFIDENCE_COPY[score.confidence] || '')}
+         Based on ${score.metrics_used} of ${score.metrics_total} metrics.
+       </div>`
+    : '';
+
+  // Name a whole skipped pillar rather than listing its four metrics.
+  const skippedPillars = (score.pillars || [])
+    .filter(p => p.score === null && (p.metrics || []).some(m => m.verdict === 'excluded'))
+    .map(p => p.label);
+  const excludedLoose = (score.excluded || [])
+    .filter(k => !(score.pillars || []).some(
+      p => p.score === null && (p.metrics || []).some(m => m.key === k)))
+    .map(k => (_verdicts[k] && _verdicts[k].label) || k);
+
+  const skippedBits = [
+    ...skippedPillars.map(l => `${l.toLowerCase()} (not measurable from this data)`),
+    ...excludedLoose,
+  ];
+  const sectorNote = skippedBits.length
+    ? `<div class="score-sector-note">Adjusted for this sector: ${escapeHtml(
+        skippedBits.join(', ')
+      )} left out &mdash; not meaningful for this kind of company. Scored out of 100 on the rest.</div>`
+    : '';
+
+  el.innerHTML = `
+    <div class="score-top">
+      <div class="score-dial ${gradeClass}">
+        <span class="score-number">${score.total}</span>
+        <span class="score-outof">/ 100</span>
+      </div>
+      <div class="score-verdict">
+        <span class="score-grade-chip ${gradeClass}">${
+          provisional
+            ? `Provisional &middot; ${escapeHtml(score.grade)}`
+            : `${escapeHtml(score.grade)} &middot; ${escapeHtml(score.label)}`
+        }</span>
+        ${lowConfidence}
+        ${sectorNote}
+      </div>
+    </div>
+    <div class="score-pillars">${pillars}</div>
+    <div class="score-notes-row">
+      ${list(score.strengths, 'is-good', 'Strengths')}
+      ${list(score.concerns, 'is-bad', 'Watch out for')}
+    </div>
+    <p class="score-disclaimer">
+      This only measures the numbers above. It knows nothing about management, competition,
+      litigation or pledged shares &mdash; it is a reading aid, not a recommendation.
+    </p>`;
+}
+
+// ── Metric rows ──
+
+function verdictDot(key) {
+  const row = _verdicts[key];
+  if (!row) return '';
+  const cls = {
+    good: 'vd-good', bad: 'vd-bad', neutral: 'vd-neutral',
+    excluded: 'vd-muted', unknown: 'vd-muted',
+  }[row.verdict] || 'vd-muted';
+  return `<span class="verdict-dot ${cls}" title="${escapeHtml(row.note || '')}"></span>`;
+}
+
+function metricRow(i) {
+  return `<div class="metric-item" data-metric="${escapeHtml(i.key)}">
+     <span class="metric-label">
+       ${verdictDot(i.key)}${escapeHtml(i.label)}
+       <button type="button" class="metric-info" data-metric="${escapeHtml(i.key)}"
+               aria-expanded="false" aria-label="What does ${escapeHtml(i.label)} mean?">i</button>
+     </span>
+     <span class="metric-value">${escapeHtml(i.value)}</span>
+     ${i.sub ? `<span class="metric-sub">${escapeHtml(i.sub)}</span>` : ''}
+   </div>`;
+}
+
 function renderValuationMetrics(v) {
   const items = [
-    { label: 'P/E Ratio', value: fmtNum(v.pe_ratio), sub: v.forward_pe ? `Forward: ${fmtNum(v.forward_pe)}` : '' },
-    { label: 'P/B Ratio', value: fmtNum(v.pb_ratio) },
-    { label: 'EV/EBITDA', value: fmtNum(v.ev_ebitda) },
-    { label: 'PEG Ratio', value: fmtNum(v.peg_ratio) },
-    { label: 'Dividend Yield', value: v.dividend_yield != null ? v.dividend_yield + '%' : '—' },
-    { label: 'Trailing EPS', value: fmtNum(v.trailing_eps) },
+    { key: 'pe_ratio', label: 'P/E Ratio', value: fmtNum(v.pe_ratio), sub: v.forward_pe ? `Forward: ${fmtNum(v.forward_pe)}` : '' },
+    { key: 'pb_ratio', label: 'P/B Ratio', value: fmtNum(v.pb_ratio) },
+    { key: 'ev_ebitda', label: 'EV/EBITDA', value: fmtNum(v.ev_ebitda) },
+    { key: 'peg_ratio', label: 'PEG Ratio', value: fmtNum(v.peg_ratio) },
+    { key: 'dividend_yield', label: 'Dividend Yield', value: v.dividend_yield != null ? v.dividend_yield + '%' : '—' },
+    { key: 'trailing_eps', label: 'Trailing EPS', value: fmtNum(v.trailing_eps) },
   ];
-  $('valuation-metrics').innerHTML = items.map(i =>
-    `<div class="metric-item">
-       <span class="metric-label">${i.label}</span>
-       <span class="metric-value">${i.value}</span>
-       ${i.sub ? `<span class="metric-sub">${i.sub}</span>` : ''}
-     </div>`
-  ).join('');
+  $('valuation-metrics').innerHTML = items.map(metricRow).join('');
 }
 
 function renderHealthMetrics(h) {
   const items = [
-    { label: 'ROE', value: h.roe != null ? h.roe + '%' : '—' },
-    { label: 'ROCE', value: h.roce != null ? h.roce + '%' : '—' },
-    { label: 'Debt to Equity', value: fmtNum(h.debt_to_equity) },
-    { label: 'Free Cash Flow', value: fmtCrore(h.free_cash_flow) },
-    { label: 'Profit Margin', value: h.profit_margin != null ? h.profit_margin + '%' : '—' },
-    { label: 'Operating Margin', value: h.operating_margin != null ? h.operating_margin + '%' : '—' },
-    { label: 'Revenue Growth', value: h.revenue_growth != null ? h.revenue_growth + '%' : '—' },
-    { label: 'Earnings Growth', value: h.earnings_growth != null ? h.earnings_growth + '%' : '—' },
-    { label: 'Promoter Holding', value: h.promoter_holding != null ? h.promoter_holding + '%' : '—' },
+    { key: 'roe', label: 'ROE', value: h.roe != null ? h.roe + '%' : '—' },
+    { key: 'roce', label: 'ROCE', value: h.roce != null ? h.roce + '%' : '—' },
+    { key: 'debt_to_equity', label: 'Debt to Equity', value: fmtNum(h.debt_to_equity) },
+    { key: 'free_cash_flow', label: 'Free Cash Flow', value: fmtCrore(h.free_cash_flow) },
+    { key: 'profit_margin', label: 'Profit Margin', value: h.profit_margin != null ? h.profit_margin + '%' : '—' },
+    { key: 'operating_margin', label: 'Operating Margin', value: h.operating_margin != null ? h.operating_margin + '%' : '—' },
+    { key: 'revenue_growth', label: 'Revenue Growth', value: h.revenue_growth != null ? h.revenue_growth + '%' : '—' },
+    { key: 'earnings_growth', label: 'Earnings Growth', value: h.earnings_growth != null ? h.earnings_growth + '%' : '—' },
+    { key: 'promoter_holding', label: 'Promoter Holding', value: h.promoter_holding != null ? h.promoter_holding + '%' : '—' },
   ];
-  $('health-metrics').innerHTML = items.map(i =>
-    `<div class="metric-item">
-       <span class="metric-label">${i.label}</span>
-       <span class="metric-value">${i.value}</span>
-     </div>`
-  ).join('');
+  $('health-metrics').innerHTML = items.map(metricRow).join('');
 }
+
+// ── Metric explainer popover ──
+
+function closePopover() {
+  const pop = $('metric-popover');
+  pop.hidden = true;
+  document.querySelectorAll('.metric-info[aria-expanded="true"]')
+    .forEach(b => b.setAttribute('aria-expanded', 'false'));
+}
+
+async function openPopover(button) {
+  const key = button.dataset.metric;
+  const pop = $('metric-popover');
+
+  let meta;
+  try {
+    const glossary = await loadGlossary();
+    meta = (glossary.metrics || {})[key];
+  } catch (err) {
+    meta = null;
+  }
+  if (!meta) {
+    pop.innerHTML = `<div class="metric-popover-body">No explanation available for this metric.</div>`;
+  } else {
+    const row = _verdicts[key];
+    const assessment = row && row.note && !['unknown', 'excluded'].includes(row.verdict)
+      ? `<p class="metric-popover-verdict vd-text-${escapeHtml(row.verdict)}">
+           This stock: ${escapeHtml(row.display)} &mdash; ${escapeHtml(row.note)}
+         </p>`
+      : '';
+    pop.innerHTML = `
+      <div class="metric-popover-head">
+        <span class="metric-popover-title">${escapeHtml(meta.full_name || meta.label)}</span>
+        <button type="button" class="metric-popover-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="metric-popover-body">
+        <p class="metric-popover-formula">${escapeHtml(meta.formula || '')}</p>
+        <p>${escapeHtml(meta.plain || '')}</p>
+        ${meta.ideal ? `<p class="metric-popover-ideal"><strong>Ideal:</strong> ${escapeHtml(meta.ideal)}</p>` : ''}
+        ${assessment}
+        ${meta.watch_out ? `<p class="metric-popover-watch"><strong>Watch out:</strong> ${escapeHtml(meta.watch_out)}</p>` : ''}
+        <a class="metric-popover-more" href="/learn#${escapeHtml(key)}">Read more in the guide &rarr;</a>
+      </div>`;
+  }
+
+  // Anchor below the button, nudged left so it never runs off the viewport.
+  pop.hidden = false;
+  const rect = button.getBoundingClientRect();
+  const width = pop.offsetWidth;
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
+  pop.style.left = `${left + window.scrollX}px`;
+  pop.style.top = `${rect.bottom + window.scrollY + 8}px`;
+  button.setAttribute('aria-expanded', 'true');
+}
+
+document.addEventListener('click', (e) => {
+  const info = e.target.closest('.metric-info');
+  if (info) {
+    const wasOpen = info.getAttribute('aria-expanded') === 'true';
+    closePopover();
+    if (!wasOpen) openPopover(info);
+    return;
+  }
+  if (!e.target.closest('#metric-popover') || e.target.closest('.metric-popover-close')) {
+    closePopover();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closePopover();
+});
+
+// ── AI summary ──
+
+async function loadAiSummary(symbol, refresh = false) {
+  const el = $('summary-content');
+  const btn = $('summary-regenerate');
+
+  if (!hasStoredKey()) {
+    btn.disabled = true;
+    el.innerHTML = '<div class="ai-placeholder">Save your OpenRouter API key on the '
+      + '<a href="/dashboard">Dashboard</a> to get a plain-English summary of this stock.</div>';
+    return;
+  }
+
+  btn.disabled = true;
+  el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  try {
+    const data = await callAI('/api/research/fundamental/summary', { symbol, refresh }, CLIENT_ID);
+    // A slow response for a stock the user has already clicked away from must
+    // not overwrite the summary now on screen.
+    if (symbol !== currentSymbol) return;
+
+    if (data.error) {
+      el.innerHTML = `<div class="ai-error">${escapeHtml(data.error)}</div>`;
+    } else {
+      el.innerHTML = `<div class="ai-text">${renderAiText(data.summary)}</div>`;
+    }
+  } catch (err) {
+    if (symbol !== currentSymbol) return;
+    el.innerHTML = `<div class="ai-error">Request failed: ${escapeHtml(err.message)}</div>`;
+  } finally {
+    if (symbol === currentSymbol) btn.disabled = false;
+  }
+}
+
+$('summary-regenerate').addEventListener('click', () => {
+  if (currentSymbol) loadAiSummary(currentSymbol, true);
+});
 
 function renderFinancialsChart(revenue, profit) {
   const container = $('chart-financials');

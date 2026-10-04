@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import yfinance as yf
 
+from services.fundamental_scoring import score_fundamentals
+
 logger = logging.getLogger(__name__)
 
 _cache: dict[str, dict] = {}
@@ -44,6 +46,7 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
         "health": {},
         "revenue_trend": [],
         "profit_trend": [],
+        "score": None,
         "error": None,
     }
 
@@ -76,6 +79,7 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
 
         if not info or info.get("regularMarketPrice") is None:
             result["error"] = f"No data found for {yf_sym}"
+            result["score"] = score_fundamentals(result)
             return result
 
         result["company_name"] = info.get("longName") or info.get("shortName", "")
@@ -114,6 +118,10 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
     except Exception as e:
         logger.warning("Fundamental fetch failed for %s: %s", trading_symbol, e)
         result["error"] = str(e)
+
+    # Scored last so the 0-100 breakdown rides the same 6h cache, and so the
+    # agent tool and the research API both get it without extra work.
+    result["score"] = score_fundamentals(result)
 
     _cache_set(cache_key, result)
     return result
