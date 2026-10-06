@@ -8,12 +8,11 @@ from fastapi.responses import JSONResponse
 
 
 
-from session_manager import sessions
 from adminApi import service as admin_service
 
 from web.dependencies import (
+    current_client,
     registered_user_for_session,
-    session_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,8 +26,7 @@ router = APIRouter()
 
 @router.get("/api/premium/status")
 async def api_premium_status(request: Request):
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = registered_user_for_session(client)
@@ -54,8 +52,7 @@ async def api_premium_register(request: Request):
     with ``Host: attacker.tld`` made the server send the user's plaintext PIN,
     TOTP secret and ``ADMIN_API_KEY`` to that host. Keep this call in-process.
     """
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

@@ -31,6 +31,9 @@ engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_arg
 # until Alembic is introduced.
 _COLUMN_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'pending'",
+    # No default: NULL means "this user has not set an app password yet", which
+    # the login path treats as "cannot log in, re-enroll to set one".
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS app_password_hash VARCHAR",
 )
 
 

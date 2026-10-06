@@ -75,6 +75,32 @@ def _allowed_hosts() -> list[str]:
     return hosts
 
 
+#: Starlette's own default is 14 days. That was harmless when the cookie only
+#: pointed at an in-memory session that died after 8 hours anyway. Now the
+#: cookie's ``uid`` can rebuild a trading session from stored credentials, so
+#: its lifetime *is* the window in which a stolen cookie can trade. Seven days
+#: keeps the convenience the stored credentials are there to provide; shorten it
+#: with ``SESSION_COOKIE_MAX_AGE_SEC`` if you want a tighter bound.
+_DEFAULT_SESSION_COOKIE_MAX_AGE = 7 * 24 * 3600
+
+
+def _session_cookie_max_age() -> int:
+    raw = os.environ.get("SESSION_COOKIE_MAX_AGE_SEC", "").strip()
+    if not raw:
+        return _DEFAULT_SESSION_COOKIE_MAX_AGE
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "SESSION_COOKIE_MAX_AGE_SEC=%r is not an integer; using the default", raw
+        )
+        return _DEFAULT_SESSION_COOKIE_MAX_AGE
+    if value <= 0:
+        logger.warning("SESSION_COOKIE_MAX_AGE_SEC must be positive; using the default")
+        return _DEFAULT_SESSION_COOKIE_MAX_AGE
+    return value
+
+
 def create_app() -> FastAPI:
     """Construct the dashboard application."""
     app = FastAPI(
@@ -88,6 +114,9 @@ def create_app() -> FastAPI:
     app.add_middleware(
         SessionMiddleware,
         secret_key=os.environ.get("SESSION_SECRET", uuid.uuid4().hex),
+        max_age=_session_cookie_max_age(),
+        same_site="lax",
+        https_only=os.environ.get("SESSION_COOKIE_SECURE", "").strip() == "1",
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 

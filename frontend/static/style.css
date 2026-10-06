@@ -222,6 +222,14 @@ td.negative{color:var(--red)}
 .field input{width:100%;padding:.6rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.9rem;outline:none;transition:border-color .15s}
 .field input:focus{border-color:var(--accent)}
 
+/* Country dial code + national number, rendered as one control.
+   The select has a fixed basis so a long country name clips with an ellipsis
+   instead of squeezing the number field; the full name is in a title tooltip. */
+.phone-input{display:flex;gap:.5rem;align-items:stretch}
+.phone-input select{flex:0 0 9.5rem;width:9.5rem;padding:.6rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.9rem;font-family:inherit;outline:none;cursor:pointer;text-overflow:ellipsis;transition:border-color .15s}
+.phone-input select:focus{border-color:var(--accent)}
+.phone-input input{flex:1 1 auto;min-width:0}
+
 .btn{
   display:inline-flex;
   align-items:center;
