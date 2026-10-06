@@ -1,16 +1,22 @@
 import { COLORS, initChart, autoResize } from '../utils/theme.js';
 
+// Three horizons, not seven. The intraday ones were never tractable from daily
+// candles, and the 1-year horizon is a valuation question rather than a
+// direction one. See models/labeling.py HORIZON_BARS.
 const TF_LABELS = {
-  '10min': '10 Min',
-  '1hr':   '1 Hour',
-  '4hr':   '4 Hours',
   '1day':  '1 Day',
   '1week': '1 Week',
   '1month':'1 Month',
-  '1year': '1 Year',
 };
 
-const TF_ORDER = ['10min', '1hr', '4hr', '1day', '1week', '1month', '1year'];
+const TF_ORDER = ['1day', '1week', '1month'];
+
+/** Name the engine honestly: a trained model, or the rule-based fallback. */
+function engineLabel(data) {
+  if (data.model_type === 'heuristic') return 'Rule-based score (no model)';
+  const version = data.model_version ? ` ${String(data.model_version).slice(0, 8)}` : '';
+  return `Model${version}`;
+}
 
 export function renderPrediction(container, data) {
   if (!data || data.error) {
@@ -42,10 +48,22 @@ export function renderPrediction(container, data) {
       <span class="pred-outlook-score">${(overall_score * 100).toFixed(1)}%</span>
     </div>
     <div class="pred-model-tag">
-      ${model_type === 'lightgbm' ? 'ML Model' : 'Technical Analysis'} &bull; ${symbol.replace('-EQ', '')}
+      ${engineLabel(data)} &bull; ${symbol.replace('-EQ', '')}
     </div>
   `;
   wrapper.appendChild(header);
+
+  // When no model is registered these are rule-based technical scores. Saying
+  // so is the point: the previous UI labelled them "Technical Analysis" in the
+  // same style as a model result, which read as a methodology choice rather
+  // than as the absence of a model.
+  if (data.model_type === 'heuristic' || data.calibrated === false) {
+    const notice = document.createElement('div');
+    notice.className = 'pred-notice';
+    notice.textContent = data.disclaimer
+      || 'Confidence shown is not a calibrated probability.';
+    wrapper.appendChild(notice);
+  }
 
   const grid = document.createElement('div');
   grid.className = 'pred-grid';

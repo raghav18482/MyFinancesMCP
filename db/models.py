@@ -6,9 +6,21 @@ schema first changes after this commit.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel import Field, SQLModel
+
+
+def utcnow() -> datetime:
+    """Timezone-aware UTC now.
+
+    SQLModel maps ``datetime`` columns through ``UTCDateTime``, whose bind
+    processor rejects naive values outright — on every backend, not just
+    SQLite. ``datetime.utcnow`` returns a naive value, so using it as a default
+    factory makes every insert raise "Datetime values must have timezone
+    information". Keep this the single source of the timestamp default.
+    """
+    return datetime.now(timezone.utc)
 
 
 class User(SQLModel, table=True):
@@ -24,8 +36,8 @@ class User(SQLModel, table=True):
     angel_access_token: str | None = None
 
     is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class Schedule(SQLModel, table=True):
@@ -39,7 +51,7 @@ class Schedule(SQLModel, table=True):
     last_run: datetime | None = None
     enabled: bool = Field(default=True, index=True)
     status: str = Field(default="pending", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class Log(SQLModel, table=True):
@@ -51,7 +63,7 @@ class Log(SQLModel, table=True):
     status: str
     message: str | None = None
     duration_ms: int | None = None
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class RiskProfile(SQLModel, table=True):
@@ -68,7 +80,54 @@ class RiskProfile(SQLModel, table=True):
     max_position_pct: float
     allowed_products: str  # comma-separated e.g. "DELIVERY" or "DELIVERY,INTRADAY"
     max_daily_trades: int
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class DecisionRecord(SQLModel, table=True):
+    """Append-only record of every trade decision, including blocked ones.
+
+    Written from ``services.trade_proposals.execute_proposal`` on success, on
+    compliance block, and on execution failure. A blocked trade is precisely
+    the thing an audit asks about, so it is recorded rather than discarded.
+
+    There is deliberately no update path. Correcting a record means writing a
+    new one; mutating history is the thing this table exists to prevent.
+    """
+
+    __tablename__ = "decision_records"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int | None = Field(default=None, foreign_key="users.id", index=True)
+    session_ref: str | None = Field(default=None, index=True)
+
+    proposal_id: str = Field(index=True)
+    symbol: str = Field(index=True)
+    side: str
+    quantity: float
+    price: float | None = None
+
+    # "executed" | "blocked" | "failed" | "rejected"
+    outcome: str = Field(index=True)
+    approved_by: str | None = None
+    order_id: str | None = None
+
+    # Hash of the inputs the decision was made on, so the payload can be shown
+    # to be unaltered without storing a second copy of it.
+    payload_hash: str | None = None
+    payload_json: str | None = None
+
+    # Which model and feature contract informed it, so a decision can be
+    # reproduced against the exact artefacts that produced it.
+    model_version: str | None = None
+    feature_set_version: int | None = None
+    model_scores_json: str | None = None
+
+    # Which ruleset was in force, and what it said.
+    ruleset_id: str | None = None
+    compliance_json: str | None = None
+
+    rationale: str | None = None
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class ChatThread(SQLModel, table=True):
@@ -86,5 +145,5 @@ class ChatThread(SQLModel, table=True):
     adk_session_id: str = Field(index=True, unique=True)
     title: str = Field(default="New conversation")
     archived: bool = Field(default=False, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow, index=True)

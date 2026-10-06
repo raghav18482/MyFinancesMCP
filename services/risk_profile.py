@@ -11,6 +11,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from db.models import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ def save_profile(user_id: int, profile: ClientRiskProfile) -> None:
                 existing.max_position_pct = profile.max_position_pct
                 existing.allowed_products = products_str
                 existing.max_daily_trades = profile.max_daily_trades
-                existing.updated_at = datetime.utcnow()
+                existing.updated_at = utcnow()
                 db.add(existing)
             else:
                 db.add(DBRiskProfile(

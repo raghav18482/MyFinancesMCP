@@ -1372,6 +1372,11 @@ td.negative{color:var(--red)}
 .pred-outlook-label{font-size:1.1rem;font-weight:800;letter-spacing:.04em;font-family:var(--font-display)}
 .pred-outlook-score{font-size:.82rem;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
 .pred-model-tag{font-size:.7rem;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.04em}
+/* Shown when the rule-based fallback is serving, or when the probability is
+   not calibrated. Deliberately readable rather than a faint footnote. */
+.pred-notice{margin:.5rem 0 .75rem;padding:.5rem .7rem;font-size:.75rem;line-height:1.45;
+  color:var(--warn,#b45309);background:rgba(180,83,9,.08);
+  border-left:3px solid var(--warn,#b45309);border-radius:4px}
 
 .pred-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.65rem}
 @media(max-width:1000px){.pred-grid{grid-template-columns:repeat(4,1fr)}}

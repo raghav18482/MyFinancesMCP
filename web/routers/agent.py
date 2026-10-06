@@ -19,6 +19,7 @@ from services.trade_proposals import proposal_store, execute_proposal
 from session_manager import sessions
 from services.adk_runner_registry import app_name_for, registry
 
+from db.models import utcnow
 from web.dependencies import (
     ADK_CHAT_SESSION_KEY,
     ADK_TRADING_CHAT_SESSION_KEY,
@@ -80,7 +81,7 @@ def _touch_thread(thread_id: int, first_message: str) -> None:
                 return
             if t.title == "New conversation" and first_message.strip():
                 t.title = _derive_title(first_message)
-            t.updated_at = datetime.utcnow()
+            t.updated_at = utcnow()
             db.add(t)
             db.commit()
     except Exception:
@@ -190,7 +191,7 @@ async def api_agent_thread_rename(request: Request, thread_id: int):
         if not thread or thread.user_id != user.id:
             return JSONResponse({"error": "Conversation not found"}, status_code=404)
         thread.title = title
-        thread.updated_at = datetime.utcnow()
+        thread.updated_at = utcnow()
         db.add(thread)
         db.commit()
         db.refresh(thread)

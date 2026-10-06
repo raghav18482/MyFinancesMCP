@@ -42,8 +42,19 @@ requests==2.34.2
 pandas==3.0.6
 ta==0.11.0
 scikit-learn==1.9.1
-lightgbm==4.7.0
 joblib==1.6.0
+# Parquet backend for the local market store (services/marketstore).
+pyarrow==25.0.1
+# Feature attribution for predictions. Replaces sorting features by absolute
+# magnitude, which ranked whichever feature had the largest scale.
+shap==0.52.0
+# lightgbm needs libomp, which the python:3.12-slim base image provides via its
+# manylinux wheel but a bare macOS install does not. models/train.py falls back
+# to scikit-learn's HistGradientBoostingClassifier when the import fails and
+# records which estimator was used in the model registry, so a missing libomp
+# degrades the estimator rather than breaking the build.
+#   macOS: brew install libomp
+lightgbm==4.7.0
 # FinBERT sentiment. torch is large; drop both if sentiment is disabled.
 transformers==5.17.0
 torch==2.14.0

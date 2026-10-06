@@ -19,6 +19,8 @@ from services.news_service import (
     normalize_period as normalize_news_period,
     search_news_articles,
 )
+from services.features import FeatureContractMismatch
+from services.prediction_service import model_status, predict_direction
 from services.sector_service import get_market_breadth, get_sector_overview
 from services.sentiment_service import analyze_text
 from services.technical_service import compute_technical_indicators
@@ -83,6 +85,46 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
             pass
         return compute_technical_indicators(candles, sym, avg_price)
 
+    def research_price_prediction(symbol: str, days: int = 400) -> dict[str, Any]:
+        """Calibrated probability that a stock rises, over 1 day, 1 week and 1 month.
+
+        Returns ``model_type`` naming the engine: a registered model, or
+        ``"heuristic"`` when none is trained, in which case the numbers are
+        rule-based technical scores rather than model output and carry a
+        ``disclaimer`` saying so. Quote ``probability_up``; never restate it as
+        a different number.
+        """
+        client = sessions.get_client(session_id)
+        if client is None:
+            return {"error": "No Angel session; required to fetch price history."}
+
+        days = max(120, min(int(days), 365 * 2))
+        raw = fetch_stock_history_candles(client, symbol, days, "ONE_DAY")
+        if not raw.get("ok"):
+            return raw
+
+        candles = raw.get("candles") or []
+        if not candles:
+            return {"error": f"No candle data for {symbol}"}
+
+        try:
+            # The interval is stated, not assumed: the predictor rejects a
+            # mismatch with the model's own record rather than guessing.
+            return predict_direction(
+                candles, raw.get("tradingsymbol", symbol), interval="ONE_DAY"
+            )
+        except FeatureContractMismatch as e:
+            return {"error": str(e),
+                    "hint": "The registered model does not match this input. "
+                            "Retrain, or check out the matching revision."}
+
+    def research_model_status() -> dict[str, Any]:
+        """Which prediction engine is live: a trained model, or the heuristic fallback.
+
+        Call this before presenting any prediction as a model result.
+        """
+        return model_status()
+
     def research_portfolio_sector_news(period: str = "7d") -> dict[str, Any]:
         """Fetch Google News headlines grouped by portfolio sector (top sectors by invested value)."""
         client = sessions.get_client(session_id)
@@ -136,6 +178,8 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
         research_sector_portfolio_overview,
         research_financial_text_sentiment,
         research_technical_indicators,
+        research_price_prediction,
+        research_model_status,
         research_portfolio_sector_news,
         research_portfolio_news_with_sentiment,
         research_news_search,

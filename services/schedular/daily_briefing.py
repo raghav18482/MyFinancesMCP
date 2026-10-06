@@ -5,7 +5,8 @@ For one ``session_id``:
 1. Fetch holdings from Angel One.
 2. Per stock: 70 days of daily candles (using the symboltoken already in the
    holdings response, so no extra ``search_scrip`` call) -> drop_3d / 1w / 1m
-   + LightGBM ``predict_direction`` predictions for 1day / 1week.
+   + ``predict_direction`` estimates for 1day / 1week / 1month, each tagged
+     with the engine that produced them.
 3. Send the structured snapshot to OpenRouter with a fixed prompt.
 4. Return a WhatsApp-ready plain-text string with per-stock signals
    (green / yellow / red) decided by the LLM.
@@ -53,14 +54,25 @@ _RATE_LIMIT_TOKENS = (
 
 SYSTEM_PROMPT = """You are a WhatsApp portfolio briefer for an Indian retail
 investor on NSE. You receive a JSON snapshot of the user's holdings with, for
-each stock: current price, % change vs 3 days / 1 week / 1 month ago, and
-LightGBM model predictions for 1-day and 1-week direction.
+each stock: current price, % change vs 3 days / 1 week / 1 month ago, and a
+direction estimate for 1 day, 1 week and 1 month.
+
+About the direction estimates — read `ml.model_type` before you use them:
+- "heuristic" means NO trained model is running and these are rule-based
+  technical scores. Never call them ML, a model, or a prediction; if you
+  mention them at all, say "technical score".
+- Anything else is a trained model. Its `probability_up` is calibrated.
+- The 1-month estimate is the most reliable of the three. The 1-day and 1-week
+  estimates measured close to random in validation, so treat them as weak
+  corroboration only — never as the main reason for a call.
+- A probability near 0.5 means no view. Do not dress that up as a signal.
 
 Decide a signal per stock and emit a WhatsApp-ready message:
 - 🟢  Good buy zone today: price has meaningfully dropped recently (typically
-       at least one of 3d/1w/1m drop ≤ -3%) AND ML 1-day/1-week is not bearish.
+       at least one of 3d/1w/1m drop ≤ -3%) AND the direction estimates are
+       not bearish.
 - 🔴  Don't buy today: price has run up sharply (e.g. 3d > +3% or 1w > +5%) OR
-       ML 1-day/1-week is bearish with reasonable confidence.
+       the 1-month estimate is bearish.
 - 🟡  Neutral: anything in between.
 
 Output rules:
@@ -138,9 +150,16 @@ def _fetch_candles_by_token(
     return result["data"]
 
 
-def _collect_stock_snapshot(client: Any, rec: dict[str, Any]) -> dict[str, Any]:
-    """Build one stock's snapshot. Raises on unrecoverable errors."""
-    candles = _fetch_candles_by_token(client, rec["exchange"], rec["token"])
+def _collect_stock_snapshot(
+    client: Any, rec: dict[str, Any], interval: str = "ONE_DAY"
+) -> dict[str, Any]:
+    """Build one stock's snapshot. Raises on unrecoverable errors.
+
+    ``interval`` is threaded through to the predictor rather than assumed,
+    because a model trained on a different bar size must refuse the request.
+    """
+    candles = _fetch_candles_by_token(client, rec["exchange"], rec["token"],
+                                      interval=interval)
     if len(candles) < _MIN_CANDLES_REQUIRED:
         raise RuntimeError(f"only {len(candles)} candles, need at least {_MIN_CANDLES_REQUIRED}")
 
@@ -155,15 +174,25 @@ def _collect_stock_snapshot(client: Any, rec: dict[str, Any]) -> dict[str, Any]:
 
     ml_block: dict[str, Any] = {}
     try:
-        ml = predict_direction(candles, rec["symbol"])
+        # _fetch_candles_by_token defaults to ONE_DAY; pass it through so a
+        # model trained on other bars refuses rather than guessing.
+        ml = predict_direction(candles, rec["symbol"], interval=interval)
         if "error" in ml:
             ml_block = {"error": ml["error"]}
         else:
             preds = ml.get("predictions", {})
             ml_block = {
                 "outlook": ml.get("overall_outlook"),
+                # Stated so the briefing can say "technical score" rather than
+                # "model says" when no model is registered.
+                "model_type": ml.get("model_type"),
+                "calibrated": ml.get("calibrated"),
                 "1day": preds.get("1day"),
                 "1week": preds.get("1week"),
+                # 1month is the only horizon that measured a real edge
+                # (AUC 0.55 against 0.50 for the other two), so it has to reach
+                # the brief rather than being computed and thrown away.
+                "1month": preds.get("1month"),
             }
     except Exception as e:
         logger.warning("predict_direction failed for %s: %s", rec["symbol"], e)

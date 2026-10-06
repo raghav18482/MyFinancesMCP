@@ -1,6 +1,6 @@
 # MyFinanceMCP — Angel One Portfolio Tracker
 
-A multi-user MCP server and web dashboard for tracking your Angel One portfolio, with AI-powered daily briefings, a trading agent, and ML-based price predictions.
+A multi-user MCP server and web dashboard for tracking your Angel One portfolio, with AI-powered daily briefings, a trading agent, and calibrated ML price predictions.
 
 ## Features
 
@@ -9,7 +9,10 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 - **Finance ADK Agent** — chat with the Google ADK finance assistant (Angel One + research tools) via the **Agent** tab. Requires `OPENROUTER_API_KEY` on the server
 - **Trading ADK Agent** — risk-aware, proposal-based order execution agent. Analyses prices and technicals; proposes trades but never places orders without explicit approval
 - **Daily Briefing Scheduler** — automatically sends a WhatsApp message each day with per-stock signals (green/yellow/red), LightGBM predictions, and an LLM-written summary of your portfolio
-- **ML Price Prediction** — LightGBM model predicts price direction across 7 timeframes (10 min → 1 year) using technical indicators, price-action features, and sentiment
+- **ML Price Prediction** — gradient-boosted direction models over 1 day, 1 week and 1 month, trained on daily bars with purged walk-forward validation and isotonic calibration. Features span technicals, cross-sectional ranks, market and industry context, delivery and turnover flow, point-in-time fundamentals and FinBERT news sentiment. Every prediction states which engine produced it; when no model is registered the response is labelled a rule-based score, not a model output
+- **Local market store** — the whole NSE cash market, one call per trading day from the exchange bhavcopy, kept as Parquet (`services/marketstore`). Carries delivery percentage, which the broker candle API does not expose
+- **Peer-relative research** — valuation and quality percentiles against NSE industry peers, analyst estimate revision momentum, and ownership/flow signals
+- **Mandate compliance gate** — proposed trades are checked against a dated, versioned ruleset and blocked with the specific rule cited; every decision, including blocked ones, lands in an append-only decision record
 - **Admin API** — REST endpoints (`/api/admin/*`) for registering premium users with Fernet-encrypted Angel credentials and managing their schedules
 - **Multi-user** — each session authenticates with its own Angel One credentials; premium users' credentials are stored encrypted in Postgres
 - **Zero plaintext credential storage** — transient sessions live only in RAM; premium user credentials are encrypted at rest with a Fernet key
@@ -43,9 +46,28 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 │   │   ├── runner.py            #     APScheduler tick (every 1 min)
 │   │   ├── repository.py        #     DB claim / finish (FOR UPDATE SKIP LOCKED)
 │   │   ├── job_executor.py      #     Per-schedule pipeline (session → briefing → WhatsApp)
-│   │   ├── daily_briefing.py    #     LLM briefing generation (holdings + candles + LightGBM)
+│   │   ├── daily_briefing.py    #     LLM briefing generation (holdings + candles + model)
 │   │   └── whatsapp.py          #     WhatsApp delivery via webhook
-│   ├── prediction_service.py    #   LightGBM price-direction predictions
+│   ├── marketstore/             #   Local NSE history + point-in-time store
+│   │   ├── bhavcopy.py          #     One day of the whole market, normalised
+│   │   ├── store.py             #     Parquet, partitioned by year, idempotent
+│   │   ├── backfill.py          #     Resumable CLI backfill
+│   │   ├── universe.py          #     451 names with cap band and NSE industry
+│   │   └── pit.py               #     Point-in-time fundamental snapshots
+│   ├── features/                #   The versioned feature contract
+│   │   ├── contract.py          #     Ordered feature list + interval guards
+│   │   ├── technical.py         #     Indicators, vectorised across the panel
+│   │   ├── cross_sectional.py   #     Ranks within universe and industry
+│   │   ├── market_context.py    #     Market and industry context
+│   │   ├── flow.py              #     Delivery % and turnover
+│   │   ├── fundamental.py       #     Scores read through the PIT store
+│   │   └── sentiment.py         #     FinBERT aggregates from the news archive
+│   ├── compliance/              #   Mandate gate over a dated ruleset
+│   ├── prediction_service.py    #   Registry-backed, interval-strict predictions
+│   ├── decision_record.py       #   Append-only audit trail for trades
+│   ├── peer_service.py          #   Valuation percentiles vs industry peers
+│   ├── estimates_service.py     #   Consensus, revision momentum, surprises
+│   ├── ownership_service.py     #   Delivery, deals, insiders (pluggable source)
 │   ├── ai_service.py            #   OpenRouter AI helpers
 │   ├── technical_service.py     #   RSI, MACD, Bollinger, SMA, volume signals
 │   ├── fundamental_service.py   #   Fundamental data
@@ -53,13 +75,21 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 │   ├── sector_service.py        #   Sectoral analysis
 │   ├── news_service.py          #   News fetching
 │   ├── risk_profile.py          #   User risk profile
-│   ├── trade_proposals.py       #   In-memory proposal store for trading agent
+│   ├── trade_proposals.py       #   Proposal store + risk and compliance gates
 │   └── realtime_feed.py         #   Real-time price feed
 │
 ├── integrations/                # Adapters bridging sessions ↔ MCP / local accounts
-├── models/                      # LightGBM model training scripts
+├── models/                      # Labelling, validation, registry, training
+│   ├── labeling.py              #   Triple barriers, CUSUM events, weights
+│   ├── validation.py            #   Purged walk-forward CV and metrics
+│   ├── registry.py              #   Model + contract + metrics, versioned
+│   ├── train.py                 #   The training CLI
+│   └── artifacts/               #   Trained models and their reports
 ├── frontend/                    # Jinja2 templates and static assets (CSS, JS)
 ├── data/                        # JSON data files served under /static/data
+│   ├── compliance_rules.json    #   Mandate ruleset (TEMPLATE — see the file)
+│   ├── market/                  #   Parquet daily bars
+│   └── pit/                     #   Point-in-time snapshots
 ├── requirements.txt             # Python dependencies
 ├── Dockerfile                   # Container definition
 └── .env.example                 # Environment variable template
@@ -210,11 +240,66 @@ The server starts on `http://localhost:8000`:
 - Swagger UI: `http://localhost:8000/docs`
 - MCP SSE endpoint: `http://localhost:8000/mcp/sse`
 
+The app runs without a trained model. Predictions then come from a rule-based
+technical score, and every response and the dashboard label say so.
+
+## Training the Prediction Model
+
+**1. Build the market store.** One HTTP call per trading day pulls the entire
+NSE cash market, including delivery percentage. Resumable — interrupt it freely.
+
+```bash
+python -m services.marketstore.backfill --from 2020-01-01
+```
+
+The delivery-enriched bhavcopy archive starts around January 2020; earlier dates
+return "data not found". Check progress any time with `--status`.
+
+**2. Train.** Walk-forward validated, calibrated, and registered with its full
+contract:
+
+```bash
+python models/train.py
+```
+
+Artefacts land in `models/artifacts/<version>/` with a `report.md` you should
+read before trusting anything. Use `--sample` for a fast smoke test and
+`--no-register` to evaluate without making a model live.
+
+**What to expect.** An out-of-sample AUC near 0.54 on daily Indian equities is a
+real result. A number far above that is almost always a leak rather than an
+edge, and should be investigated as a bug rather than celebrated. Shorter
+horizons are weaker: in the first run the 1-day and 1-week models scored ~0.50
+(no signal) while 1-month scored 0.55.
+
+**On fundamentals and sentiment.** Both feature blocks are *forward-only*.
+yfinance reports today's restated figures, so historical values cannot be
+reconstructed without look-ahead bias. Snapshots accumulate from the day capture
+begins — every fundamentals fetch the app makes writes one. Until the archive is
+deep enough, those blocks are null, and the training report says so explicitly
+rather than implying coverage the model did not have.
+
+## Mandate Compliance
+
+Proposed trades pass through a hard gate before reaching the broker. Rules live
+in `data/compliance_rules.json` with an effective date and a source per rule, so
+a rule change is a data edit and the ruleset in force on a past date can be
+reconstructed.
+
+> The shipped file is a **template**. Its limits are placeholders that exist to
+> exercise the engine. Before it governs a real trade, every limit must be read
+> from and cited to the current SEBI master circular, the scheme information
+> document, and the fund's own policy. The loader logs a warning while the
+> template is in use, and every API response carries `is_template: true`.
+
+Every decision — executed, blocked or failed — is written to the append-only
+`decision_records` table and readable at `GET /api/trading/decisions`.
+
 ## Daily Briefing Scheduler
 
 The scheduler sends a personalised WhatsApp message to each premium user at their configured time each day. The message includes:
 - Per-stock signals (🟢 / 🟡 / 🔴) with price and % changes
-- LightGBM 1-day and 1-week direction predictions
+- 1-day and 1-week direction predictions (model or labelled rule-based score)
 - An LLM-written portfolio summary via OpenRouter
 
 ### How to set it up
@@ -231,7 +316,7 @@ APScheduler tick (every 1 min)
         └── job_executor.run_one(claim)
               ├── Load user + decrypt credentials (Fernet)
               ├── Create ephemeral Angel session
-              ├── generate_daily_briefing()  ← holdings + candles + LightGBM + LLM
+              ├── generate_daily_briefing()  ← holdings + candles + model + LLM
               ├── whatsapp.send()            ← POST to webhook service
               ├── Write Log row
               └── finish_schedule()          ← advance next_run by interval_minutes
