@@ -50,6 +50,10 @@ EXPECTED = {
     ("GET", "/api/research/fundamental"),
     ("POST", "/api/research/fundamental/summary"),
     ("GET", "/api/research/technical"),
+    ("GET", "/api/research/peers"),
+    ("GET", "/api/research/estimates"),
+    ("GET", "/api/research/ownership"),
+    ("GET", "/api/research/model-status"),
     ("GET", "/api/sectors/overview"),
     ("GET", "/api/sectors/breadth"),
     ("POST", "/api/ai/insights"),
@@ -73,6 +77,8 @@ EXPECTED = {
     ("GET", "/api/trading/proposals"),
     ("POST", "/api/trading/proposals/{proposal_id}/approve"),
     ("POST", "/api/trading/proposals/{proposal_id}/reject"),
+    ("GET", "/api/trading/compliance"),
+    ("GET", "/api/trading/decisions"),
     ("GET", "/api/market/stream"),
 }
 

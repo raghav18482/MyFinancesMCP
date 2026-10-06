@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import text
 
 from db import engine
+from db.models import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def finish_schedule(
 ) -> None:
     """Record the result of a run and arm the schedule for its next tick."""
     new_status = "done" if success else "failed"
-    next_run = datetime.utcnow() + timedelta(minutes=interval_minutes)
+    next_run = utcnow() + timedelta(minutes=interval_minutes)
     with engine.begin() as conn:
         conn.execute(
             _FINISH_SQL,

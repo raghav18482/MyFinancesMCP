@@ -9,5 +9,19 @@ dist/
 .DS_Store
 logs/
 
-# Trained prediction models (regenerate with: python models/train_prediction.py)
+# Trained models. Regenerate with: python models/train.py
+# The report is text and small, so it is kept; the estimators are not.
 models/*.pkl
+models/artifacts/**/*.joblib
+models/artifacts/CURRENT
+
+# Generated market data. Rebuild with:
+#   python -m services.marketstore.backfill --from 2020-01-01
+# Tens of megabytes of Parquet that git has no business storing.
+data/market/
+data/universe.parquet
+
+# Point-in-time snapshots and the scored-news archive. These are accumulated
+# observations that cannot be regenerated — they record what was knowable on
+# the day they were written — so back them up rather than committing them.
+data/pit/

@@ -1,0 +1,141 @@
+{
+  "ruleset_id": "template-v1",
+  "effective_from": "2026-10-04",
+  "status": "TEMPLATE — NOT VERIFIED AGAINST ANY LIVE REGULATION",
+  "warning": [
+    "Every numeric limit below is a PLACEHOLDER written to exercise the engine.",
+    "Before this governs a real trade, each limit must be read from, and cited to,",
+    "the current SEBI master circular for mutual funds, the scheme's own SID, and",
+    "the fund's internal investment policy. These change, and a stale limit that",
+    "looks authoritative is worse than no limit at all.",
+    "The engine deliberately keeps limits in this file rather than in Python so a",
+    "rule change is a data edit with an effective date, and so the ruleset in force",
+    "on any past date can be reconstructed for an audit."
+  ],
+  "sources": {
+    "sebi_master_circular": {
+      "title": "SEBI Master Circular for Mutual Funds",
+      "url": "https://www.sebi.gov.in/legal/master-circulars",
+      "retrieved": null,
+      "note": "NOT retrieved. Populate url, date and clause references before use."
+    },
+    "amfi_cap_classification": {
+      "title": "AMFI categorisation of large, mid and small cap stocks",
+      "url": "https://www.amfiindia.com/otherdata/categorisation-of-stocks",
+      "note": "Republished half-yearly. The market-store universe derives cap bands from NSE index membership, which approximates but does not equal this list."
+    },
+    "scheme_sid": {
+      "title": "Scheme Information Document",
+      "note": "Per-scheme. Must be supplied by the AMC."
+    }
+  },
+
+  "schemes": {
+    "default": {
+      "label": "Unconstrained (development default)",
+      "rules": ["restricted_list", "instrument_eligibility"]
+    },
+    "large_cap": {
+      "label": "Large cap equity scheme",
+      "rules": [
+        "restricted_list",
+        "instrument_eligibility",
+        "cap_band_eligibility",
+        "single_issuer_cap",
+        "sector_cap"
+      ],
+      "cap_band_eligibility": {
+        "allowed_bands": ["large"],
+        "min_allocation_pct": 80.0,
+        "source": "sebi_master_circular",
+        "citation": "PLACEHOLDER — scheme categorisation, equity schemes"
+      }
+    },
+    "mid_cap": {
+      "label": "Mid cap equity scheme",
+      "rules": [
+        "restricted_list",
+        "instrument_eligibility",
+        "cap_band_eligibility",
+        "single_issuer_cap",
+        "sector_cap"
+      ],
+      "cap_band_eligibility": {
+        "allowed_bands": ["mid"],
+        "min_allocation_pct": 65.0,
+        "source": "sebi_master_circular",
+        "citation": "PLACEHOLDER — scheme categorisation, equity schemes"
+      }
+    },
+    "small_cap": {
+      "label": "Small cap equity scheme",
+      "rules": [
+        "restricted_list",
+        "instrument_eligibility",
+        "cap_band_eligibility",
+        "single_issuer_cap",
+        "sector_cap",
+        "liquidity_days_to_liquidate"
+      ],
+      "cap_band_eligibility": {
+        "allowed_bands": ["small"],
+        "min_allocation_pct": 65.0,
+        "source": "sebi_master_circular",
+        "citation": "PLACEHOLDER — scheme categorisation, equity schemes"
+      }
+    }
+  },
+
+  "rules": {
+    "single_issuer_cap": {
+      "kind": "issuer_concentration",
+      "limit_pct_of_nav": 10.0,
+      "severity": "block",
+      "source": "sebi_master_circular",
+      "citation": "PLACEHOLDER — investment restrictions, single issuer limit",
+      "message": "Position in a single issuer would exceed {limit_pct_of_nav}% of NAV."
+    },
+    "sector_cap": {
+      "kind": "sector_concentration",
+      "limit_pct_of_nav": 25.0,
+      "severity": "block",
+      "exempt_scheme_types": ["sectoral", "thematic"],
+      "source": "scheme_sid",
+      "citation": "PLACEHOLDER — sector exposure limit",
+      "message": "Sector exposure would exceed {limit_pct_of_nav}% of NAV."
+    },
+    "cap_band_eligibility": {
+      "kind": "cap_band",
+      "severity": "block",
+      "source": "sebi_master_circular",
+      "citation": "PLACEHOLDER — scheme categorisation",
+      "message": "{symbol} is a {cap_band} cap; this scheme may only buy {allowed_bands}."
+    },
+    "restricted_list": {
+      "kind": "restricted_list",
+      "symbols": [],
+      "severity": "block",
+      "source": "internal",
+      "citation": "Fund's own restricted list",
+      "message": "{symbol} is on the restricted list."
+    },
+    "instrument_eligibility": {
+      "kind": "instrument",
+      "allowed_products": ["DELIVERY", "CNC", "MARGIN", "INTRADAY"],
+      "allowed_exchanges": ["NSE", "BSE"],
+      "severity": "block",
+      "source": "scheme_sid",
+      "citation": "PLACEHOLDER — permitted instruments",
+      "message": "Product {product} is not permitted for this scheme."
+    },
+    "liquidity_days_to_liquidate": {
+      "kind": "liquidity",
+      "max_days_to_liquidate": 7.0,
+      "participation_rate": 0.10,
+      "severity": "warn",
+      "source": "sebi_master_circular",
+      "citation": "PLACEHOLDER — liquidity and stress testing for mid and small cap schemes",
+      "message": "Exiting this position would take {days_to_liquidate} days at {participation_rate_pct}% of ADV."
+    }
+  }
+}

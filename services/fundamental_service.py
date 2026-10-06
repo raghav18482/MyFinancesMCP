@@ -124,6 +124,18 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
     result["score"] = score_fundamentals(result)
 
     _cache_set(cache_key, result)
+
+    # Every live fetch becomes a point-in-time snapshot. yfinance only ever
+    # reports the current, possibly restated figure, so the only way to know
+    # what was knowable on a past date is to have written it down on that date.
+    # Best-effort: a snapshot failure must never break the caller's request.
+    try:
+        from services.marketstore import pit
+
+        pit.write_snapshot(result)
+    except Exception as e:  # pragma: no cover - defensive, see pit.write_snapshot
+        logger.debug("point-in-time snapshot skipped for %s: %s", trading_symbol, e)
+
     return result
 
 

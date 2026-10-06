@@ -1,36 +1,78 @@
+"""Price-direction prediction: registry-backed, interval-strict, calibrated.
+
+Three defects in the previous version are fixed structurally rather than by
+being careful:
+
+  * **Train/serve skew.** Models were trained on five-minute bars and served
+    daily bars under identical feature names, so nothing ever errored. A model
+    now carries the interval it was trained on and ``predict_direction``
+    refuses to run on anything else.
+  * **A silent heuristic.** No trained artefact existed, so a hand-weighted
+    rule score served every request while the UI called it LightGBM. The
+    response now always states which engine produced it, and the fallback is
+    labelled rather than disguised.
+  * **Uncalibrated confidence.** ``max(p, 1-p)`` was presented as a
+    probability. Predictions now pass through a calibrator fitted on held-out
+    data, and the response says whether that happened.
+
+Feature context matters at serve time: cross-sectional ranks and market context
+need the whole universe on the same date, not one symbol's candles. Where the
+local market store can supply that, it is used; where it cannot, those features
+are null and the response says so instead of pretending otherwise.
 """
-LightGBM-based price direction prediction service.
+from __future__ import annotations
 
-Predicts whether a stock's price will go UP or DOWN across 7 timeframes:
-10 min, 1 hr, 4 hr, 1 day, 1 week, 1 month, 1 year.
-
-Uses technical indicators (RSI, MACD, Bollinger Bands, SMAs, volume),
-price-action features (returns, volatility, candle patterns), and
-optional sentiment scores as input features.
-"""
-
-import os
-import time
-import logging
 import hashlib
-from typing import Optional
-from datetime import datetime
+import logging
+import time
+from datetime import datetime, timedelta
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
-from ta.trend import SMAIndicator, MACD, EMAIndicator, ADXIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator
-from ta.volatility import BollingerBands, AverageTrueRange
+
+from models.labeling import HORIZONS
+from services.features import (
+    FEATURE_NAMES,
+    FEATURE_SET_VERSION,
+    FeatureContractMismatch,
+    build_panel,
+    feature_matrix,
+    validate_interval,
+    validate_version,
+)
 
 logger = logging.getLogger(__name__)
 
-TIMEFRAMES = ["10min", "1hr", "4hr", "1day", "1week", "1month", "1year"]
-TIMEFRAME_BARS = {"10min": 2, "1hr": 12, "4hr": 48, "1day": 1, "1week": 5, "1month": 22, "1year": 252}
+# Kept as module constants for callers and tests. The seven-horizon set is
+# gone: four of its entries were daily-bar conventions applied to intraday
+# data, and the three intraday horizons are not tractable from candles at all.
+TIMEFRAMES = list(HORIZONS)
 
-_models: dict = {}
-_MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
-_cache: dict[str, dict] = {}
+DEFAULT_INTERVAL = "ONE_DAY"
+
+# How many trailing sessions of universe context to load when building
+# cross-sectional features. 260 covers the 200-bar warm-up with room to spare.
+CONTEXT_SESSIONS = 260
+
 _CACHE_TTL = 120
+_cache: dict[str, dict] = {}
+
+_registry_cache: dict[str, Any] = {"loaded": False, "meta": None, "bundles": {}}
+
+
+# ── Cache ──────────────────────────────────────────────────────────────────
+def _cache_key(symbol: str, candles: list, interval: str) -> str:
+    """Key on the actual window, not its length.
+
+    The previous key hashed ``len(candles)``, so two different windows of equal
+    length collided. The 120-second TTL limited the damage but the key was
+    simply wrong.
+    """
+    last = candles[-1][0] if candles else ""
+    first = candles[0][0] if candles else ""
+    raw = f"{symbol}|{interval}|{first}|{last}|{len(candles)}"
+    return "pred:" + hashlib.md5(raw.encode()).hexdigest()
 
 
 def _cache_get(key: str):
@@ -40,428 +82,429 @@ def _cache_get(key: str):
     return None
 
 
-def _cache_set(key: str, data):
+def _cache_set(key: str, data) -> None:
     _cache[key] = {"data": data, "ts": time.time()}
 
 
-def _load_models():
-    """Lazy-load trained LightGBM models from disk."""
-    global _models
-    if _models:
-        return _models
+# ── Model loading ──────────────────────────────────────────────────────────
+def _load_registry(force: bool = False) -> tuple[Optional[Any], dict]:
+    """Lazily load the registered model bundles. Empty dict means heuristic."""
+    if _registry_cache["loaded"] and not force:
+        return _registry_cache["meta"], _registry_cache["bundles"]
 
     try:
-        import joblib
-    except ImportError:
-        logger.warning("joblib not installed — predictions unavailable")
-        return {}
+        from models import registry
 
-    for tf in TIMEFRAMES:
-        path = os.path.join(_MODEL_DIR, f"lgbm_{tf}.pkl")
-        if os.path.exists(path):
-            try:
-                _models[tf] = joblib.load(path)
-                logger.info("Loaded prediction model for %s", tf)
-            except Exception as e:
-                logger.warning("Failed to load model %s: %s", tf, e)
+        meta, bundles = registry.load_bundles()
+    except Exception as e:
+        logger.warning("prediction: registry unavailable (%s)", e)
+        meta, bundles = None, {}
 
-    if not _models:
-        logger.info("No trained models found — will use heuristic predictions")
-    return _models
-
-
-FEATURE_NAMES = [
-    "rsi_14", "rsi_slope_5",
-    "macd", "macd_signal", "macd_histogram", "macd_slope_5",
-    "sma_20_dist", "sma_50_dist", "sma_200_dist",
-    "ema_9_dist", "ema_21_dist",
-    "bb_position", "bb_width",
-    "adx_14",
-    "stoch_k", "stoch_d",
-    "atr_14_pct",
-    "volume_ratio", "volume_trend",
-    "return_1", "return_3", "return_5", "return_10", "return_20",
-    "volatility_5", "volatility_10", "volatility_20",
-    "candle_body_ratio", "upper_shadow", "lower_shadow",
-    "high_low_range",
-    "hour_sin", "hour_cos",
-    "dow_sin", "dow_cos",
-]
-
-
-def extract_features(candles: list, sentiment_scores: dict | None = None) -> Optional[dict]:
-    """
-    Extract ML features from OHLCV candle data.
-    candles: list of [timestamp, open, high, low, close, volume]
-    Returns a dict of feature_name -> value, or None if insufficient data.
-    """
-    if not candles or len(candles) < 50:
-        return None
-
-    df = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    for col in ["open", "high", "low", "close", "volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df.dropna(subset=["close"], inplace=True)
-
-    if len(df) < 50:
-        return None
-
-    close = df["close"]
-    high = df["high"]
-    low = df["low"]
-    volume = df["volume"]
-    price = float(close.iloc[-1])
-
-    features = {}
-
-    rsi = RSIIndicator(close, window=14).rsi()
-    rsi_val = float(rsi.iloc[-1]) if pd.notna(rsi.iloc[-1]) else 50.0
-    features["rsi_14"] = rsi_val
-    rsi_5ago = float(rsi.iloc[-6]) if len(rsi) >= 6 and pd.notna(rsi.iloc[-6]) else rsi_val
-    features["rsi_slope_5"] = rsi_val - rsi_5ago
-
-    macd_ind = MACD(close)
-    macd_line = macd_ind.macd()
-    macd_signal = macd_ind.macd_signal()
-    macd_hist = macd_ind.macd_diff()
-    features["macd"] = _safe_last(macd_line, 0.0)
-    features["macd_signal"] = _safe_last(macd_signal, 0.0)
-    features["macd_histogram"] = _safe_last(macd_hist, 0.0)
-    hist_5ago = float(macd_hist.iloc[-6]) if len(macd_hist) >= 6 and pd.notna(macd_hist.iloc[-6]) else 0.0
-    features["macd_slope_5"] = features["macd_histogram"] - hist_5ago
-
-    sma_20 = SMAIndicator(close, window=20).sma_indicator()
-    sma_50 = SMAIndicator(close, window=50).sma_indicator()
-    features["sma_20_dist"] = (price - _safe_last(sma_20, price)) / max(price, 1e-9)
-    features["sma_50_dist"] = (price - _safe_last(sma_50, price)) / max(price, 1e-9)
-
-    if len(close) >= 200:
-        sma_200 = SMAIndicator(close, window=200).sma_indicator()
-        features["sma_200_dist"] = (price - _safe_last(sma_200, price)) / max(price, 1e-9)
+    if meta is None:
+        logger.info("prediction: no registered model — serving the rule-based "
+                    "heuristic, which the response labels as such")
     else:
-        features["sma_200_dist"] = 0.0
+        try:
+            validate_version(meta.feature_set_version, model_name=f"model {meta.version}")
+        except FeatureContractMismatch as e:
+            logger.error("prediction: %s — refusing to serve it", e)
+            meta, bundles = None, {}
 
-    ema_9 = EMAIndicator(close, window=9).ema_indicator()
-    ema_21 = EMAIndicator(close, window=21).ema_indicator()
-    features["ema_9_dist"] = (price - _safe_last(ema_9, price)) / max(price, 1e-9)
-    features["ema_21_dist"] = (price - _safe_last(ema_21, price)) / max(price, 1e-9)
-
-    bb = BollingerBands(close, window=20)
-    bb_upper = _safe_last(bb.bollinger_hband(), price)
-    bb_lower = _safe_last(bb.bollinger_lband(), price)
-    bb_range = bb_upper - bb_lower
-    features["bb_position"] = (price - bb_lower) / max(bb_range, 1e-9)
-    features["bb_width"] = bb_range / max(price, 1e-9)
-
-    if len(close) >= 14:
-        adx = ADXIndicator(high, low, close, window=14)
-        features["adx_14"] = _safe_last(adx.adx(), 25.0)
-    else:
-        features["adx_14"] = 25.0
-
-    if len(close) >= 14:
-        stoch = StochasticOscillator(high, low, close, window=14, smooth_window=3)
-        features["stoch_k"] = _safe_last(stoch.stoch(), 50.0)
-        features["stoch_d"] = _safe_last(stoch.stoch_signal(), 50.0)
-    else:
-        features["stoch_k"] = 50.0
-        features["stoch_d"] = 50.0
-
-    atr = AverageTrueRange(high, low, close, window=14)
-    atr_val = _safe_last(atr.average_true_range(), 0.0)
-    features["atr_14_pct"] = atr_val / max(price, 1e-9)
-
-    vol_sma = SMAIndicator(volume, window=20).sma_indicator()
-    avg_vol = _safe_last(vol_sma, 1.0)
-    curr_vol = float(volume.iloc[-1]) if pd.notna(volume.iloc[-1]) else 0.0
-    features["volume_ratio"] = curr_vol / max(avg_vol, 1.0)
-    vol_5 = volume.tail(5).mean()
-    vol_20 = volume.tail(20).mean()
-    features["volume_trend"] = float(vol_5 / max(vol_20, 1.0))
-
-    returns = close.pct_change()
-    for n in [1, 3, 5, 10, 20]:
-        if len(returns) >= n:
-            features[f"return_{n}"] = float(returns.iloc[-1:].sum()) if n == 1 else float(
-                (close.iloc[-1] / close.iloc[-n] - 1) if close.iloc[-n] != 0 else 0
-            )
-        else:
-            features[f"return_{n}"] = 0.0
-
-    for n in [5, 10, 20]:
-        if len(returns) >= n:
-            features[f"volatility_{n}"] = float(returns.tail(n).std())
-        else:
-            features[f"volatility_{n}"] = 0.0
-
-    o, h_val, l_val, c = (
-        float(df["open"].iloc[-1]),
-        float(df["high"].iloc[-1]),
-        float(df["low"].iloc[-1]),
-        float(df["close"].iloc[-1]),
-    )
-    hl_range = h_val - l_val
-    features["candle_body_ratio"] = abs(c - o) / max(hl_range, 1e-9)
-    features["upper_shadow"] = (h_val - max(o, c)) / max(hl_range, 1e-9)
-    features["lower_shadow"] = (min(o, c) - l_val) / max(hl_range, 1e-9)
-    features["high_low_range"] = hl_range / max(price, 1e-9)
-
-    try:
-        ts = pd.to_datetime(df["timestamp"].iloc[-1])
-        hour = ts.hour + ts.minute / 60
-        dow = ts.dayofweek
-    except Exception:
-        hour, dow = 12.0, 2
-    features["hour_sin"] = np.sin(2 * np.pi * hour / 24)
-    features["hour_cos"] = np.cos(2 * np.pi * hour / 24)
-    features["dow_sin"] = np.sin(2 * np.pi * dow / 5)
-    features["dow_cos"] = np.cos(2 * np.pi * dow / 5)
-
-    for k, v in features.items():
-        if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
-            features[k] = 0.0
-
-    return features
+    _registry_cache.update({"loaded": True, "meta": meta, "bundles": bundles})
+    return meta, bundles
 
 
-def _safe_last(series: pd.Series, default: float) -> float:
-    if series is None or series.empty:
-        return default
-    val = series.iloc[-1]
-    return float(val) if pd.notna(val) else default
+def reload_models() -> dict:
+    """Drop the cached bundles and re-read the registry. For tests and admin."""
+    _registry_cache.update({"loaded": False, "meta": None, "bundles": {}})
+    _cache.clear()
+    meta, bundles = _load_registry(force=True)
+    return {"registered": meta is not None,
+            "version": getattr(meta, "version", None),
+            "horizons": sorted(bundles)}
 
 
-def _heuristic_predict(features: dict) -> dict:
-    """
-    Rule-based prediction when no trained model is available.
-    Uses a weighted scoring system across technical indicators.
-    """
-    predictions = {}
-
-    for tf in TIMEFRAMES:
-        score = 0.0
-        max_score = 0.0
-
-        rsi = features.get("rsi_14", 50)
-        if rsi < 30:
-            score += 2.0
-        elif rsi < 40:
-            score += 1.0
-        elif rsi > 70:
-            score -= 2.0
-        elif rsi > 60:
-            score -= 1.0
-        max_score += 2.0
-
-        rsi_slope = features.get("rsi_slope_5", 0)
-        if rsi_slope > 5:
-            score += 1.0
-        elif rsi_slope < -5:
-            score -= 1.0
-        max_score += 1.0
-
-        macd_hist = features.get("macd_histogram", 0)
-        if macd_hist > 0:
-            score += 1.5
-        else:
-            score -= 1.5
-        max_score += 1.5
-
-        macd_slope = features.get("macd_slope_5", 0)
-        if macd_slope > 0:
-            score += 1.0
-        elif macd_slope < 0:
-            score -= 1.0
-        max_score += 1.0
-
-        sma_20_dist = features.get("sma_20_dist", 0)
-        sma_50_dist = features.get("sma_50_dist", 0)
-        if sma_20_dist > 0:
-            score += 0.5
-        else:
-            score -= 0.5
-        if sma_50_dist > 0:
-            score += 0.5
-        else:
-            score -= 0.5
-        max_score += 1.0
-
-        bb_pos = features.get("bb_position", 0.5)
-        if bb_pos < 0.2:
-            score += 1.5
-        elif bb_pos < 0.35:
-            score += 0.5
-        elif bb_pos > 0.8:
-            score -= 1.5
-        elif bb_pos > 0.65:
-            score -= 0.5
-        max_score += 1.5
-
-        adx = features.get("adx_14", 25)
-        vol_ratio = features.get("volume_ratio", 1.0)
-        trend_str = 1.0 + (0.3 if adx > 25 else -0.1)
-        if vol_ratio > 1.5:
-            trend_str += 0.2
-        max_score += 0.5
-
-        stoch_k = features.get("stoch_k", 50)
-        if stoch_k < 20:
-            score += 1.0
-        elif stoch_k > 80:
-            score -= 1.0
-        max_score += 1.0
-
-        if tf in ("10min", "1hr"):
-            momentum_w = 1.3
-        elif tf in ("4hr",):
-            momentum_w = 1.0
-        elif tf in ("1day", "1week"):
-            momentum_w = 0.7
-        else:
-            momentum_w = 0.4
-
-        ret_1 = features.get("return_1", 0)
-        ret_5 = features.get("return_5", 0)
-        if ret_1 > 0.005:
-            score += 0.5 * momentum_w
-        elif ret_1 < -0.005:
-            score -= 0.5 * momentum_w
-        if ret_5 > 0.01:
-            score += 0.5 * momentum_w
-        elif ret_5 < -0.01:
-            score -= 0.5 * momentum_w
-        max_score += 1.0 * momentum_w
-
-        score *= trend_str
-
-        raw_confidence = (score / max(max_score * trend_str, 1e-9) + 1) / 2
-        confidence = max(0.35, min(0.85, raw_confidence))
-
-        direction = "up" if score > 0 else "down" if score < 0 else "neutral"
-
-        predictions[tf] = {
-            "direction": direction,
-            "confidence": round(confidence, 3),
-            "score": round(score, 3),
+def model_status() -> dict:
+    """What is actually serving right now. Surfaced by the API and the UI."""
+    meta, bundles = _load_registry()
+    if meta is None:
+        return {
+            "model_type": "heuristic",
+            "registered": False,
+            "detail": "No trained model is registered. Predictions come from a "
+                      "rule-based technical score, not from machine learning.",
         }
+    return {
+        "model_type": meta.estimator,
+        "registered": True,
+        "version": meta.version,
+        "interval": meta.interval,
+        "horizons": sorted(bundles),
+        "calibrated": meta.calibrated,
+        "trained_at": meta.trained_at,
+        "unpopulated_blocks": [k for k, v in (meta.populated_blocks or {}).items() if not v],
+    }
 
-    return predictions
+
+# ── Feature building at serve time ─────────────────────────────────────────
+def _panel_from_candles(candles: list, symbol: str) -> pd.DataFrame:
+    """Angel-style ``[ts, o, h, l, c, v]`` rows into the store's panel shape."""
+    df = pd.DataFrame(candles, columns=["date", "open", "high", "low", "close", "volume"])
+    df["symbol"] = _norm(symbol)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce", utc=True).dt.tz_localize(None)
+    for col in ("open", "high", "low", "close", "volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["date", "close"]).sort_values("date").reset_index(drop=True)
 
 
+def _build_features(candles: list, symbol: str) -> tuple[Optional[pd.Series], str, dict]:
+    """Build one row of contract features for ``symbol``.
+
+    Returns ``(row, context, info)`` where context is:
+      ``universe``       full cross-sectional and market context available
+      ``single_symbol``  only per-symbol features; the rest are null
+    """
+    sym = _norm(symbol)
+    own = _panel_from_candles(candles, sym)
+    if own.empty:
+        return None, "none", {"reason": "no usable candles"}
+
+    as_of = own["date"].max()
+
+    # Preferred path: pull the universe around this date from the local store so
+    # cross-sectional ranks and market context are real rather than null.
+    try:
+        from services.marketstore import read_range
+        from services.marketstore.universe import load_universe
+
+        universe = load_universe()
+        start = (as_of - timedelta(days=int(CONTEXT_SESSIONS * 1.6))).date()
+        context_panel = read_range(universe["symbol"].tolist(), start, as_of.date())
+
+        if not context_panel.empty and sym in set(context_panel["symbol"]):
+            panel = build_panel(context_panel, universe=universe)
+            rows = panel[panel["symbol"] == sym]
+            if not rows.empty:
+                return rows.iloc[-1], "universe", {
+                    "as_of": str(pd.Timestamp(rows["date"].iloc[-1]).date()),
+                    "context_symbols": int(context_panel["symbol"].nunique()),
+                }
+    except Exception as e:
+        logger.debug("prediction: universe context unavailable (%s)", e)
+
+    # Fallback: this symbol alone. Cross-sectional and market-context features
+    # cannot be computed from one series, so they stay null — which the model
+    # handles natively and the response reports.
+    if len(own) < 60:
+        return None, "none", {"reason": f"only {len(own)} candles; need at least 60"}
+
+    panel = build_panel(own, include=("technical", "flow"))
+    return panel.iloc[-1], "single_symbol", {
+        "as_of": str(pd.Timestamp(panel["date"].iloc[-1]).date()),
+        "note": "cross-sectional and market-context features unavailable for a "
+                "single symbol; they were passed to the model as missing",
+    }
+
+
+# ── Prediction ─────────────────────────────────────────────────────────────
 def predict_direction(
     candles: list,
     symbol: str,
     sentiment_scores: dict | None = None,
+    *,
+    interval: str = DEFAULT_INTERVAL,
 ) -> dict:
+    """Probability of an up move per horizon.
+
+    ``interval`` must match what the registered model was trained on. Passing
+    the wrong one raises ``FeatureContractMismatch`` rather than silently
+    returning confident nonsense — that failure mode is the whole reason this
+    argument exists and is required to be correct.
+
+    ``sentiment_scores`` is accepted for API compatibility; sentiment now
+    reaches the model through the stored FinBERT archive
+    (``services/features/sentiment.py``) rather than through this argument,
+    because a value passed per call cannot be reproduced at training time.
     """
-    Main prediction entry point.
-    Returns predictions for all 5 timeframes with direction and confidence.
-    """
-    cache_key = f"pred:{symbol}:{hashlib.md5(str(len(candles)).encode()).hexdigest()}"
+    if not candles:
+        return {"error": "No candle data supplied", "symbol": symbol}
+
+    cache_key = _cache_key(symbol, candles, interval)
     cached = _cache_get(cache_key)
     if cached:
         return cached
 
-    features = extract_features(candles, sentiment_scores)
-    if features is None:
-        return {
-            "error": "Insufficient data for prediction (need 50+ candles)",
-            "symbol": symbol,
-        }
+    meta, bundles = _load_registry()
 
-    models = _load_models()
-    predictions = {}
+    if meta is not None:
+        # The guard that the old pipeline could not produce.
+        validate_interval(meta.interval, interval, model_name=f"model {meta.version}")
 
-    if models:
-        feature_array = np.array([[features.get(f, 0.0) for f in FEATURE_NAMES]])
-        for tf in TIMEFRAMES:
-            model = models.get(tf)
-            if model:
-                try:
-                    proba = model.predict_proba(feature_array)[0]
-                    up_prob = float(proba[1]) if len(proba) > 1 else float(proba[0])
-                    direction = "up" if up_prob > 0.52 else "down" if up_prob < 0.48 else "neutral"
-                    predictions[tf] = {
-                        "direction": direction,
-                        "confidence": round(max(up_prob, 1 - up_prob), 3),
-                        "score": round(up_prob - 0.5, 3),
-                    }
-                except Exception as e:
-                    logger.warning("Model prediction failed for %s/%s: %s", symbol, tf, e)
-                    predictions[tf] = _heuristic_predict(features).get(tf)
-            else:
-                predictions[tf] = _heuristic_predict(features).get(tf)
+    row, context, info = _build_features(candles, symbol)
+    if row is None:
+        return {"error": info.get("reason", "insufficient data for prediction"),
+                "symbol": symbol}
+
+    features = {f: _safe_float(row.get(f)) for f in FEATURE_NAMES}
+
+    if bundles:
+        result = _predict_with_models(row, features, meta, bundles, symbol)
     else:
-        predictions = _heuristic_predict(features)
+        result = _predict_heuristic(features, symbol)
 
-    top_bullish = []
-    top_bearish = []
-    for name, val in sorted(features.items(), key=lambda x: abs(x[1]), reverse=True):
-        if name in ("hour_sin", "hour_cos", "dow_sin", "dow_cos"):
-            continue
-        if len(top_bullish) < 3 and val > 0:
-            top_bullish.append({"feature": _feature_label(name), "value": round(val, 4)})
-        if len(top_bearish) < 3 and val < 0:
-            top_bearish.append({"feature": _feature_label(name), "value": round(val, 4)})
-        if len(top_bullish) >= 3 and len(top_bearish) >= 3:
-            break
-
-    overall_score = sum(p["score"] for p in predictions.values()) / len(predictions)
-    if overall_score > 0.03:
-        overall = "bullish"
-    elif overall_score < -0.03:
-        overall = "bearish"
-    else:
-        overall = "neutral"
-
-    result = {
+    result.update({
         "symbol": symbol,
-        "predictions": predictions,
-        "overall_outlook": overall,
-        "overall_score": round(overall_score, 4),
-        "model_type": "lightgbm" if models else "heuristic",
-        "top_bullish_signals": top_bullish,
-        "top_bearish_signals": top_bearish,
-        "features": {k: round(v, 4) for k, v in features.items()},
+        "interval": interval,
+        "feature_context": context,
+        "feature_set_version": FEATURE_SET_VERSION,
         "generated_at": datetime.now().isoformat(),
-    }
+        "as_of": info.get("as_of"),
+    })
+    if info.get("note"):
+        result["feature_note"] = info["note"]
 
     _cache_set(cache_key, result)
     return result
 
 
-def _feature_label(name: str) -> str:
-    labels = {
-        "rsi_14": "RSI (14)",
-        "rsi_slope_5": "RSI Momentum",
-        "macd": "MACD Line",
-        "macd_signal": "MACD Signal",
-        "macd_histogram": "MACD Histogram",
-        "macd_slope_5": "MACD Acceleration",
-        "sma_20_dist": "Price vs SMA 20",
-        "sma_50_dist": "Price vs SMA 50",
-        "sma_200_dist": "Price vs SMA 200",
-        "ema_9_dist": "Price vs EMA 9",
-        "ema_21_dist": "Price vs EMA 21",
-        "bb_position": "Bollinger Position",
-        "bb_width": "Bollinger Width",
-        "adx_14": "Trend Strength (ADX)",
-        "stoch_k": "Stochastic %K",
-        "stoch_d": "Stochastic %D",
-        "atr_14_pct": "Volatility (ATR%)",
-        "volume_ratio": "Volume vs Avg",
-        "volume_trend": "Volume Trend",
-        "return_1": "1-Bar Return",
-        "return_3": "3-Bar Return",
-        "return_5": "5-Bar Return",
-        "return_10": "10-Bar Return",
-        "return_20": "20-Bar Return",
-        "volatility_5": "5-Bar Volatility",
-        "volatility_10": "10-Bar Volatility",
-        "volatility_20": "20-Bar Volatility",
-        "candle_body_ratio": "Candle Body Size",
-        "upper_shadow": "Upper Shadow",
-        "lower_shadow": "Lower Shadow",
-        "high_low_range": "High-Low Range",
+def _predict_with_models(
+    row: pd.Series,
+    features: dict,
+    meta: Any,
+    bundles: dict,
+    symbol: str,
+) -> dict:
+    X = feature_matrix(pd.DataFrame([row]))
+    predictions: dict[str, dict] = {}
+
+    for horizon in TIMEFRAMES:
+        bundle = bundles.get(horizon)
+        if not bundle:
+            continue
+        try:
+            raw_p = float(bundle["model"].predict_proba(X)[0][1])
+            calibrator = bundle.get("calibrator")
+            p = float(calibrator.predict([raw_p])[0]) if calibrator is not None else raw_p
+            p = min(max(p, 0.001), 0.999)
+        except Exception as e:
+            logger.warning("prediction: %s/%s failed (%s)", symbol, horizon, e)
+            continue
+
+        predictions[horizon] = {
+            "direction": "up" if p > 0.52 else "down" if p < 0.48 else "neutral",
+            "probability_up": round(p, 4),
+            "confidence": round(max(p, 1.0 - p), 4),
+            "score": round(p - 0.5, 4),
+            "calibrated": bundle.get("calibrator") is not None,
+        }
+
+    if not predictions:
+        return _predict_heuristic(features, symbol)
+
+    bullish, bearish = _shap_drivers(X, bundles, features)
+    return {
+        "predictions": predictions,
+        "model_type": meta.estimator,
+        "model_version": meta.version,
+        "calibrated": meta.calibrated,
+        "top_bullish_signals": bullish,
+        "top_bearish_signals": bearish,
+        "features": {k: round(v, 4) for k, v in features.items() if v is not None},
+        **_overall(predictions),
     }
-    return labels.get(name, name.replace("_", " ").title())
+
+
+def _shap_drivers(X: np.ndarray, bundles: dict, features: dict) -> tuple[list, list]:
+    """Which features pushed this prediction, by SHAP contribution.
+
+    The previous implementation sorted features by absolute magnitude, which
+    ranks whichever feature happens to be on the largest scale rather than
+    whichever mattered. SHAP answers the question that was actually being asked.
+    """
+    bundle = bundles.get("1week") or next(iter(bundles.values()), None)
+    if bundle is None:
+        return [], []
+
+    try:
+        import shap
+
+        explainer = shap.TreeExplainer(bundle["model"])
+        values = explainer.shap_values(np.nan_to_num(X, nan=0.0))
+        if isinstance(values, list):
+            values = values[-1]
+        contributions = np.asarray(values).reshape(-1)
+        if len(contributions) != len(FEATURE_NAMES):
+            raise ValueError("shap output does not match the feature contract")
+    except Exception as e:
+        logger.debug("prediction: SHAP unavailable (%s); falling back to magnitude", e)
+        return _magnitude_drivers(features)
+
+    order = np.argsort(contributions)
+    bearish = [
+        {"feature": _label(FEATURE_NAMES[i]),
+         "value": _round(features.get(FEATURE_NAMES[i])),
+         "contribution": round(float(contributions[i]), 4)}
+        for i in order[:3] if contributions[i] < 0
+    ]
+    bullish = [
+        {"feature": _label(FEATURE_NAMES[i]),
+         "value": _round(features.get(FEATURE_NAMES[i])),
+         "contribution": round(float(contributions[i]), 4)}
+        for i in order[::-1][:3] if contributions[i] > 0
+    ]
+    return bullish, bearish
+
+
+def _magnitude_drivers(features: dict) -> tuple[list, list]:
+    ranked = sorted(
+        ((k, v) for k, v in features.items() if v is not None and k not in _NON_SIGNAL),
+        key=lambda kv: abs(kv[1]), reverse=True,
+    )
+    bullish = [{"feature": _label(k), "value": _round(v)} for k, v in ranked if v > 0][:3]
+    bearish = [{"feature": _label(k), "value": _round(v)} for k, v in ranked if v < 0][:3]
+    return bullish, bearish
+
+
+# ── Heuristic fallback ─────────────────────────────────────────────────────
+def _predict_heuristic(features: dict, symbol: str) -> dict:
+    """A weighted technical score, used when no model is registered.
+
+    This is reasonable technical analysis and it is not machine learning. The
+    response says so in ``model_type`` and ``disclaimer`` so no caller can
+    mistake it for a model prediction, which is exactly what happened before.
+    """
+    predictions: dict[str, dict] = {}
+
+    for horizon in TIMEFRAMES:
+        score = 0.0
+        max_score = 0.0
+
+        rsi = features.get("rsi_14")
+        if rsi is not None:
+            score += 2.0 if rsi < 30 else 1.0 if rsi < 40 else -2.0 if rsi > 70 else -1.0 if rsi > 60 else 0.0
+            max_score += 2.0
+
+        slope = features.get("rsi_slope_5")
+        if slope is not None:
+            score += 1.0 if slope > 5 else -1.0 if slope < -5 else 0.0
+            max_score += 1.0
+
+        hist = features.get("macd_histogram")
+        if hist is not None:
+            score += 1.5 if hist > 0 else -1.5
+            max_score += 1.5
+
+        for key, weight in (("sma_20_dist", 0.5), ("sma_50_dist", 0.5)):
+            val = features.get(key)
+            if val is not None:
+                score += weight if val > 0 else -weight
+                max_score += weight
+
+        bb = features.get("bb_position")
+        if bb is not None:
+            score += 1.5 if bb < 0.2 else 0.5 if bb < 0.35 else -1.5 if bb > 0.8 else -0.5 if bb > 0.65 else 0.0
+            max_score += 1.5
+
+        stoch = features.get("stoch_k")
+        if stoch is not None:
+            score += 1.0 if stoch < 20 else -1.0 if stoch > 80 else 0.0
+            max_score += 1.0
+
+        # Momentum matters more at a day than at a month.
+        momentum_w = {"1day": 1.2, "1week": 0.9, "1month": 0.5}[horizon]
+        for key, threshold in (("return_1", 0.005), ("return_5", 0.01)):
+            val = features.get(key)
+            if val is not None:
+                score += (0.5 * momentum_w) if val > threshold else \
+                    (-0.5 * momentum_w) if val < -threshold else 0.0
+                max_score += 0.5 * momentum_w
+
+        norm = (score / max_score + 1) / 2 if max_score > 0 else 0.5
+        confidence = max(0.35, min(0.75, norm if norm > 0.5 else 1 - norm))
+
+        predictions[horizon] = {
+            "direction": "up" if score > 0 else "down" if score < 0 else "neutral",
+            "probability_up": round(min(max(norm, 0.05), 0.95), 4),
+            "confidence": round(confidence, 3),
+            "score": round(norm - 0.5, 4),
+            "calibrated": False,
+        }
+
+    bullish, bearish = _magnitude_drivers(features)
+    return {
+        "predictions": predictions,
+        "model_type": "heuristic",
+        "model_version": None,
+        "calibrated": False,
+        "disclaimer": "No trained model is registered. These are rule-based "
+                      "technical scores, not machine-learning predictions, and "
+                      "the confidence shown is not a calibrated probability.",
+        "top_bullish_signals": bullish,
+        "top_bearish_signals": bearish,
+        "features": {k: round(v, 4) for k, v in features.items() if v is not None},
+        **_overall(predictions),
+    }
+
+
+def _overall(predictions: dict) -> dict:
+    scores = [p["score"] for p in predictions.values()]
+    mean = float(np.mean(scores)) if scores else 0.0
+    return {
+        "overall_outlook": "bullish" if mean > 0.02 else "bearish" if mean < -0.02 else "neutral",
+        "overall_score": round(mean, 4),
+    }
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+_NON_SIGNAL = {"dow_sin", "dow_cos", "sent_has_news", "fund_is_stale_days"}
+
+_LABELS = {
+    "rsi_14": "RSI (14)", "rsi_slope_5": "RSI momentum",
+    "macd_histogram": "MACD histogram", "macd_slope_5": "MACD acceleration",
+    "sma_20_dist": "Price vs SMA 20", "sma_50_dist": "Price vs SMA 50",
+    "sma_200_dist": "Price vs SMA 200",
+    "bb_position": "Bollinger position", "bb_width": "Bollinger width",
+    "adx_14": "Trend strength (ADX)", "atr_14_pct": "Volatility (ATR %)",
+    "volume_ratio": "Volume vs average", "deliv_pct": "Delivery %",
+    "deliv_pct_z20": "Delivery vs its own norm",
+    "turnover_rank_uni": "Turnover rank in universe",
+    "rel_strength_20": "Strength vs market (20d)",
+    "rel_to_industry_20": "Strength vs industry (20d)",
+    "mkt_return_20": "Market return (20d)",
+    "mkt_breadth_adv_pct": "Market breadth",
+    "fund_score_total": "Fundamental score",
+    "sent_net_7d": "News sentiment (7d)",
+}
+
+
+def _label(name: str) -> str:
+    if name in _LABELS:
+        return _LABELS[name]
+    if name.startswith("xs_uni_"):
+        return f"{_label(name[7:])} — rank in universe"
+    if name.startswith("xs_ind_"):
+        return f"{_label(name[7:])} — rank in industry"
+    return name.replace("_", " ").capitalize()
+
+
+def _safe_float(val) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return None if not np.isfinite(f) else f
+
+
+def _round(val) -> Optional[float]:
+    f = _safe_float(val)
+    return round(f, 4) if f is not None else None
+
+
+def _norm(symbol: str) -> str:
+    s = str(symbol).strip().upper()
+    for suffix in ("-EQ", "-BE", ".NS"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+    return s

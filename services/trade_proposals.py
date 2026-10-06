@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from services import compliance, decision_record
 from services.broker_service import place_order_result
 from services.risk_profile import ClientRiskProfile, risk_profiles
 
@@ -158,14 +159,47 @@ def validate_against_profile(order_params: dict, profile: ClientRiskProfile) -> 
             )
 
 
-def execute_proposal(session_id: str, proposal_id: str, client: Any) -> dict[str, Any]:
+def execute_proposal(
+    session_id: str,
+    proposal_id: str,
+    client: Any,
+    *,
+    scheme: str = "default",
+    portfolio: dict | None = None,
+) -> dict[str, Any]:
     """
-    Server-only execution path. Validates ownership, status, risk profile, then places the order.
+    Server-only execution path: ownership, status, risk profile, compliance, order.
+
+    Two gates run before anything reaches the broker. The risk profile is the
+    user's own stated appetite; compliance is the mandate, and it is a hard
+    block that cites the rule it failed. Every outcome — executed, blocked or
+    failed — is written to the append-only decision record, because a blocked
+    trade is exactly what an audit asks about.
     """
     proposal = proposal_store._get_owned(session_id, proposal_id)
+    params = proposal.order_params
+
+    def _record(outcome: str, *, order_id: str | None = None,
+                compliance: dict | None = None, rationale: str | None = None) -> None:
+        decision_record.record(
+            proposal_id=proposal_id,
+            symbol=params.get("tradingsymbol") or params.get("symbol") or "",
+            side=params.get("transactiontype", "BUY"),
+            quantity=_as_float(params.get("quantity")),
+            price=_as_float(params.get("price")) or None,
+            outcome=outcome,
+            session_ref=session_id,
+            approved_by=session_id[:12] if session_id else None,
+            order_id=order_id,
+            payload=params,
+            ruleset_id=(compliance or {}).get("ruleset_id"),
+            compliance=compliance,
+            rationale=rationale or proposal.summary,
+        )
 
     if proposal.effective_status == "expired":
         proposal.status = "expired"
+        _record("rejected", rationale="proposal expired before execution")
         return {"ok": False, "error": "Proposal has expired"}
 
     if proposal.status != "approved":
@@ -174,21 +208,59 @@ def execute_proposal(session_id: str, proposal_id: str, client: Any) -> dict[str
     profile = risk_profiles.get(session_id)
     if profile:
         try:
-            validate_against_profile(proposal.order_params, profile)
+            validate_against_profile(params, profile)
         except ValueError as e:
             proposal.status = "failed"
             proposal.error = str(e)
+            _record("blocked", rationale=f"risk profile: {e}")
             return {"ok": False, "error": f"Risk check failed: {e}"}
 
-    result = place_order_result(client, proposal.order_params)
+    # Mandate and compliance gate. A breach blocks and names the rule.
+    compliance_dict: dict | None = None
+    try:
+        result_c = compliance.check(params, portfolio=portfolio, scheme=scheme)
+        compliance_dict = result_c.to_dict()
+        for warning in result_c.warnings:
+            logger.warning("Proposal %s compliance warning: %s", proposal_id,
+                           warning.describe())
+        if result_c.blocked:
+            reason = result_c.reason()
+            proposal.status = "failed"
+            proposal.error = reason
+            logger.warning("Proposal %s BLOCKED by compliance: %s", proposal_id, reason)
+            _record("blocked", compliance=compliance_dict,
+                    rationale=f"compliance: {reason}")
+            return {"ok": False, "error": f"Compliance check failed: {reason}",
+                    "compliance": compliance_dict}
+    except Exception as e:
+        # A broken rule engine must not become an open gate.
+        logger.exception("Proposal %s: compliance engine error", proposal_id)
+        proposal.status = "failed"
+        proposal.error = f"compliance engine error: {e}"
+        _record("blocked", rationale=f"compliance engine error: {e}")
+        return {"ok": False,
+                "error": f"Compliance could not be evaluated, so the order was not "
+                         f"placed: {e}"}
+
+    result = place_order_result(client, params)
 
     if result.get("ok"):
         proposal.status = "executed"
         proposal.order_id = result.get("order_id")
         logger.info("Proposal %s executed: order_id=%s", proposal_id, proposal.order_id)
+        _record("executed", order_id=proposal.order_id, compliance=compliance_dict)
     else:
         proposal.status = "failed"
         proposal.error = result.get("error", "Unknown execution error")
         logger.warning("Proposal %s failed: %s", proposal_id, proposal.error)
+        _record("failed", compliance=compliance_dict,
+                rationale=f"broker rejected: {proposal.error}")
 
     return result
+
+
+def _as_float(val) -> float:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0

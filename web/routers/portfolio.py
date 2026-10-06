@@ -115,7 +115,12 @@ async def api_portfolio_predict(
             return JSONResponse({"error": "No candle data available"}, status_code=400)
 
         candles = result["data"]
-        prediction = await asyncio.to_thread(predict_direction, candles, symbol)
+        # The interval is passed explicitly and checked against the model's own
+        # record: a model trained on different bars now raises instead of
+        # silently reading the wrong distribution.
+        prediction = await asyncio.to_thread(
+            predict_direction, candles, symbol, interval="ONE_DAY"
+        )
         return JSONResponse(prediction)
     except Exception as e:
         logger.exception("Prediction error for %s", symbol)

@@ -26,7 +26,7 @@ from typing import Any, Optional
 from sqlmodel import select
 
 from db import encrypt_value, get_session
-from db.models import User
+from db.models import User, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ def update_user(
         if is_active is not None:
             user.is_active = is_active
 
-        user.updated_at = datetime.utcnow()
+        user.updated_at = utcnow()
         session.add(user)
         session.commit()
         session.refresh(user)

@@ -689,33 +689,50 @@ def predict_price_direction(
     if not candle_result.get("status") or not candle_result.get("data"):
         return "No candle data available for this symbol."
 
-    result = _predict(candle_result["data"], tradingsymbol)
+    # Interval passed explicitly: the predictor checks it against the model's
+    # own record rather than assuming the two agree.
+    result = _predict(candle_result["data"], tradingsymbol, interval="ONE_DAY")
     if result.get("error"):
         return result["error"]
 
+    engine = result.get("model_type", "unknown")
+    version = result.get("model_version")
     lines = [
         f"=== Price Prediction: {tradingsymbol} ({exchange}) ===",
         f"Overall Outlook: {result['overall_outlook'].upper()} (score: {result['overall_score']:+.3f})",
-        f"Model: {result['model_type']}",
-        "",
-        f"{'Timeframe':<12} {'Direction':<10} {'Confidence':<12}",
-        "-" * 36,
+        f"Engine: {engine}" + (f" (version {version})" if version else ""),
     ]
-    for tf in ["10min", "1hr", "4hr", "1day", "1week", "1month", "1year"]:
-        p = result["predictions"].get(tf, {})
-        direction = p.get("direction", "N/A").upper()
-        confidence = f"{p.get('confidence', 0) * 100:.1f}%"
-        lines.append(f"{tf:<12} {direction:<10} {confidence:<12}")
+    if result.get("disclaimer"):
+        lines.append(f"NOTE: {result['disclaimer']}")
+    lines += [
+        "",
+        f"{'Horizon':<10} {'Direction':<10} {'P(up)':<9} {'Confidence':<11}",
+        "-" * 42,
+    ]
+    for tf, p in result.get("predictions", {}).items():
+        prob = p.get("probability_up")
+        lines.append(
+            f"{tf:<10} {p.get('direction', 'n/a').upper():<10} "
+            f"{(f'{prob:.1%}' if prob is not None else '-'):<9} "
+            f"{p.get('confidence', 0) * 100:.1f}%"
+        )
+
+    if not result.get("calibrated"):
+        lines.append("")
+        lines.append("Confidence is NOT a calibrated probability for this engine.")
 
     lines.append("")
-    if result.get("top_bullish_signals"):
-        lines.append("Bullish Signals:")
-        for s in result["top_bullish_signals"]:
-            lines.append(f"  + {s['feature']}: {s['value']:+.4f}")
-    if result.get("top_bearish_signals"):
-        lines.append("Bearish Signals:")
-        for s in result["top_bearish_signals"]:
-            lines.append(f"  - {s['feature']}: {s['value']:.4f}")
+    for key, sign in (("top_bullish_signals", "+"), ("top_bearish_signals", "-")):
+        signals = result.get(key) or []
+        if signals:
+            lines.append("Bullish drivers:" if sign == "+" else "Bearish drivers:")
+            for s in signals:
+                val = s.get("value")
+                lines.append(f"  {sign} {s['feature']}: "
+                             + (f"{val:+.4f}" if isinstance(val, (int, float)) else "n/a"))
+
+    if result.get("feature_note"):
+        lines += ["", f"Context: {result['feature_note']}"]
 
     return "\n".join(lines)
 

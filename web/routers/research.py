@@ -11,7 +11,11 @@ from fastapi.responses import JSONResponse
 
 
 from services.ai_service import DEFAULT_OPENROUTER_MODEL, summarize_fundamentals
+from services.estimates_service import get_estimates
 from services.fundamental_service import get_stock_fundamentals
+from services.ownership_service import get_ownership
+from services.peer_service import get_peer_comparison
+from services.prediction_service import model_status
 from services.technical_service import compute_technical_indicators
 from services.market_data import (
     fetch_candles_safe,
@@ -164,4 +168,78 @@ async def api_research_technical(
         return JSONResponse(result)
     except Exception as e:
         logger.exception("Technical API error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/research/peers")
+async def api_research_peers(request: Request, symbol: str = Query(...)):
+    """Valuation and quality percentiles against the stock's NSE industry peers.
+
+    Complements ``/api/research/fundamental``, which grades against absolute
+    bands: that says whether a P/E of 28 is high, this says whether it is high
+    *for this industry*.
+    """
+    client = require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        result = await asyncio.to_thread(get_peer_comparison, symbol)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Peer comparison error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/research/estimates")
+async def api_research_estimates(request: Request, symbol: str = Query(...)):
+    """Consensus estimates, revision momentum, surprise history and next result date."""
+    client = require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        result = await asyncio.to_thread(get_estimates, symbol)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Estimates error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/research/ownership")
+async def api_research_ownership(
+    request: Request,
+    symbol: str = Query(...),
+    days: int = Query(90),
+):
+    """Delivery trend, bulk and block deals, and insider holding.
+
+    The quarterly promoter/FII/DII split is reported as unknown rather than
+    omitted: no free source supplies it for NSE tickers, and an absent section
+    reads as "nothing to report" when it should read as "not known".
+    """
+    client = require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    try:
+        result = await asyncio.to_thread(get_ownership, symbol, lookback_days=days)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.exception("Ownership error for %s", symbol)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/research/model-status")
+async def api_research_model_status(request: Request):
+    """Which prediction engine is live: a registered model, or the heuristic.
+
+    Unauthenticated on purpose — it describes the server's own configuration
+    and carries no user data, and the UI needs it to label predictions honestly
+    before a user has logged in.
+    """
+    try:
+        return JSONResponse(model_status())
+    except Exception as e:
+        logger.exception("Model status error")
         return JSONResponse({"error": str(e)}, status_code=500)
