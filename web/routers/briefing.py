@@ -17,8 +17,8 @@ from services.realtime_feed import feed_relay
 from session_manager import sessions
 
 from web.dependencies import (
+    current_client,
     registered_user_for_session,
-    session_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,8 +73,7 @@ def _schedule_to_dict(s: Schedule) -> dict:
 
 @router.get("/api/briefing/schedule")
 async def api_briefing_schedule_get(request: Request):
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = registered_user_for_session(client)
@@ -89,8 +88,7 @@ async def api_briefing_schedule_get(request: Request):
 
 @router.post("/api/briefing/schedule")
 async def api_briefing_schedule_save(request: Request):
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = registered_user_for_session(client)
@@ -136,8 +134,7 @@ async def api_briefing_schedule_save(request: Request):
 
 @router.delete("/api/briefing/schedule")
 async def api_briefing_schedule_delete(request: Request):
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = registered_user_for_session(client)
@@ -212,8 +209,7 @@ async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
 
 @router.post("/api/briefing/send-now")
 async def api_briefing_send_now(request: Request):
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = registered_user_for_session(client)
@@ -226,8 +222,7 @@ async def api_briefing_send_now(request: Request):
 
 @router.get("/api/briefing/logs")
 async def api_briefing_logs(request: Request):
-    sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
+    client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = registered_user_for_session(client)

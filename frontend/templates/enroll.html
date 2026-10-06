@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Set Up Your Account{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="form-card card">
+    <h1>Set up your account</h1>
+    <p class="sub">Enter your four Angel One credentials once. We verify them with Angel One, encrypt them, and from then on you log in with just your WhatsApp number and an app password.</p>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/enroll">
+      <h2 style="font-size:1rem;margin:1.25rem 0 .5rem;color:var(--text)">Angel One credentials</h2>
+      <p style="font-size:.85rem;color:var(--muted);margin:0 0 .9rem">
+        Not sure where to find these? Follow the <a href="/setup" style="color:var(--accent);font-weight:600">setup guide</a>.
+      </p>
+
+      <div class="field">
+        <label for="api_key">API Key</label>
+        <input type="text" id="api_key" name="api_key" required autocomplete="off"
+               value="{{ form.api_key if form else '' }}"
+               placeholder="Your Angel One API key">
+      </div>
+      <div class="field">
+        <label for="client_id">Client ID</label>
+        <input type="text" id="client_id" name="client_id" required autocomplete="off"
+               value="{{ form.client_id if form else '' }}"
+               placeholder="e.g. AB1234">
+      </div>
+      <div class="field">
+        <label for="password">PIN / Password</label>
+        <input type="password" id="password" name="password" required autocomplete="off"
+               placeholder="Your trading PIN">
+      </div>
+      <div class="field">
+        <label for="totp_secret">TOTP Secret</label>
+        <input type="password" id="totp_secret" name="totp_secret" required autocomplete="off"
+               placeholder="Base32 TOTP secret from Angel One">
+      </div>
+
+      <h2 style="font-size:1rem;margin:1.75rem 0 .5rem;color:var(--text)">How you'll log in from now on</h2>
+
+      <div class="field">
+        <label for="whatsapp_number">WhatsApp Number</label>
+        <div class="phone-input">
+          <select id="country_code" name="country_code" aria-label="Country dialling code">
+            {% for c in countries %}
+            <option value="{{ c.dial }}" title="{{ c.name }}" {{ 'selected' if c.dial == selected_dial }}>{{ c.name }} ({{ c.label }})</option>
+            {% endfor %}
+          </select>
+          <input type="tel" id="whatsapp_number" name="whatsapp_number" required
+                 autocomplete="username" inputmode="tel"
+                 value="{{ national_number }}"
+                 placeholder="98765 43210">
+        </div>
+        <small style="color:var(--muted);font-size:.82rem">Pick your country code, then the number without it. This is also where premium briefings are sent.</small>
+      </div>
+      <div class="field">
+        <label for="app_password">App Password</label>
+        <input type="password" id="app_password" name="app_password" required
+               autocomplete="new-password" minlength="{{ min_password_chars }}"
+               placeholder="At least {{ min_password_chars }} characters">
+        <small style="color:var(--muted);font-size:.82rem">Choose something new — not your trading PIN.</small>
+      </div>
+      <div class="field">
+        <label for="app_password_confirm">Confirm App Password</label>
+        <input type="password" id="app_password_confirm" name="app_password_confirm" required
+               autocomplete="new-password" minlength="{{ min_password_chars }}"
+               placeholder="Type it again">
+      </div>
+
+      <button type="submit" class="btn btn-primary">Verify &amp; Save</button>
+    </form>
+
+    <p class="signup-prompt" style="text-align:center;margin:1.25rem 0 .75rem;font-size:.92rem;color:var(--muted)">
+      Already set up? <a href="/login" style="color:var(--accent);font-weight:600">Log in &rarr;</a>
+    </p>
+
+    <div class="disclaimer">
+      <strong>Read this before continuing:</strong> saving your credentials is a real trade-off. Until now they lived only in server memory and vanished on logout. From here they are encrypted in the database, and your app password is what unlocks them &mdash; so it protects a live trading account. Choose a strong, unique one. Running this again later will overwrite your stored credentials and password, which is also how you reset a forgotten one.
+    </div>
+  </div>
+</div>
+{% endblock %}

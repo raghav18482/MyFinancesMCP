@@ -3,8 +3,8 @@
 {% block content %}
 <div class="container">
   <div class="form-card card">
-    <h1>Connect to Angel One</h1>
-    <p class="sub">Enter your credentials to view your portfolio. They are held in memory only and discarded when you log out or the session expires.</p>
+    <h1>Log in</h1>
+    <p class="sub">Your Angel One credentials are already stored, encrypted. Just your number and app password.</p>
 
     {% if error %}
     <div class="alert alert-error">{{ error }}</div>
@@ -12,25 +12,34 @@
 
     <form method="post" action="/login">
       <div class="field">
-        <label for="api_key">API Key</label>
-        <input type="text" id="api_key" name="api_key" required placeholder="Your Angel One API key">
+        <label for="whatsapp_number">WhatsApp Number</label>
+        <div class="phone-input">
+          <select id="country_code" name="country_code" aria-label="Country dialling code">
+            {% for c in countries %}
+            <option value="{{ c.dial }}" title="{{ c.name }}" {{ 'selected' if c.dial == selected_dial }}>{{ c.name }} ({{ c.label }})</option>
+            {% endfor %}
+          </select>
+          <input type="tel" id="whatsapp_number" name="whatsapp_number" required
+                 autocomplete="username" inputmode="tel"
+                 value="{{ national_number }}"
+                 placeholder="98765 43210">
+        </div>
       </div>
       <div class="field">
-        <label for="client_id">Client ID</label>
-        <input type="text" id="client_id" name="client_id" required placeholder="e.g. AB1234">
+        <label for="app_password">App Password</label>
+        <input type="password" id="app_password" name="app_password" required
+               autocomplete="current-password"
+               placeholder="The password you chose during setup">
       </div>
-      <div class="field">
-        <label for="password">PIN / Password</label>
-        <input type="password" id="password" name="password" required placeholder="Your trading PIN">
-      </div>
-      <div class="field">
-        <label for="totp_secret">TOTP Secret</label>
-        <input type="password" id="totp_secret" name="totp_secret" required placeholder="Base32 TOTP secret from Angel One">
-      </div>
-      <button type="submit" class="btn btn-primary">Login &amp; Connect</button>
+      <button type="submit" class="btn btn-primary">Log in</button>
     </form>
 
     <p class="signup-prompt" style="text-align:center;margin:1.25rem 0 .75rem;font-size:.92rem;color:var(--muted)">
+      First time here, or registered before app passwords existed?
+      <a href="/enroll" style="color:var(--accent);font-weight:600">Set up your account &rarr;</a>
+    </p>
+
+    <p class="signup-prompt" style="text-align:center;margin:0 0 .75rem;font-size:.92rem;color:var(--muted)">
       Don't have an Angel One account?
       <a href="https://angel-one.onelink.me/Wjgr/bnic9p8w" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">
         Open a free Demat account &rarr;
@@ -38,7 +47,7 @@
     </p>
 
     <div class="disclaimer">
-      <strong>Security notice:</strong> Your credentials are transmitted over HTTPS and held in server memory only for the duration of your session. They are never written to disk or shared. The session automatically expires after 8 hours.
+      <strong>Security notice:</strong> Your Angel One credentials are encrypted at rest and decrypted only in server memory, for the duration of your session. Your app password is stored as a one-way hash and cannot be read back by anyone, including us.
     </div>
   </div>
 </div>

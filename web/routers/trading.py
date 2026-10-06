@@ -11,9 +11,8 @@ from services import compliance, decision_record
 from services.risk_profile import risk_profiles, build_profile_from_dict, load_profile, save_profile
 from services.trade_proposals import proposal_store, execute_proposal
 
-from session_manager import sessions
-
 from web.dependencies import (
+    current_client,
     registered_user_for_session,
     session_id,
 )
@@ -29,9 +28,9 @@ router = APIRouter()
 
 @router.get("/api/trading/profile")
 async def api_trading_profile_get(request: Request):
+    client = current_client(request)
     sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
-    if not sid or client is None:
+    if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     profile = risk_profiles.get(sid)
     if profile is None:
@@ -48,9 +47,9 @@ async def api_trading_profile_get(request: Request):
 
 @router.post("/api/trading/profile")
 async def api_trading_profile_set(request: Request):
+    client = current_client(request)
     sid = session_id(request)
-    client = sessions.get_client(sid) if sid else None
-    if not sid or client is None:
+    if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         body = await request.json()
@@ -70,9 +69,9 @@ async def api_trading_profile_set(request: Request):
 
 @router.get("/api/trading/proposals")
 async def api_trading_proposals(request: Request):
-    sid = session_id(request)
-    if not sid or sessions.get_client(sid) is None:
+    if current_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    sid = session_id(request)
     proposals = proposal_store.list_for_session(sid)
     return JSONResponse({
         "proposals": [p.to_dict() for p in proposals],
@@ -83,10 +82,10 @@ async def api_trading_proposals(request: Request):
 
 @router.post("/api/trading/proposals/{proposal_id}/approve")
 async def api_trading_approve(request: Request, proposal_id: str):
+    client = current_client(request)
     sid = session_id(request)
-    if not sid or sessions.get_client(sid) is None:
+    if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    client = sessions.get_client(sid)
     try:
         proposal_store.approve(sid, proposal_id)
         result = execute_proposal(sid, proposal_id, client)
@@ -106,8 +105,7 @@ async def api_trading_compliance(request: Request):
     Surfaced so the UI can warn that the shipped limits are placeholders rather
     than letting them look authoritative.
     """
-    sid = session_id(request)
-    if not sid or sessions.get_client(sid) is None:
+    if current_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         return JSONResponse(compliance.ruleset_info())
@@ -123,8 +121,7 @@ async def api_trading_decisions(request: Request):
     Includes blocked and failed decisions, not only executed ones — a blocked
     trade is what an audit asks about.
     """
-    sid = session_id(request)
-    if not sid or sessions.get_client(sid) is None:
+    if current_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     symbol = request.query_params.get("symbol")
@@ -142,9 +139,9 @@ async def api_trading_decisions(request: Request):
 
 @router.post("/api/trading/proposals/{proposal_id}/reject")
 async def api_trading_reject(request: Request, proposal_id: str):
-    sid = session_id(request)
-    if not sid or sessions.get_client(sid) is None:
+    if current_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    sid = session_id(request)
     try:
         proposal = proposal_store.reject(sid, proposal_id)
         return JSONResponse({"ok": True, "status": proposal.effective_status})

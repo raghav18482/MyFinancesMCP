@@ -35,6 +35,13 @@ class User(SQLModel, table=True):
     angel_totp_secret_encrypted: str
     angel_access_token: str | None = None
 
+    # scrypt hash of the password used to log into *this* app, from
+    # ``db.passwords``. One-way on purpose: unlike the Angel fields above, the
+    # server never needs to read it back. Nullable because rows created by
+    # premium registration predate app logins — those users set one by
+    # re-enrolling at ``/enroll``, which re-proves their Angel credentials.
+    app_password_hash: str | None = None
+
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

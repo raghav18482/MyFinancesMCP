@@ -28,6 +28,8 @@ EXPECTED = {
     ("GET", "/connect"),
     ("GET", "/login"),
     ("POST", "/login"),
+    ("GET", "/enroll"),
+    ("POST", "/enroll"),
     ("POST", "/logout"),
     ("POST", "/api/feedback"),
     ("GET", "/dashboard"),
