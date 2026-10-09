@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 import asyncio
 import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Request, Query
@@ -24,6 +25,7 @@ from web.dependencies import (
     require_login,
     session_id,
 )
+from web.view_models import order_rows, position_rows, trade_rows
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,54 @@ async def api_portfolio_analytics(request: Request):
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     sid = session_id(request)
     return JSONResponse(get_portfolio_cached(sid, client))
+
+
+
+# ── Positions, orders and trades ───────────────────────────────────────────
+#
+# The server-rendered pages fetch these during render; the React app reads them
+# here. Same broker calls, same row mapping (``web.view_models``). Each is its
+# own endpoint so a trade-book outage cannot hide the order book, mirroring the
+# separate error banners on the old Orders page.
+
+
+async def _broker_rows(request: Request, fetch, to_rows, label: str):
+    """Rows from one broker call, or the error response to send instead."""
+    client = require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    try:
+        return to_rows(await asyncio.to_thread(fetch, client))
+    except Exception as e:
+        logger.exception("%s fetch error", label)
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+
+@router.get("/api/portfolio/positions")
+async def api_portfolio_positions(request: Request):
+    rows = await _broker_rows(request, lambda c: c.get_positions(), position_rows, "Positions")
+    if isinstance(rows, JSONResponse):
+        return rows
+    return JSONResponse({
+        "positions": [asdict(r) for r in rows],
+        "total_pnl": round(sum(r.pnl for r in rows), 2),
+    })
+
+
+@router.get("/api/portfolio/orders")
+async def api_portfolio_orders(request: Request):
+    rows = await _broker_rows(request, lambda c: c.get_order_book(), order_rows, "Order book")
+    if isinstance(rows, JSONResponse):
+        return rows
+    return JSONResponse({"orders": [asdict(r) for r in rows]})
+
+
+@router.get("/api/portfolio/trades")
+async def api_portfolio_trades(request: Request):
+    rows = await _broker_rows(request, lambda c: c.get_trade_book(), trade_rows, "Trade book")
+    if isinstance(rows, JSONResponse):
+        return rows
+    return JSONResponse({"trades": [asdict(r) for r in rows]})
 
 
 

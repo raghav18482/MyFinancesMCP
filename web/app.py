@@ -15,8 +15,11 @@ import uuid
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import Response
+from starlette.types import Scope
 
 from adminApi import admin_router
 from web.routers import all_routers
@@ -45,6 +48,60 @@ class RevalidatingStaticFiles(StaticFiles):
         response = super().file_response(*args, **kwargs)
         response.headers.setdefault("Cache-Control", "no-cache")
         return response
+
+
+#: Where the React build is served while it runs beside the Jinja pages. Must
+#: match ``SPA_BASE`` in ``AgentfolioUI/vite.config.ts``.
+SPA_MOUNT_PATH = "/app"
+
+
+class SinglePageApp(RevalidatingStaticFiles):
+    """A built single-page app: real files as-is, every other path as ``index.html``.
+
+    Client-side routes such as ``/app/dashboard`` have no file on disk, so a
+    refresh or a pasted link would 404 under plain ``StaticFiles`` — whose
+    ``html=True`` only maps a directory to its ``index.html`` and a miss to a
+    ``404.html``. Answering those misses with the shell hands the path to the
+    React router instead.
+
+    A miss on anything with a file extension stays a 404, so a stale bundle or a
+    mistyped asset is reported as missing rather than answered with HTML that
+    the browser then fails to parse as JavaScript.
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except HTTPException as exc:
+            if exc.status_code != 404 or os.path.splitext(path)[1]:
+                raise
+        return await super().get_response("index.html", scope)
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if f"{os.sep}assets{os.sep}" in str(full_path):
+            # Vite fingerprints everything under assets/, so each URL there names
+            # one exact build forever and can be cached for good. index.html keeps
+            # the revalidating no-cache, which is what makes a deploy show up.
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+def _spa_dist_dir() -> str | None:
+    """The React build to serve, from ``SPA_DIST_DIR``, or ``None`` to serve none.
+
+    Unset is the normal state until the build ships with the server, so it is
+    silent. Set but missing is a deploy mistake, so it is logged loudly instead
+    of crashing the whole app over the optional half of it.
+    """
+    raw = os.environ.get("SPA_DIST_DIR", "").strip()
+    if not raw:
+        return None
+    path = raw if os.path.isabs(raw) else os.path.join(_dir, raw)
+    if not os.path.isfile(os.path.join(path, "index.html")):
+        logger.error("SPA_DIST_DIR=%r has no index.html; the React app is not mounted", raw)
+        return None
+    return path
 
 
 def _allowed_hosts() -> list[str]:
@@ -126,5 +183,12 @@ def create_app() -> FastAPI:
     app.include_router(admin_router)
     for router in all_routers:
         app.include_router(router)
+
+    # Last, so no API route or static mount can ever be shadowed by the SPA's
+    # catch-all — which matters the day it moves from /app to /.
+    spa_dir = _spa_dist_dir()
+    if spa_dir:
+        app.mount(SPA_MOUNT_PATH, SinglePageApp(directory=spa_dir, html=True), name="spa")
+        logger.info("React app mounted at %s from %s", SPA_MOUNT_PATH, spa_dir)
 
     return app

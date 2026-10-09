@@ -21,7 +21,7 @@ from web.dependencies import (
     template_context,
 )
 from web.templating import templates
-from web.view_models import HoldingRow, OrderRow, PositionRow, TradeRow
+from web.view_models import HoldingRow, order_rows, position_rows, trade_rows
 
 logger = logging.getLogger(__name__)
 
@@ -110,27 +110,13 @@ async def positions_page(request: Request):
 
     ctx = template_context(request, "positions")
     pos_list = []
-    total_pnl = 0.0
 
     try:
-        data = client.get_positions()
-        if data.get("status") and data.get("data"):
-            for p in data["data"]:
-                pnl = float(p.get("pnl", 0) or 0)
-                total_pnl += pnl
-                pos_list.append(PositionRow(
-                    symbol=p.get("tradingsymbol", "N/A"),
-                    product=p.get("producttype", "N/A"),
-                    net_qty=int(p.get("netqty", 0) or 0),
-                    buy_avg=float(p.get("buyavgprice", 0) or 0),
-                    sell_avg=float(p.get("sellavgprice", 0) or 0),
-                    ltp=float(p.get("ltp", 0) or 0),
-                    pnl=pnl,
-                ))
+        pos_list = position_rows(client.get_positions())
     except Exception as e:
         ctx["error"] = str(e)
 
-    ctx.update(positions=pos_list, total_pnl=total_pnl)
+    ctx.update(positions=pos_list, total_pnl=sum(p.pnl for p in pos_list))
     return templates.TemplateResponse(request, "positions.html", ctx)
 
 
@@ -146,36 +132,12 @@ async def orders_page(request: Request):
     trade_list = []
 
     try:
-        data = client.get_order_book()
-        if data.get("status") and data.get("data"):
-            for o in data["data"]:
-                order_list.append(OrderRow(
-                    orderid=o.get("orderid", "N/A"),
-                    symbol=o.get("tradingsymbol", "N/A"),
-                    txn_type=o.get("transactiontype", "N/A"),
-                    qty=int(o.get("quantity", 0) or 0),
-                    price=float(o.get("price", 0) or 0),
-                    status=o.get("status", "N/A"),
-                    time=o.get("updatetime", "N/A"),
-                ))
+        order_list = order_rows(client.get_order_book())
     except Exception as e:
         ctx["error"] = str(e)
 
     try:
-        tdata = client.get_trade_book()
-        if tdata.get("status") and tdata.get("data"):
-            for t in tdata["data"]:
-                trade_list.append(TradeRow(
-                    tradeid=t.get("tradeid", "N/A"),
-                    orderid=t.get("orderid", "N/A"),
-                    symbol=t.get("tradingsymbol", "N/A"),
-                    txn_type=t.get("transactiontype", "N/A"),
-                    qty=int(t.get("fillsize", 0) or t.get("quantity", 0) or 0),
-                    price=float(t.get("fillprice", 0) or t.get("price", 0) or 0),
-                    time=t.get("filltime", t.get("updatetime", "N/A")),
-                    exchange=t.get("exchange", "N/A"),
-                    product=t.get("producttype", "N/A"),
-                ))
+        trade_list = trade_rows(client.get_trade_book())
     except Exception as e:
         ctx["trade_error"] = str(e)
 

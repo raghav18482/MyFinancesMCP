@@ -21,6 +21,28 @@ router = APIRouter()
 
 
 
+@router.get("/api/feedback/token")
+async def api_feedback_token():
+    """Mint the single-use token ``POST /api/feedback`` requires.
+
+    The server-rendered landing page embeds one at render time. The React app
+    fetches one immediately before it submits instead, so a form left open past
+    the token's ten-minute lifetime still works. Minting needs no limit of its
+    own: anyone can already mint by loading ``/``, and the per-IP cap on
+    submissions is what bounds how many tokens are worth having.
+    """
+    try:
+        token = feedback_service.issue_feedback_token()
+    except Exception:
+        # ENCRYPTION_KEY missing or misconfigured.
+        logger.exception("Could not issue feedback token")
+        return JSONResponse(
+            {"error": "Feedback is unavailable right now."}, status_code=503
+        )
+    return JSONResponse({"token": token}, headers={"Cache-Control": "no-store"})
+
+
+
 @router.post("/api/feedback")
 async def api_feedback(request: Request):
     """Public landing-page feedback → AI reply → WhatsApp.

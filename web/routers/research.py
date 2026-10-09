@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -33,11 +34,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Summaries are cached per (symbol, model) so flipping between stock pills does
-# not re-bill the user's OpenRouter key. The prompt holds only public company
-# data — no holdings, no account — so a process-wide cache leaks nothing.
+# Summaries are generated with the server's own OpenRouter key, so they are cached
+# per (symbol, model) to bound what the deployment pays. The prompt holds only
+# public company data — no holdings, no account — so a process-wide cache leaks
+# nothing.
 _summary_cache: dict[tuple[str, str], dict] = {}
 _SUMMARY_TTL = 6 * 3600  # matches the fundamental data cache
+# "Regenerate" skips the cache, but not within this long of the last generation:
+# otherwise one user clicking it in a loop spends the deployment's credit.
+_SUMMARY_REFRESH_COOLDOWN = 60
+
+
+def _summary_model() -> str:
+    """The model is the deployment's choice, never the caller's — it is our bill."""
+    return os.environ.get("RESEARCH_SUMMARY_MODEL") or DEFAULT_OPENROUTER_MODEL
 
 
 def _summary_cached(key: tuple[str, str]) -> str | None:
@@ -76,7 +86,9 @@ async def api_research_fundamental_summary(request: Request):
 
     The 0-100 score itself is computed in Python and already present on
     ``GET /api/research/fundamental`` — this only adds the prose explanation, so
-    the page stays fully useful without an API key.
+    the page stays fully useful even when the summary is unavailable. Generated
+    with the deployment's own ``OPENROUTER_API_KEY``; callers supply no key and
+    cannot choose the model.
     """
     client = require_login(request)
     if client is None:
@@ -91,19 +103,22 @@ async def api_research_fundamental_summary(request: Request):
     if not symbol:
         return JSONResponse({"error": "symbol is required"}, status_code=400)
 
-    api_key = body.get("api_key", "")
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
+        logger.error("OPENROUTER_API_KEY is not set; cannot summarise %s", symbol)
         return JSONResponse(
-            {"error": "Please enter your OpenRouter API key"}, status_code=400
+            {"error": "AI summaries are not available right now."}, status_code=503
         )
 
-    model = body.get("model") or DEFAULT_OPENROUTER_MODEL
+    model = _summary_model()
     cache_key = (symbol, model)
+    entry = _summary_cache.get(cache_key)
+    fresh = _summary_cached(cache_key)
+    # A refresh inside the cooldown is answered from the cache like any other call.
+    refresh_allowed = entry is None or (time.time() - entry["ts"]) >= _SUMMARY_REFRESH_COOLDOWN
 
-    if not body.get("refresh"):
-        cached = _summary_cached(cache_key)
-        if cached:
-            return JSONResponse({"summary": cached, "cached": True})
+    if fresh and not (body.get("refresh") and refresh_allowed):
+        return JSONResponse({"summary": fresh, "cached": True})
 
     try:
         fundamentals = await asyncio.to_thread(get_stock_fundamentals, symbol)
