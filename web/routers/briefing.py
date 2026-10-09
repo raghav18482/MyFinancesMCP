@@ -37,14 +37,20 @@ _BRIEFING_KIND = "daily_briefing"
 
 
 def _next_run_utc_from_ist(time_ist: str) -> datetime:
-    """Convert 'HH:MM' IST → next UTC naive datetime for that wall-clock time."""
+    """Convert 'HH:MM' IST → the next UTC datetime for that wall-clock time.
+
+    Timezone-aware on purpose. The ``schedules.next_run`` column rejects naive
+    values ("Datetime values must have timezone information"), so returning a
+    naive one made every schedule save fail with a 500. The scheduler's own
+    writer, ``repository.finish_schedule``, already stores aware UTC.
+    """
     hour, minute = map(int, time_ist.split(":"))
     now_utc = datetime.now(timezone.utc)
     now_ist = now_utc.astimezone(_IST)
     candidate = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate <= now_ist:
         candidate += timedelta(days=1)
-    return candidate.astimezone(timezone.utc).replace(tzinfo=None)
+    return candidate.astimezone(timezone.utc)
 
 
 

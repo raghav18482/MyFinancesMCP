@@ -9,6 +9,7 @@ from web.routers import (
     agent,
     ai,
     auth,
+    auth_api,
     briefing,
     feedback,
     market,
@@ -18,11 +19,14 @@ from web.routers import (
     premium,
     research,
     sectors,
+    session,
     trading,
 )
 
 all_routers = [
     auth.router,
+    auth_api.router,
+    session.router,
     feedback.router,
     pages.router,
     news.router,

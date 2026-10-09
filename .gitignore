@@ -10,10 +10,10 @@ dist/
 logs/
 
 # Trained models. Regenerate with: python models/train.py
-# The report is text and small, so it is kept; the estimators are not.
+# The legacy bare pickles stay ignored. The registry artifacts (the estimators
+# and the CURRENT pointer) are committed on purpose: the deploy builds from git,
+# and without them the server silently falls back to the rule-based heuristic.
 models/*.pkl
-models/artifacts/**/*.joblib
-models/artifacts/CURRENT
 
 # Generated market data. Rebuild with:
 #   python -m services.marketstore.backfill --from 2020-01-01

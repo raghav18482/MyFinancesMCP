@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from adminApi import service as admin_service
 
+from web import country_codes
 from web.dependencies import (
     current_client,
     registered_user_for_session,
@@ -62,7 +63,16 @@ async def api_premium_register(request: Request):
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
     whatsapp_number = (body.get("whatsapp_number") or "").strip()
-    if not whatsapp_number.startswith("+"):
+    country_code = (body.get("country_code") or "").strip()
+    if country_code:
+        # Dropdown + national number, as the React form sends it. Normalised by
+        # the same function enrollment uses, so the stored number matches the
+        # one a later login will look up.
+        try:
+            whatsapp_number = country_codes.normalize_whatsapp(country_code, whatsapp_number)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+    elif not whatsapp_number.startswith("+"):
         return JSONResponse(
             {"error": "whatsapp_number must start with + and country code"},
             status_code=400,
