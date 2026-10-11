@@ -56,6 +56,11 @@ async def api_premium_register(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if getattr(client, "broker", "angelone") != "angelone":
+        return JSONResponse(
+            {"error": "WhatsApp briefing registration currently requires an Angel One account."},
+            status_code=409,
+        )
 
     try:
         body = await request.json()

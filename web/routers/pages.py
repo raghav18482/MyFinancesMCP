@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from services.risk_profile import risk_profiles, load_profile
 from services.portfolio_service import get_portfolio_cached
+from adminApi import broker_accounts as broker_account_service
 
 
 from web.dependencies import (
@@ -36,6 +37,16 @@ async def dashboard(request: Request):
         return RedirectResponse("/login", status_code=302)
 
     ctx = template_context(request, "dashboard")
+    ctx["broker"] = getattr(client, "broker", "angelone").replace("one", " One").title()
+    ctx["broker_notice"] = request.query_params.get("broker", "")
+    ctx["active_account_id"] = request.session.get("broker_account_id")
+    ctx["connected_accounts"] = []
+    user = registered_user_for_session(client)
+    if user:
+        try:
+            ctx["connected_accounts"] = broker_account_service.list_accounts(int(user.id))
+        except Exception:
+            logger.exception("Could not load linked accounts for user id=%s", user.id)
     try:
         total_invested = 0.0
         current_value = 0.0
@@ -91,6 +102,7 @@ async def dashboard(request: Request):
             net_value=net_value,
             holdings=holdings_list,
             client_id=client.client_id,
+            broker=getattr(client, "broker", "angelone").replace("one", " One").title(),
         )
     except Exception as e:
         ctx["error"] = str(e)

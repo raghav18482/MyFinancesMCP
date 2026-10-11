@@ -15,6 +15,8 @@ from adminApi import service as admin_service
 from db import get_session
 from db.models import User
 from session_manager import sessions
+from integrations.zerodha_client import ZerodhaClient
+from adminApi import broker_accounts as broker_account_service
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +71,41 @@ def current_client(request: Request):
     """
     sid = session_id(request)
     if sid:
-        client = sessions.get_client(sid)
+        try:
+            client = sessions.get_client(sid)
+        except Exception:
+            logger.info("Broker session expired for session=%s", sid[:8])
+            sessions.remove_session(sid)
+            client = None
         if client:
             return client
 
+    account_id = request.session.get("broker_account_id")
     uid = request.session.get("uid")
+    if account_id and uid:
+        try:
+            credentials = broker_account_service.account_credentials(int(uid), int(account_id))
+        except Exception:
+            logger.exception("Could not restore linked Zerodha account for uid=%s", uid)
+            return None
+        if credentials:
+            try:
+                api_key, access_token, broker_user_id, expires_at = credentials
+                client = ZerodhaClient(
+                    api_key, access_token, {"user_id": broker_user_id}, expires_at=expires_at
+                )
+                client.app_user_id = int(uid)
+                client.ensure_session()
+                sid = uuid.uuid4().hex
+                sessions.create_client_session(sid, client)
+                request.session["sid"] = sid
+                return client
+            except Exception:
+                logger.info("Linked Zerodha token expired for uid=%s", uid)
+        request.session.pop("sid", None)
+        request.session.pop("broker_account_id", None)
+        return None
+
     if not uid:
         return None
 
@@ -127,6 +159,14 @@ def registered_user_for_session(client) -> User | None:
     ``angel_client_id``. Returns ``None`` if not registered (or DB unreachable)."""
     if client is None:
         return None
+    app_user_id = getattr(client, "app_user_id", None)
+    if app_user_id:
+        try:
+            with get_session() as s:
+                return s.get(User, app_user_id)
+        except Exception:
+            logger.exception("Linked broker user lookup failed")
+            return None
     try:
         with get_session() as s:
             return s.exec(

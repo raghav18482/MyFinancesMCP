@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 class AngelOneClient:
     def __init__(self, api_key: str, client_id: str, password: str, totp_secret: str):
+        self.broker = "angelone"
         self.api_key = api_key
         self.client_id = client_id
         self.password = password

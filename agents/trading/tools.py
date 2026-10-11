@@ -46,9 +46,13 @@ def make_trading_tools(session_id: str) -> list[Callable[..., Any]]:
                     from db.models import User
                     from sqlmodel import select
                     with get_session() as db:
-                        user = db.exec(
-                            select(User).where(User.angel_client_id == client.client_id)
-                        ).first()
+                        user = (
+                            db.get(User, client.app_user_id)
+                            if getattr(client, "app_user_id", None)
+                            else db.exec(
+                                select(User).where(User.angel_client_id == client.client_id)
+                            ).first()
+                        )
                     if user:
                         profile = load_profile(user.id)
                         if profile:

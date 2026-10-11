@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -42,6 +43,28 @@ class User(SQLModel, table=True):
     # re-enrolling at ``/enroll``, which re-proves their Angel credentials.
     app_password_hash: str | None = None
 
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class BrokerAccount(SQLModel, table=True):
+    """Additional broker connections linked to an app user.
+
+    Broker access tokens are encrypted at rest. The provider API secret is
+    server configuration and is never stored with a user's account.
+    """
+
+    __tablename__ = "broker_accounts"
+    __table_args__ = (UniqueConstraint("broker", "broker_user_id", name="uq_broker_account_identity"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    broker: str = Field(index=True)
+    broker_user_id: str = Field(index=True)
+    display_name: str
+    access_token_encrypted: str
+    token_expires_at: datetime
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

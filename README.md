@@ -1,6 +1,6 @@
-# MyFinanceMCP — Angel One Portfolio Tracker
+# MyFinanceMCP — Multi-broker Portfolio Manager
 
-A multi-user MCP server and web dashboard for tracking your Angel One portfolio, with AI-powered daily briefings, a trading agent, and calibrated ML price predictions.
+A multi-user MCP server and web dashboard for tracking Angel One and linked Zerodha portfolios, with AI-powered daily briefings, a trading agent, and calibrated ML price predictions.
 
 ## Features
 
@@ -15,6 +15,7 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 - **Mandate compliance gate** — proposed trades are checked against a dated, versioned ruleset and blocked with the specific rule cited; every decision, including blocked ones, lands in an append-only decision record
 - **Admin API** — REST endpoints (`/api/admin/*`) for registering premium users with Fernet-encrypted Angel credentials and managing their schedules
 - **Multi-user** — each session authenticates with its own Angel One credentials; premium users' credentials are stored encrypted in Postgres
+- **Multiple broker accounts** — connect Zerodha through Kite's hosted login and switch linked accounts from the dashboard
 - **Zero plaintext credential storage** — transient sessions live only in RAM; premium user credentials are encrypted at rest with a Fernet key
 
 ## Project Structure
@@ -24,6 +25,7 @@ A multi-user MCP server and web dashboard for tracking your Angel One portfolio,
 ├── mcp_server.py                # MCP FastMCP app (tools: login, portfolio, trading)
 ├── web_app.py                   # FastAPI web dashboard + briefing schedule API
 ├── angel_client.py              # Angel One SmartAPI client wrapper
+├── integrations/zerodha_client.py # Kite Connect client matching existing broker workflows
 ├── session_manager.py           # Per-session client management (in-memory)
 │
 ├── db/                          # Postgres layer (SQLModel + Neon)
@@ -217,9 +219,12 @@ Edit `.env` with your values:
 | `ANGELONE_CLIENT_ID` | For ADK CLI only | See above |
 | `ANGELONE_PASSWORD` | For ADK CLI only | See above |
 | `ANGELONE_TOTP_SECRET` | For ADK CLI only | See above |
+| `KITE_API_KEY` | For Zerodha linking | Kite Connect application API key |
+| `KITE_API_SECRET` | For Zerodha linking | Server-only secret used to exchange the one-time request token |
+| `KITE_REDIRECT_URL` | For Zerodha linking | Exact callback URL registered in the Kite developer console, e.g. `https://your-domain/auth/zerodha/callback` |
 | `OPENROUTER_API_KEY` | Yes (for Agent/Trading/Briefing) | Server-side LLM key |
 | `DATABASE_URL` | Yes | Postgres connection string (e.g. Neon pooler URL with `?sslmode=require`) |
-| `ENCRYPTION_KEY` | Yes | Fernet key for encrypting Angel credentials in DB. Generate with: `python -m db.crypto generate` |
+| `ENCRYPTION_KEY` | Yes | Fernet key for encrypting broker credentials and Kite access tokens in DB. Generate with: `python -m db.crypto generate` |
 | `ADMIN_API_KEY` | Yes | Static key protecting all `/api/admin/*` endpoints |
 | `SCHEDULER_ENABLED` | Yes (for briefings) | Set to `1` to start the APScheduler tick on process startup |
 | `SESSION_SECRET` | Recommended | Signs session cookies. Random key generated on each restart if unset (invalidates existing cookies) |
@@ -242,6 +247,12 @@ The server starts on `http://localhost:8000`:
 
 The app runs without a trained model. Predictions then come from a rule-based
 technical score, and every response and the dashboard label say so.
+
+### Connect Zerodha
+
+Sign in with your existing MyFinance app account, then choose **Connect Zerodha** on the dashboard. MyFinance redirects to Zerodha's hosted Kite Connect login. After the user authenticates, the callback exchanges the short-lived request token, verifies the account profile, encrypts the access token in the new `broker_accounts` table, and activates that account in the browser session. Link additional Zerodha accounts the same way and switch among them from the dashboard. Existing portfolio, positions, orders, research, agent, and proposal-backed trading screens use the selected broker through a compatibility client.
+
+Register `KITE_REDIRECT_URL` exactly in the Kite developer console and set the three `KITE_*` variables on the server. Kite access tokens expire at 6 AM IST each day, so the user must reconnect after expiry. The API secret stays in server configuration; user access tokens are Fernet-encrypted at rest. Scheduled WhatsApp briefings continue to use the Angel One account because Kite's daily token expiry does not support the current unattended scheduler workflow.
 
 ## Training the Prediction Model
 

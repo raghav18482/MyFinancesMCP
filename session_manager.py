@@ -38,6 +38,14 @@ class SessionManager:
         logger.info("Session created for client %s (session %s)", client_id, session_id[:8])
         return client
 
+    def create_client_session(self, session_id: str, client) -> object:
+        """Register an already-authenticated broker adapter in this process."""
+        with self._lock:
+            self._sessions[session_id] = client
+            self._created_at[session_id] = time.time()
+        logger.info("Broker session created (%s)", session_id[:8])
+        return client
+
     def get_client(self, session_id: str) -> Optional[AngelOneClient]:
         with self._lock:
             created = self._created_at.get(session_id)

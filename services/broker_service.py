@@ -260,6 +260,10 @@ def fetch_market_depth(client: Any, symbol: str, exchange: str = "NSE") -> dict[
 def place_order_result(client: Any, order_params: dict) -> dict[str, Any]:
     try:
         result = client.place_order(order_params)
+        if isinstance(result, dict) and result.get("status") is False:
+            return {"ok": False, "error": result.get("message", "Order placement failed"), "raw": result}
+        if isinstance(result, dict) and result.get("status") is True:
+            result = result.get("data")
         if result:
             return {"ok": True, "order_id": str(result), "raw": result}
         return {"ok": False, "error": "Order placement failed (no id returned)."}

@@ -10,6 +10,7 @@ from web.routers import (
     ai,
     auth,
     auth_api,
+    broker_accounts,
     briefing,
     feedback,
     market,
@@ -26,6 +27,7 @@ from web.routers import (
 all_routers = [
     auth.router,
     auth_api.router,
+    broker_accounts.router,
     session.router,
     feedback.router,
     pages.router,

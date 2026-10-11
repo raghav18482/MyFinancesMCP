@@ -38,6 +38,7 @@ async def api_session_bootstrap(request: Request):
         {
             "authenticated": True,
             "client_id": client.client_id,
+            "broker": getattr(client, "broker", "angelone"),
             "premium": {
                 "registered": premium,
                 "whatsapp_number": user.whatsapp_number if premium else None,

@@ -4,12 +4,62 @@
 <div class="container page-dashboard">
   <header class="dashboard-hero">
     <div class="dashboard-hero-text">
-      <p class="page-kicker">Live from Angel One</p>
+      <p class="page-kicker">Live from {{ broker }}</p>
       <h1 class="page-title">Portfolio dashboard</h1>
       <p class="page-sub">Holdings, cash, and P&amp;L at a glance — plus AI when you add your key.</p>
     </div>
     <div class="dashboard-hero-glow" aria-hidden="true"></div>
   </header>
+
+  <section class="card" style="margin-bottom:1.25rem">
+    <div class="ai-card-header">
+      <div>
+        <h2>Broker accounts</h2>
+        <p class="page-sub">Connect and switch accounts. Portfolio, orders, and trading tools use the selected account.</p>
+      </div>
+      <a class="btn btn-primary" href="/auth/zerodha/connect">Connect Zerodha</a>
+    </div>
+    {% if broker_notice == 'zerodha-connected' %}<div class="alert alert-success">Zerodha account connected. Your dashboard now shows that account.</div>{% endif %}
+    {% if broker_notice in ['zerodha-unavailable', 'zerodha-error', 'zerodha-expired', 'zerodha-invalid', 'zerodha-cancelled'] %}<div class="alert alert-error">Zerodha connection did not complete. Check the server's Kite Connect configuration and try again.</div>{% endif %}
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.8rem">
+      <button type="button" class="btn btn-sm {{ 'btn-primary' if not active_account_id else 'btn-muted' }}" data-account-id="angel">Angel One</button>
+      {% for account in connected_accounts %}
+      <button type="button" class="btn btn-sm {{ 'btn-primary' if active_account_id == account.id else 'btn-muted' }}" data-account-id="{{ account.id }}">Zerodha · {{ account.display_name }}</button>
+      {% endfor %}
+    </div>
+    <p id="accountSwitchStatus" class="page-sub" role="status" style="margin-top:.6rem"></p>
+  </section>
+  <script>
+    document.querySelectorAll('[data-account-id]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const status = document.getElementById('accountSwitchStatus');
+        const id = button.dataset.accountId;
+        if (id === 'angel') {
+          button.disabled = true;
+          try {
+            const response = await fetch('/api/accounts/activate/angel', {method: 'POST'});
+            const body = await response.json();
+            if (!response.ok) throw new Error(body.error || 'Could not switch account');
+            window.location.reload();
+          } catch (error) {
+            status.textContent = error.message;
+            button.disabled = false;
+          }
+          return;
+        }
+        button.disabled = true;
+        try {
+          const response = await fetch(`/api/accounts/${encodeURIComponent(id)}/activate`, {method: 'POST'});
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || 'Could not switch account');
+          window.location.reload();
+        } catch (error) {
+          status.textContent = error.message;
+          button.disabled = false;
+        }
+      });
+    });
+  </script>
 
   {% if error %}
   <div class="alert alert-error">{{ error }}</div>

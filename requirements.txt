@@ -9,6 +9,7 @@
 
 # ── Broker (Angel One SmartAPI) ────────────────────────────────────────────
 smartapi-python==1.5.5
+kiteconnect==5.2.2
 logzero==1.7.0
 websocket-client==1.9.2
 six==1.17.0
