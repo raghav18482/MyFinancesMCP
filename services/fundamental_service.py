@@ -1,9 +1,10 @@
 import time
 import logging
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 import yfinance as yf
+from yfinance.data import YfData
 
 from services.fundamental_scoring import score_fundamentals
 
@@ -11,6 +12,23 @@ logger = logging.getLogger(__name__)
 
 _cache: dict[str, dict] = {}
 _CACHE_TTL = 6 * 3600  # 6 hours
+
+_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote"
+_INFO_ATTEMPTS = 2
+_RETRY_BACKOFF = 1.5  # seconds, multiplied by the attempt number
+_INFO_TIMEOUT = 45  # covers both attempts; yfinance's own per-request timeout is 30s
+_AUX_TIMEOUT = 15
+
+
+class YahooNoData(Exception):
+    """Yahoo answered and has nothing for this symbol (unlisted on Yahoo)."""
+
+
+class YahooFetchError(Exception):
+    """Yahoo could not be reached or refused us (rate limit, 401/403, 5xx, timeout).
+
+    Transient: the caller should offer a retry instead of "not available".
+    """
 
 
 def _cache_get(key: str) -> Optional[dict]:
@@ -53,34 +71,33 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
     try:
         ticker = yf.Ticker(yf_sym)
 
-        # Fetch all expensive properties in parallel
+        # Fetch all expensive properties in parallel. Only `info` is required;
+        # the statements are best-effort extras (ETFs have none at all).
         fetched: dict = {}
         props = {
-            "info": lambda: ticker.info or {},
             "financials": lambda: ticker.financials,
             "balance_sheet": lambda: ticker.balance_sheet,
             "major_holders": lambda: ticker.major_holders,
         }
 
         with ThreadPoolExecutor(max_workers=4) as pool:
+            info_future = pool.submit(_fetch_info, yf_sym)
             futures = {pool.submit(fn): name for name, fn in props.items()}
             for future in futures:
                 name = futures[future]
                 try:
-                    fetched[name] = future.result(timeout=15)
+                    fetched[name] = future.result(timeout=_AUX_TIMEOUT)
                 except Exception as e:
-                    logger.debug("yfinance property '%s' failed: %s", name, e)
+                    logger.warning("yfinance %s for %s failed: %s: %s", name, yf_sym, type(e).__name__, e)
                     fetched[name] = None
+            try:
+                info = info_future.result(timeout=_INFO_TIMEOUT)
+            except FutureTimeout as e:
+                raise YahooFetchError(f"timed out after {_INFO_TIMEOUT}s") from e
 
-        info = fetched.get("info") or {}
         financials = fetched.get("financials")
         balance_sheet = fetched.get("balance_sheet")
         major_holders = fetched.get("major_holders")
-
-        if not info or info.get("regularMarketPrice") is None:
-            result["error"] = f"No data found for {yf_sym}"
-            result["score"] = score_fundamentals(result)
-            return result
 
         result["company_name"] = info.get("longName") or info.get("shortName", "")
         result["sector"] = info.get("sector", "")
@@ -115,9 +132,22 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
         result["health"]["promoter_holding"] = _get_promoter_holding(major_holders)
         _add_financial_trends(financials, result)
 
+    except YahooNoData:
+        # Not cached: a symbol Yahoo adds later should show up without a 6h wait.
+        result["error"] = f"No data found for {yf_sym}"
+        result["score"] = score_fundamentals(result)
+        return result
     except Exception as e:
-        logger.warning("Fundamental fetch failed for %s: %s", trading_symbol, e)
-        result["error"] = str(e)
+        # Transient — never cached, so the next request (or Retry) tries again.
+        cause = e.__cause__ or e
+        logger.warning(
+            "Fundamental fetch failed for %s (%s): %s: %s",
+            trading_symbol, yf_sym, type(cause).__name__, cause,
+        )
+        result["error"] = f"Couldn't reach Yahoo Finance for {yf_sym}. Please try again shortly."
+        result["retryable"] = True
+        result["score"] = score_fundamentals(result)
+        return result
 
     # Scored last so the 0-100 breakdown rides the same 6h cache, and so the
     # agent tool and the research API both get it without extra work.
@@ -137,6 +167,59 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
         logger.debug("point-in-time snapshot skipped for %s: %s", trading_symbol, e)
 
     return result
+
+
+def _fetch_info(yf_sym: str) -> dict:
+    """Return ``Ticker.info`` with a quote in it, or raise.
+
+    yfinance swallows HTTP errors on this path by default (``hide_exceptions``):
+    a 401/403/5xx from Yahoo is logged to the ``yfinance`` logger and ``info``
+    comes back empty, indistinguishable from an unknown symbol. So an empty
+    ``info`` is checked against Yahoo's quote endpoint directly, which does
+    raise, before it is believed.
+
+    Raises :class:`YahooNoData` when Yahoo says the symbol doesn't exist, and
+    :class:`YahooFetchError` (chained to the real cause) when Yahoo failed.
+    """
+    last_error: Optional[BaseException] = None
+    for attempt in range(1, _INFO_ATTEMPTS + 1):
+        if attempt > 1:
+            time.sleep(_RETRY_BACKOFF * (attempt - 1))
+        try:
+            # A fresh Ticker each attempt: yfinance memoises `info`, empty or not.
+            info = yf.Ticker(yf_sym).info or {}
+            if info.get("regularMarketPrice") is not None:
+                return info
+            if not _yahoo_has_quote(yf_sym):
+                raise YahooNoData(yf_sym)
+            last_error = YahooFetchError(
+                f"Yahoo quotes {yf_sym} but Ticker.info came back empty (request likely blocked)"
+            )
+        except YahooNoData:
+            raise
+        except Exception as e:  # YFRateLimitError, HTTPError, timeouts, crumb failures
+            last_error = e
+        logger.warning(
+            "yfinance info for %s failed (attempt %d/%d): %s: %s",
+            yf_sym, attempt, _INFO_ATTEMPTS, type(last_error).__name__, last_error,
+        )
+    raise YahooFetchError(str(last_error)) from last_error
+
+
+def _yahoo_has_quote(yf_sym: str) -> bool:
+    """Ask Yahoo's quote endpoint whether it has a price for the symbol.
+
+    Goes through yfinance's shared session so it reuses the cookie, crumb and
+    browser impersonation; unlike ``Ticker.info`` this raises on HTTP errors.
+    """
+    data = YfData().get_raw_json(
+        _QUOTE_URL, params={"symbols": yf_sym, "formatted": "false"}, timeout=10
+    )
+    results = ((data or {}).get("quoteResponse") or {}).get("result") or []
+    return any(
+        r.get("symbol") == yf_sym and r.get("regularMarketPrice") is not None
+        for r in results
+    )
 
 
 def _pct(val) -> Optional[float]:

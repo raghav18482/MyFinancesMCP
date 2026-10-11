@@ -57,6 +57,22 @@ def _summary_cached(key: tuple[str, str]) -> str | None:
     return None
 
 
+# How long a client should wait before retrying after Yahoo failed us.
+_YAHOO_RETRY_AFTER = "30"
+
+
+def _yahoo_unavailable(fundamentals: dict) -> JSONResponse:
+    """503 for a transient Yahoo failure, so clients offer Retry.
+
+    A 200 with ``error`` is reserved for "Yahoo has no data for this symbol",
+    which clients show as a calm "not available" note.
+    """
+    return JSONResponse(
+        {"error": fundamentals["error"], "retryable": True},
+        status_code=503,
+        headers={"Retry-After": _YAHOO_RETRY_AFTER},
+    )
+
 
 # ── Research & Sector API endpoints ───────────────────────────────────────
 
@@ -73,6 +89,8 @@ async def api_research_fundamental(
 
     try:
         result = await asyncio.to_thread(get_stock_fundamentals, symbol)
+        if result.get("retryable"):
+            return _yahoo_unavailable(result)
         return JSONResponse(result)
     except Exception as e:
         logger.exception("Fundamental API error for %s", symbol)
@@ -122,6 +140,8 @@ async def api_research_fundamental_summary(request: Request):
 
     try:
         fundamentals = await asyncio.to_thread(get_stock_fundamentals, symbol)
+        if fundamentals.get("retryable"):
+            return _yahoo_unavailable(fundamentals)
         if fundamentals.get("error"):
             return JSONResponse({"error": fundamentals["error"]}, status_code=400)
 
