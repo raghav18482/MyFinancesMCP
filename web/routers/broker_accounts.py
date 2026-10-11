@@ -13,10 +13,11 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from kiteconnect import KiteConnect
 
 from adminApi import broker_accounts as broker_account_service
+from adminApi import service as admin_service
 from integrations.zerodha_client import ZerodhaClient
 from services.realtime_feed import feed_relay
 from session_manager import sessions
-from web.dependencies import current_app_user, current_client, session_id
+from web.dependencies import current_app_user, current_client, session_id, start_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -151,19 +152,24 @@ async def activate_linked_account(request: Request, account_id: int):
 
 @router.post("/api/accounts/activate/angel")
 async def activate_angel_account(request: Request):
-    """Return to the Angel One account that anchors the app login."""
+    """Switch to a previously configured Angel One account without losing the active broker."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
+    creds = admin_service.credentials_for_user(int(uid))
+    if creds is None:
+        return JSONResponse({"error": "No Angel One account is linked to this app account."},
+                            status_code=409, headers=_NO_STORE)
     old_sid = session_id(request)
-    if old_sid:
+    try:
+        new_sid, client = start_session(request, creds)
+    except Exception:
+        logger.exception("Could not activate Angel One account for app user id=%s", uid)
+        return JSONResponse({"error": "Could not connect the Angel One account. Please reconnect it."},
+                            status_code=401, headers=_NO_STORE)
+    request.session.pop("broker_account_id", None)
+    if old_sid and old_sid != new_sid:
         feed_relay.stop_feed(old_sid)
         sessions.remove_session(old_sid)
-    request.session.pop("sid", None)
-    request.session.pop("broker_account_id", None)
-    client = current_client(request)
-    if client is None:
-        return JSONResponse({"error": "Could not restore the Angel One account"},
-                            status_code=401, headers=_NO_STORE)
     return JSONResponse({"ok": True, "client_id": client.client_id,
                          "broker": getattr(client, "broker", "angelone")}, headers=_NO_STORE)

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 TRADING_AGENT_APP_NAME = "my_finance_mcp_trading"
 
 TRADING_INSTRUCTION = """\
-You are a **trading assistant** for Indian equities on Angel One (NSE/BSE).
+You are a **trading assistant** for Indian equities on the user's selected supported broker (NSE/BSE).
 
 CRITICAL RULES — read carefully:
 

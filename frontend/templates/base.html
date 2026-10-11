@@ -26,11 +26,11 @@
         <a href="/learn" class="{{ 'active' if active == 'learn' }}">Learn</a>
         <a href="/sectors" class="{{ 'active' if active == 'sectors' }}">Sectors</a>
         <a href="/news" class="{{ 'active' if active == 'news' }}">News</a>
-        <a href="/agent" class="{{ 'active' if active == 'agent' }}">Agent</a>
         <a href="/trading" class="{{ 'active' if active == 'trading' }}">Trading</a>
         {% else %}
         <a href="/accounts" class="{{ 'active' if active == 'accounts' }}">Accounts</a>
         {% endif %}
+        <a href="/agent" class="{{ 'active' if active == 'agent' }}">Agent</a>
         <form action="/logout" method="post" style="display:inline">
           <button type="submit" class="btn btn-sm btn-danger">Logout</button>
         </form>

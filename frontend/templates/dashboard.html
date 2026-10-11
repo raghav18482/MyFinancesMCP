@@ -22,7 +22,7 @@
     {% if broker_notice == 'zerodha-connected' %}<div class="alert alert-success">Zerodha account connected. Your dashboard now shows that account.</div>{% endif %}
     {% if broker_notice in ['zerodha-unavailable', 'zerodha-error', 'zerodha-expired', 'zerodha-invalid', 'zerodha-cancelled'] %}<div class="alert alert-error">Zerodha connection did not complete. Check the server's Kite Connect configuration and try again.</div>{% endif %}
     <div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.8rem">
-      <button type="button" class="btn btn-sm {{ 'btn-primary' if not active_account_id else 'btn-muted' }}" data-account-id="angel">Angel One</button>
+      {% if has_angel_account %}<button type="button" class="btn btn-sm {{ 'btn-primary' if not active_account_id else 'btn-muted' }}" data-account-id="angel">Angel One</button>{% endif %}
       {% for account in connected_accounts %}
       <button type="button" class="btn btn-sm {{ 'btn-primary' if active_account_id == account.id else 'btn-muted' }}" data-account-id="{{ account.id }}">Zerodha · {{ account.display_name }}</button>
       {% endfor %}

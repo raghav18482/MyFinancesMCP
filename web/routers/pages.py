@@ -16,6 +16,7 @@ from adminApi import broker_accounts as broker_account_service
 from web.dependencies import (
     ADK_TRADING_CHAT_SESSION_KEY,
     current_app_user,
+    current_client,
     ensure_adk_chat_session_id,
     registered_user_for_session,
     require_login,
@@ -61,6 +62,7 @@ async def dashboard(request: Request):
     ctx["active_account_id"] = request.session.get("broker_account_id")
     ctx["connected_accounts"] = []
     user = registered_user_for_session(client)
+    ctx["has_angel_account"] = bool(user and user.angel_client_id)
     if user:
         try:
             ctx["connected_accounts"] = broker_account_service.list_accounts(int(user.id))
@@ -229,9 +231,12 @@ async def news_page(request: Request):
 
 @router.get("/agent", response_class=HTMLResponse)
 async def agent_page(request: Request):
-    client = require_login(request)
-    if client is None:
+    user = current_app_user(request)
+    if user is None:
         return RedirectResponse("/login", status_code=302)
+    # Rebuild a linked broker session if one is selected; research-only agent
+    # use remains available to app accounts without a connected broker.
+    current_client(request)
     ensure_adk_chat_session_id(request)
     return templates.TemplateResponse(request, "agent.html", template_context(request, "agent"))
 

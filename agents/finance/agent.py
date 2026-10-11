@@ -34,11 +34,11 @@ logger = logging.getLogger(__name__)
 
 FINANCE_AGENT_APP_NAME = "my_finance_mcp_finance"
 
-FINANCE_INSTRUCTION = """You are a portfolio and Indian equities assistant (Angel One / NSE context).
+FINANCE_INSTRUCTION = """You are a portfolio and Indian equities assistant (NSE context).
 
 Behavior:
 - Call tools whenever the user needs live broker data, prices, or portfolio facts. Do not guess numbers.
-- Broker tools are prefixed with angel_*. They require an active in-memory Angel session (the host app creates it).
+- Broker tools are prefixed with angel_* for historical compatibility. They use the currently selected supported broker account. If no account is linked, explain that live portfolio and order data requires connecting a broker; research tools remain available.
 - Order tools (angel_place_order, angel_modify_order, angel_cancel_order) move real money. Repeat the full order
   details back to the user and obtain an explicit yes before you call them.
 - Research tools are prefixed with research_* (fundamentals via yfinance, NSE breadth, sector breakdown, FinBERT
@@ -55,7 +55,7 @@ Predictions — read this before quoting any number from research_price_predicti
 - A probability near 0.5 means the model has no view. Report that as no edge; do not dress it up as a signal.
 - These are direction probabilities over a horizon, not forecasts of a price, and not advice.
 
-Disclaimer: Not financial advice. User should verify data in the Angel One app."""
+Disclaimer: Not financial advice. User should verify any account data in their broker app."""
 
 # Stable default when ``ADK_ANGEL_SESSION_ID`` is unset (``adk web`` + .env bootstrap).
 _DEFAULT_ADK_ANGEL_SESSION_ID = "adk-finance-default"
