@@ -123,6 +123,54 @@ def test_store_range_filter():
     print("ok  store filters by date range across year partitions")
 
 
+def test_store_interrupted_write_keeps_the_previous_year():
+    """A write that dies halfway must leave the old year partition intact.
+
+    Partitions are per year, so writing straight over ``part.parquet`` and
+    being killed mid-write (an interrupted backfill, re-run routinely) would
+    leave a truncated file and a whole year of daily bars unreadable.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        store.write_day(bhavcopy.normalise(RAW_FIXTURE, date(2026, 10, 1)), root)
+
+        real_to_parquet = pd.DataFrame.to_parquet
+
+        def dies_halfway(self, path, *args, **kwargs):
+            real_to_parquet(self, path, *args, **kwargs)
+            # Leave a partial file behind, as a killed process would.
+            if hasattr(path, "truncate"):
+                path.truncate(20)
+            else:
+                os.truncate(path, 20)
+            raise OSError("simulated crash mid-write")
+
+        pd.DataFrame.to_parquet = dies_halfway
+        try:
+            store.write_day(bhavcopy.normalise(RAW_FIXTURE, date(2026, 10, 2)), root)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("the simulated crash should propagate out of write_day")
+        finally:
+            pd.DataFrame.to_parquet = real_to_parquet
+
+        assert store.stored_years(root) == [2026]
+        assert store.stored_dates(root) == {date(2026, 10, 1)}, (
+            "the earlier day must survive a failed write of a later one"
+        )
+        back = store.read_range(root=root)
+        assert list(back["symbol"]) == ["RELIANCE"], f"got {list(back['symbol'])}"
+
+        year_dir = os.path.dirname(store._partition_path(2026, root))
+        leftovers = [n for n in os.listdir(year_dir) if n.endswith(".tmp")]
+        assert not leftovers, f"temp files left behind: {leftovers}"
+
+        # The store still accepts writes afterwards; the lock sidecar is not data.
+        store.write_day(bhavcopy.normalise(RAW_FIXTURE, date(2026, 10, 2)), root)
+        assert store.stored_dates(root) == {date(2026, 10, 1), date(2026, 10, 2)}
+    print("ok  an interrupted year-partition write leaves the previous partition readable")
+
+
 # ── The look-ahead guard ───────────────────────────────────────────────────
 def _snapshot(symbol: str, total: float) -> dict:
     return {

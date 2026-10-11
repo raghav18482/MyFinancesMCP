@@ -7,7 +7,9 @@ Layout::
 One file per year keeps the file count low enough to list cheaply while
 staying small enough to rewrite when a day is appended. Writes are idempotent:
 appending a day that is already stored replaces it rather than duplicating it,
-so an interrupted backfill can simply be re-run.
+so an interrupted backfill can simply be re-run. Each rewrite goes through a
+temp file and an atomic rename, so an interruption mid-write leaves the
+previous partition intact rather than a truncated one.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
+from services.marketstore._atomic import atomic_write_parquet, partition_lock
 from services.marketstore.bhavcopy import SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -56,15 +59,18 @@ def write_day(df: pd.DataFrame, root: str = DAILY_ROOT) -> int:
         path = _partition_path(int(year), root)
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
-        existing = _read_partition(int(year), root)
-        if not existing.empty:
-            existing["date"] = pd.to_datetime(existing["date"])
-            days = set(chunk["date"].unique())
-            existing = existing[~existing["date"].isin(days)]
+        # Serialise the read-modify-write so two writers to one year cannot both
+        # read the old file and have the second drop the first one's days.
+        with partition_lock(path):
+            existing = _read_partition(int(year), root)
+            if not existing.empty:
+                existing["date"] = pd.to_datetime(existing["date"])
+                days = set(chunk["date"].unique())
+                existing = existing[~existing["date"].isin(days)]
 
-        merged = pd.concat([existing, chunk[SCHEMA]], ignore_index=True)
-        merged = merged.sort_values(["date", "symbol"]).reset_index(drop=True)
-        merged.to_parquet(path, index=False)
+            merged = pd.concat([existing, chunk[SCHEMA]], ignore_index=True)
+            merged = merged.sort_values(["date", "symbol"]).reset_index(drop=True)
+            atomic_write_parquet(merged, path)
         written += len(chunk)
 
     return written
