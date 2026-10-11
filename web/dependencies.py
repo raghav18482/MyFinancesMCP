@@ -173,9 +173,11 @@ def ensure_adk_chat_session_id(request: Request, key: str = ADK_CHAT_SESSION_KEY
 
 
 def template_context(request: Request, active: str = "") -> dict:
+    app_user = current_app_user(request)
     return {
         "request": request,
-        "logged_in": current_app_user(request) is not None,
+        "logged_in": app_user is not None,
+        "broker_connected": current_client(request) is not None if app_user else False,
         "active": active,
     }
 

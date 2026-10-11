@@ -17,6 +17,7 @@
       <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>MyFinance<span class="brand-suffix">MCP</span></a>
       <div class="nav-links">
         {% if logged_in %}
+        {% if broker_connected %}
         <a href="/dashboard" class="{{ 'active' if active == 'dashboard' }}">Dashboard</a>
         <a href="/positions" class="{{ 'active' if active == 'positions' }}">Positions</a>
         <a href="/orders" class="{{ 'active' if active == 'orders' }}">Orders</a>
@@ -27,6 +28,9 @@
         <a href="/news" class="{{ 'active' if active == 'news' }}">News</a>
         <a href="/agent" class="{{ 'active' if active == 'agent' }}">Agent</a>
         <a href="/trading" class="{{ 'active' if active == 'trading' }}">Trading</a>
+        {% else %}
+        <a href="/accounts" class="{{ 'active' if active == 'accounts' }}">Accounts</a>
+        {% endif %}
         <form action="/logout" method="post" style="display:inline">
           <button type="submit" class="btn btn-sm btn-danger">Logout</button>
         </form>

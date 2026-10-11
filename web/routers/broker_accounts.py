@@ -25,6 +25,12 @@ _STARTED_KEY = "zerodha_oauth_started"
 _NO_STORE = {"Cache-Control": "no-store"}
 
 
+def _broker_redirect(request: Request, status: str) -> RedirectResponse:
+    """Send status to a usable page, including before the first broker link."""
+    destination = "/dashboard" if current_client(request) is not None else "/accounts"
+    return RedirectResponse(f"{destination}?broker={status}", status_code=302)
+
+
 def _kite_config() -> tuple[str, str, str]:
     api_key = (os.environ.get("KITE_API_KEY") or "").strip()
     api_secret = (os.environ.get("KITE_API_SECRET") or "").strip()
@@ -54,7 +60,7 @@ async def connect_zerodha(request: Request):
         )
     except Exception:
         logger.exception("Unable to start Zerodha OAuth")
-        return RedirectResponse("/dashboard?broker=zerodha-unavailable", status_code=302)
+        return _broker_redirect(request, "zerodha-unavailable")
 
 
 @router.get("/auth/zerodha/callback", name="zerodha_callback")
@@ -67,13 +73,13 @@ async def zerodha_callback(request: Request):
     if not uid or not expected_state or not hmac.compare_digest(str(expected_state), state):
         return RedirectResponse("/login?connect=zerodha-invalid", status_code=302)
     if not isinstance(started, int) or time.time() - started > 600:
-        return RedirectResponse("/dashboard?broker=zerodha-expired", status_code=302)
+        return _broker_redirect(request, "zerodha-expired")
     if request.query_params.get("status") != "success":
-        return RedirectResponse("/dashboard?broker=zerodha-cancelled", status_code=302)
+        return _broker_redirect(request, "zerodha-cancelled")
 
     request_token = request.query_params.get("request_token", "")
     if not request_token or len(request_token) > 256:
-        return RedirectResponse("/dashboard?broker=zerodha-invalid", status_code=302)
+        return _broker_redirect(request, "zerodha-invalid")
 
     try:
         api_key, api_secret, _redirect_url = _kite_config()
@@ -97,10 +103,10 @@ async def zerodha_callback(request: Request):
         sessions.create_client_session(sid, client)
         request.session["sid"] = sid
         request.session["broker_account_id"] = account_id
-        return RedirectResponse("/dashboard?broker=zerodha-connected", status_code=302)
+        return _broker_redirect(request, "zerodha-connected")
     except Exception:
         logger.exception("Zerodha account connection failed for app user id=%s", uid)
-        return RedirectResponse("/dashboard?broker=zerodha-error", status_code=302)
+        return _broker_redirect(request, "zerodha-error")
 
 
 @router.get("/api/accounts")
