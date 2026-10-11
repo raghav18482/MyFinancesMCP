@@ -143,11 +143,14 @@ def _fetch_peers(peers: list[str]) -> list[dict]:
     from services.fundamental_service import get_stock_fundamentals
 
     out: list[dict] = []
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    # Four workers is plenty: every Yahoo request goes through the gateway,
+    # which allows two in flight. Most peers come from the stored snapshots
+    # and cost no Yahoo request at all.
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(get_stock_fundamentals, p): p for p in peers}
         for future in futures:
             try:
-                data = future.result(timeout=25)
+                data = future.result(timeout=60)
             except Exception as e:
                 logger.debug("peer fetch failed for %s: %s", futures[future], e)
                 continue

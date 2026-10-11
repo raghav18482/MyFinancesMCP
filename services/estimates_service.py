@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import pandas as pd
+
+from services import yahoo_gateway
+from services.yahoo_gateway import YahooUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +59,9 @@ def get_estimates(trading_symbol: str) -> dict:
     try:
         ticker = yf.Ticker(yf_symbol)
 
-        # Same parallel-fetch pattern as fundamental_service: each of these is
-        # a separate network round trip and they are independent.
+        # One after another through the Yahoo gateway, not a six-request
+        # parallel burst: Yahoo rate limits by IP, and a burst from a shared
+        # cloud host is what gets it refused. Once refused, stop.
         props = {
             "eps_trend": lambda: ticker.eps_trend,
             "eps_revisions": lambda: ticker.eps_revisions,
@@ -68,15 +71,14 @@ def get_estimates(trading_symbol: str) -> dict:
             "price_targets": lambda: ticker.analyst_price_targets,
         }
         fetched: dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = {pool.submit(fn): name for name, fn in props.items()}
-            for future in futures:
-                name = futures[future]
-                try:
-                    fetched[name] = future.result(timeout=20)
-                except Exception as e:
-                    logger.debug("estimates: '%s' failed for %s: %s", name, yf_symbol, e)
-                    fetched[name] = None
+        for name, fn in props.items():
+            try:
+                fetched[name] = yahoo_gateway.call(fn, what=name, symbol=yf_symbol)
+            except YahooUnavailable:
+                raise
+            except Exception as e:
+                logger.debug("estimates: '%s' failed for %s: %s", name, yf_symbol, e)
+                fetched[name] = None
 
         result["consensus"] = _consensus(fetched.get("earnings_estimate"),
                                          fetched.get("revenue_estimate"))
@@ -87,6 +89,14 @@ def get_estimates(trading_symbol: str) -> dict:
         result["price_target"] = _price_target(fetched.get("price_targets"))
         result["summary"] = _summarise(result)
 
+    except YahooUnavailable as e:
+        # Transient: reported as retryable and never cached.
+        logger.warning("estimates fetch failed for %s: %s: %s", trading_symbol, e.cause, e.detail)
+        result["error"] = f"Couldn't reach Yahoo Finance for {yf_symbol}. Please try again shortly."
+        result["retryable"] = True
+        result["cause"] = e.cause
+        result["retry_after"] = e.retry_after
+        return result
     except Exception as e:
         logger.warning("estimates fetch failed for %s: %s", trading_symbol, e)
         result["error"] = str(e)

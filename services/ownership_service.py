@@ -203,9 +203,16 @@ def _insider(trading_symbol: str) -> dict:
     try:
         import yfinance as yf
 
-        ticker = yf.Ticker(_yf_symbol(trading_symbol))
-        holders = ticker.major_holders
-        txns = ticker.insider_transactions
+        from services import yahoo_gateway
+
+        yf_symbol = _yf_symbol(trading_symbol)
+        ticker = yf.Ticker(yf_symbol)
+        # Through the shared Yahoo gateway: paced, and skipped while Yahoo is
+        # refusing this server.
+        holders = yahoo_gateway.call(lambda: ticker.major_holders, what="major_holders",
+                                     symbol=yf_symbol)
+        txns = yahoo_gateway.call(lambda: ticker.insider_transactions,
+                                  what="insider_transactions", symbol=yf_symbol)
     except Exception as e:
         return {"error": str(e)}
 

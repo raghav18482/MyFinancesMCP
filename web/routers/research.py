@@ -57,20 +57,23 @@ def _summary_cached(key: tuple[str, str]) -> str | None:
     return None
 
 
-# How long a client should wait before retrying after Yahoo failed us.
-_YAHOO_RETRY_AFTER = "30"
+# When the result does not say how long to wait.
+_YAHOO_RETRY_AFTER = 30
 
 
-def _yahoo_unavailable(fundamentals: dict) -> JSONResponse:
+def _yahoo_unavailable(result: dict) -> JSONResponse:
     """503 for a transient Yahoo failure, so clients offer Retry.
 
     A 200 with ``error`` is reserved for "Yahoo has no data for this symbol",
-    which clients show as a calm "not available" note.
+    which clients show as a calm "not available" note. ``cause`` is a stable
+    code (``rate_limited``, ``blocked``, ``timeout``...) and ``Retry-After``
+    is how long the server will refuse to ask Yahoo again.
     """
+    retry_after = int(result.get("retry_after") or _YAHOO_RETRY_AFTER)
     return JSONResponse(
-        {"error": fundamentals["error"], "retryable": True},
+        {"error": result["error"], "retryable": True, "cause": result.get("cause")},
         status_code=503,
-        headers={"Retry-After": _YAHOO_RETRY_AFTER},
+        headers={"Retry-After": str(retry_after)},
     )
 
 
@@ -235,6 +238,8 @@ async def api_research_estimates(request: Request, symbol: str = Query(...)):
 
     try:
         result = await asyncio.to_thread(get_estimates, symbol)
+        if result.get("retryable"):
+            return _yahoo_unavailable(result)
         return JSONResponse(result)
     except Exception as e:
         logger.exception("Estimates error for %s", symbol)
@@ -263,6 +268,25 @@ async def api_research_ownership(
     except Exception as e:
         logger.exception("Ownership error for %s", symbol)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/research/data-health")
+async def api_research_data_health(request: Request):
+    """Whether research data can be fetched right now, and if not, why.
+
+    For operators: confirms in production what the Yahoo gateway sees (last
+    failure cause and detail, breaker state, proxy in use) and what the
+    last-known-good store holds. Login-required; holds no user data or
+    secrets.
+    """
+    client = require_login(request)
+    if client is None:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+
+    from services import fundamental_store, yahoo_gateway
+
+    store = await asyncio.to_thread(fundamental_store.status)
+    return JSONResponse({"yahoo": yahoo_gateway.status(), "fundamentals_store": store})
 
 
 @router.get("/api/research/model-status")

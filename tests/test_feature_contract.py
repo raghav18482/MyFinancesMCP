@@ -189,6 +189,35 @@ def test_build_panel_requires_its_input_columns():
     raise AssertionError("build_panel must reject an input without OHLCV")
 
 
+def test_fundamental_join_survives_real_snapshots():
+    """Regression: the point-in-time join raised MergeError once a real
+    snapshot existed, because parquet reads ``observed_at`` back as
+    datetime64[ms] while panel dates are [us]/[ns]. Production never had a
+    snapshot (Yahoo refused every fetch), so the bug was latent until the
+    fundamentals fix made fetches succeed."""
+    import tempfile
+    from datetime import date
+
+    from services.features import fundamental
+    from services.marketstore import pit
+
+    with tempfile.TemporaryDirectory() as root:
+        written = pit.write_snapshot(
+            {"symbol": "AAA-EQ", "valuation": {"pe_ratio": 20.0}, "health": {"roe": 18.0},
+             "score": {"total": 70, "confidence": "high", "pillars": []}},
+            observed_at=date(2024, 6, 3),
+            root=root,
+        )
+        assert written, "the snapshot must be written for this test to mean anything"
+        panel = _panel(symbols=("AAA",))
+        panel["date"] = panel["date"].astype("datetime64[us]")
+        out = fundamental.build(panel, pit_root=root)
+        assert len(out) == len(panel)
+        assert out.loc[out["date"] >= "2024-06-03", "fund_pe_ratio"].eq(20.0).all()
+        assert out.loc[out["date"] < "2024-06-03", "fund_pe_ratio"].isna().all(), "no look-ahead"
+    print("ok  the fundamentals join works on real parquet snapshots, without look-ahead")
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":

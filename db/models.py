@@ -154,3 +154,20 @@ class ChatThread(SQLModel, table=True):
     archived: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class FundamentalSnapshot(SQLModel, table=True):
+    """The last good fundamentals fetched for a symbol, one row per symbol.
+
+    Fundamentals change quarterly, yet the only copies used to live in process
+    memory and on the container's disk, both wiped by every deploy. When
+    Yahoo then refused the server, there was nothing to show. This row lets
+    the app serve the last real figures, marked with their date, instead.
+    Written by ``services.fundamental_store``; see there.
+    """
+
+    __tablename__ = "fundamental_snapshots"
+
+    symbol: str = Field(primary_key=True)
+    payload_json: str
+    fetched_at: datetime = Field(default_factory=utcnow, index=True)

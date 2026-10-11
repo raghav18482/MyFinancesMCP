@@ -59,6 +59,13 @@ def build(panel: pd.DataFrame, pit_root: str | None = None) -> pd.DataFrame:
             out[f] = np.nan
         return out
 
+    # merge_asof requires both keys at the same resolution. Snapshots read
+    # back from parquet come as datetime64[ms] and price dates as [us] or
+    # [ns], depending on the source; unaligned, the join raises MergeError
+    # the moment the first real snapshot exists.
+    out["date"] = pd.to_datetime(out["date"]).astype("datetime64[ns]")
+    snaps = snaps.assign(observed_at=pd.to_datetime(snaps["observed_at"]).astype("datetime64[ns]"))
+
     out = out.sort_values(["date", "symbol"])
     snaps = snaps.sort_values("observed_at")
 
