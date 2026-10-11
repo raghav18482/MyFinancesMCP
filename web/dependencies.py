@@ -109,6 +109,17 @@ def current_client(request: Request):
     if not uid:
         return None
 
+    # Universal app accounts are valid sessions before a brokerage is linked.
+    # Keep the app identity; broker-only endpoints still receive no client.
+    try:
+        with get_session() as db_session:
+            user = db_session.get(User, int(uid))
+            if user and user.is_active and not user.angel_client_id:
+                return None
+    except Exception:
+        logger.exception("Could not resolve app account id=%s", uid)
+        return None
+
     try:
         creds = admin_service.credentials_for_user(int(uid))
     except Exception:
@@ -135,6 +146,22 @@ def current_client(request: Request):
     return client
 
 
+def current_app_user(request: Request) -> User | None:
+    """Resolve the signed-in MyFinance identity, regardless of broker state."""
+    uid = request.session.get("uid")
+    if not uid:
+        return None
+    try:
+        with get_session() as db_session:
+            user = db_session.get(User, int(uid))
+            if user and user.is_active:
+                db_session.expunge(user)
+                return user
+    except Exception:
+        logger.exception("Could not resolve app account id=%s", uid)
+    return None
+
+
 
 def ensure_adk_chat_session_id(request: Request, key: str = ADK_CHAT_SESSION_KEY) -> str:
     raw = request.session.get(key)
@@ -148,7 +175,7 @@ def ensure_adk_chat_session_id(request: Request, key: str = ADK_CHAT_SESSION_KEY
 def template_context(request: Request, active: str = "") -> dict:
     return {
         "request": request,
-        "logged_in": current_client(request) is not None,
+        "logged_in": current_app_user(request) is not None,
         "active": active,
     }
 

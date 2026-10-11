@@ -15,6 +15,7 @@ from adminApi import broker_accounts as broker_account_service
 
 from web.dependencies import (
     ADK_TRADING_CHAT_SESSION_KEY,
+    current_app_user,
     ensure_adk_chat_session_id,
     registered_user_for_session,
     require_login,
@@ -29,12 +30,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/accounts", response_class=HTMLResponse)
+async def accounts_page(request: Request):
+    """Broker connection hub available to every authenticated app account."""
+    user = current_app_user(request)
+    if user is None:
+        return RedirectResponse("/login", status_code=302)
+    accounts = []
+    try:
+        accounts = broker_account_service.list_accounts(int(user.id))
+    except Exception:
+        logger.exception("Could not load linked accounts for user id=%s", user.id)
+    ctx = template_context(request, "accounts")
+    ctx.update(email=user.email, connected_accounts=accounts,
+               has_angel_account=bool(user.angel_client_id),
+               broker_notice=request.query_params.get("broker", ""))
+    return templates.TemplateResponse(request, "accounts.html", ctx)
+
+
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return RedirectResponse("/accounts" if current_app_user(request) else "/login", status_code=302)
 
     ctx = template_context(request, "dashboard")
     ctx["broker"] = getattr(client, "broker", "angelone").replace("one", " One").title()

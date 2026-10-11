@@ -34,6 +34,12 @@ _COLUMN_MIGRATIONS: tuple[str, ...] = (
     # No default: NULL means "this user has not set an app password yet", which
     # the login path treats as "cannot log in, re-enroll to set one".
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS app_password_hash VARCHAR",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email)",
+    "ALTER TABLE users ALTER COLUMN angel_api_key DROP NOT NULL",
+    "ALTER TABLE users ALTER COLUMN angel_client_id DROP NOT NULL",
+    "ALTER TABLE users ALTER COLUMN angel_password_encrypted DROP NOT NULL",
+    "ALTER TABLE users ALTER COLUMN angel_totp_secret_encrypted DROP NOT NULL",
 )
 
 

@@ -1,4 +1,4 @@
-"""The login, enrollment and logout flows, independent of how they are shown.
+"""The app login, signup, broker enrollment and logout flows.
 
 Two front ends drive these: the server-rendered forms in
 :mod:`web.routers.auth` and the JSON API in :mod:`web.routers.auth_api` that the
@@ -14,6 +14,7 @@ routers may not import each other (``tests/test_app_wiring.py`` enforces it).
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import Request
 
@@ -59,7 +60,7 @@ def _normalized_number(country_code: str, whatsapp_number: str) -> str:
 
 
 def login(request: Request, country_code: str, whatsapp_number: str, app_password: str):
-    """Start a session from a WhatsApp number and app password.
+    """Legacy Angel One login from a WhatsApp number and app password.
 
     Returns the live broker client. Raises :class:`AuthFlowError` otherwise.
     """
@@ -101,6 +102,54 @@ def login(request: Request, country_code: str, whatsapp_number: str, app_passwor
 
     login_throttle.clear(number, ip)
     return client
+
+
+def universal_login(request: Request, email: str, app_password: str):
+    """Authenticate the MyFinance identity; broker connection is a later step."""
+    normalized = (email or "").strip().lower()
+    ip = client_ip(request)
+    try:
+        login_throttle.check(normalized, ip)
+    except login_throttle.TooManyAttempts as e:
+        raise AuthFlowError(str(e), 429, retry_after_sec=e.retry_after_sec) from None
+    try:
+        user = admin_service.app_user_for_login(normalized, app_password)
+    except Exception:
+        logger.exception("Universal login failed while reading app account")
+        raise AuthFlowError("We could not sign you in right now. Please try again.", 500) from None
+    if user is None:
+        raise AuthFlowError("Email or password is incorrect.", 401)
+    request.session.clear()
+    request.session["uid"] = user.id
+    login_throttle.clear(normalized, ip)
+    # Preserve support for existing Angel One users who have not added email.
+    if user.angel_client_id:
+        try:
+            return start_session(request, admin_service.credentials_for_user(int(user.id)))[1]
+        except Exception:
+            logger.exception("Broker reconnect failed for user id=%s", user.id)
+    return None
+
+
+def signup(request: Request, email: str, app_password: str, confirm: str) -> dict:
+    """Create an app account without collecting brokerage credentials."""
+    normalized = (email or "").strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized):
+        raise AuthFlowError("Enter a valid email address.", 400, field="email")
+    if app_password != confirm:
+        raise AuthFlowError("The two passwords do not match.", 400, field="app_password_confirm")
+    if len(app_password) < MIN_PASSWORD_CHARS:
+        raise AuthFlowError(f"Choose a password of at least {MIN_PASSWORD_CHARS} characters.", 400, field="app_password")
+    try:
+        view = admin_service.create_app_user(normalized, app_password)
+    except admin_service.UserAlreadyExists:
+        raise AuthFlowError("An account with that email already exists. Log in instead.", 409, field="email") from None
+    except Exception:
+        logger.exception("App account signup failed")
+        raise AuthFlowError("We could not create your account right now. Please try again.", 500) from None
+    request.session.clear()
+    request.session["uid"] = view["id"]
+    return view
 
 
 def enroll(

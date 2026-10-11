@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Broker accounts{% endblock %}
+{% block content %}
+<div class="container">
+  <header class="dashboard-hero"><div class="dashboard-hero-text"><p class="page-kicker">MyFinance account</p><h1 class="page-title">Connect your accounts</h1><p class="page-sub">Signed in as {{ email }}. Add a brokerage account when you’re ready.</p></div></header>
+  <section class="card" style="margin-bottom:1.25rem"><div class="ai-card-header"><div><h2>Supported brokers</h2><p class="page-sub">You’ll sign in directly with your broker. MyFinance never asks for your broker password here.</p></div><a class="btn btn-primary" href="/auth/zerodha/connect">Connect Zerodha</a></div>
+  {% if broker_notice == 'zerodha-connected' %}<div class="alert alert-success">Zerodha account connected.</div>{% endif %}
+  {% if broker_notice in ['zerodha-unavailable', 'zerodha-error', 'zerodha-expired', 'zerodha-invalid', 'zerodha-cancelled'] %}<div class="alert alert-error">Zerodha connection did not complete. Check the Kite Connect configuration and try again.</div>{% endif %}
+  <h3>Connected accounts</h3><ul>{% if has_angel_account %}<li>Angel One · existing primary account</li>{% endif %}{% for account in connected_accounts %}<li>{{ account.broker|title }} · {{ account.display_name }} ({{ account.broker_user_id }})</li>{% endfor %}</ul>
+  {% if not has_angel_account and not connected_accounts %}<p class="page-sub">No broker accounts connected yet.</p>{% endif %}
+  {% if has_angel_account %}<p><a href="/dashboard" class="btn btn-muted">Open portfolio dashboard</a></p>{% endif %}</section>
+  <form method="post" action="/logout"><button type="submit" class="btn btn-muted">Log out</button></form>
+</div>
+{% endblock %}

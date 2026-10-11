@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from web.dependencies import current_client, registered_user_for_session
+from web.dependencies import current_app_user, current_client, registered_user_for_session
 
 router = APIRouter()
 
@@ -28,17 +28,19 @@ async def api_session_bootstrap(request: Request):
     Like every logged-in page, this goes through :func:`current_client`, so a
     cookie whose broker session lapsed is reconnected here rather than bounced.
     """
-    client = current_client(request)
-    if client is None:
+    app_user = current_app_user(request)
+    if app_user is None:
         return JSONResponse({"authenticated": False}, headers=_NO_STORE)
-
+    client = current_client(request)
     user = registered_user_for_session(client)
     premium = bool(user and user.is_active)
     return JSONResponse(
         {
             "authenticated": True,
-            "client_id": client.client_id,
-            "broker": getattr(client, "broker", "angelone"),
+            "email": app_user.email,
+            "client_id": getattr(client, "client_id", None),
+            "broker": getattr(client, "broker", None),
+            "has_broker": client is not None,
             "premium": {
                 "registered": premium,
                 "whatsapp_number": user.whatsapp_number if premium else None,

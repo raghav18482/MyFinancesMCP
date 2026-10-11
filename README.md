@@ -14,7 +14,7 @@ A multi-user MCP server and web dashboard for tracking Angel One and linked Zero
 - **Peer-relative research** — valuation and quality percentiles against NSE industry peers, analyst estimate revision momentum, and ownership/flow signals
 - **Mandate compliance gate** — proposed trades are checked against a dated, versioned ruleset and blocked with the specific rule cited; every decision, including blocked ones, lands in an append-only decision record
 - **Admin API** — REST endpoints (`/api/admin/*`) for registering premium users with Fernet-encrypted Angel credentials and managing their schedules
-- **Multi-user** — each session authenticates with its own Angel One credentials; premium users' credentials are stored encrypted in Postgres
+- **Multi-user** — users create a MyFinance account with email and password, then link supported broker accounts independently
 - **Multiple broker accounts** — connect Zerodha through Kite's hosted login and switch linked accounts from the dashboard
 - **Zero plaintext credential storage** — transient sessions live only in RAM; premium user credentials are encrypted at rest with a Fernet key
 
@@ -166,7 +166,7 @@ flowchart TB
 
 ### Session flows
 
-- **Web login:** Browser posts Angel credentials → server creates an `AngelOneClient` in memory and stores an opaque **`sid`** in a signed session cookie.
+- **Web login:** Browser authenticates to the MyFinance account with email and password. The signed session cookie records the app user; each broker connection is authorized separately (Zerodha through OAuth).
 - **Daily briefing:** Scheduler ticks every minute → queries `schedules` for rows where `next_run <= now()` → claims them with `FOR UPDATE SKIP LOCKED` → for each claimed schedule: decrypts credentials from `users`, creates an ephemeral Angel session, generates the briefing, sends WhatsApp, writes to `logs`, and arms `next_run`.
 - **MCP:** Client calls the `login` tool; session stored under a key derived from the MCP connection (`id(ctx.session)`). Web and MCP logins are separate unless bridged explicitly.
 
@@ -442,7 +442,7 @@ Go to **Settings → Beta features → MCP Servers → Add Server** and enter:
 
 ### After Deployment
 
-**Web users:** Visit `https://your-app.up.railway.app` and log in with Angel One credentials.
+**Web users:** Visit `https://your-app.up.railway.app`, create a MyFinance account, then connect a broker from the accounts page.
 
 **MCP users:** Update the `url` in your MCP client config:
 
@@ -475,14 +475,14 @@ Go to **Settings → Beta features → MCP Servers → Add Server** and enter:
 | **Server memory** | Transient `AngelOneClient` instances keyed by web `sid` or MCP connection id | Not written to DB; cleared on logout, session expiry (~8 hours), or process restart |
 | **Postgres DB** | Premium `users` rows with `angel_password_encrypted` and `angel_totp_secret_encrypted` | Encrypted with Fernet (`ENCRYPTION_KEY`). Never returned in plaintext by any API response |
 | **Server `.env` / host env** | `OPENROUTER_API_KEY`, `ENCRYPTION_KEY`, `ADMIN_API_KEY`, `DATABASE_URL`, `SESSION_SECRET` | Protect the host and use a secrets manager in production |
-| **Signed session cookie** | Opaque `sid` (web Angel session), `adk_chat_session_id` (ADK thread) | Signed with `SESSION_SECRET`. Use HTTPS in production |
+| **Signed session cookie** | App user id, active broker session id, and ADK chat ids | Signed with `SESSION_SECRET`. Use HTTPS in production |
 | **Server memory (ADK)** | `InMemoryRunner` and ADK session/event state per logged-in user | Lost on restart. Use a single Uvicorn worker |
 | **Browser `localStorage`** | Optional encrypted OpenRouter key for **Dashboard → AI Insights** only | Not used by `/agent` or scheduler. Encrypted with AES-GCM using client id as key material |
 | **Browser (typical)** | No Angel credentials after login | Sent once over HTTPS at login; session cookie identifies the server-side session |
 
 ### Practices reflected in the app
 
-- Transient Angel credentials are **never persisted** by the application; they live in RAM for the session lifetime.
+- MyFinance login credentials are stored as a one-way password hash. Connected broker tokens and any stored Angel credentials are encrypted at rest.
 - Stored premium credentials are **Fernet-encrypted** at rest; the raw values are only decrypted in the scheduler worker for the duration of a briefing run and then discarded.
 - Web-backed Angel sessions **expire** after 8 hours (`SESSION_TTL_SECONDS` in [`session_manager.py`](session_manager.py)).
 - The `FOR UPDATE SKIP LOCKED` pattern in `repository.py` makes the scheduler safe to run across multiple replicas, though only one process should have `SCHEDULER_ENABLED=1`.

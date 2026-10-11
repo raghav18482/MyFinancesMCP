@@ -1,16 +1,10 @@
-"""Landing, setup, connect, enrollment and the login/logout cycle.
+"""Landing, broker setup, universal signup, login and logout routes.
 
 Two distinct flows live here, and the split is the point:
 
-``/enroll`` is the one-time setup. It takes the four Angel One credentials,
-proves them against the broker, encrypts them into the ``users`` row, and hashes
-an app password of the user's choosing.
-
-``/login`` is every day after that. It takes a WhatsApp number and that one app
-password, decrypts the stored credentials, and builds the same in-memory
-``AngelOneClient`` the four-field form used to build. Nothing downstream of
-``session_manager`` can tell the difference, which is why no other router
-changed.
+``/signup`` and ``/login`` create and authenticate the MyFinance identity.
+Broker credentials are independent: Zerodha uses OAuth and the legacy Angel One
+enrollment route verifies and stores its broker credentials separately.
 
 The flows themselves live in :mod:`web.auth_flow`, shared with the JSON API in
 :mod:`web.routers.auth_api`. The handlers here only re-render the form when a
@@ -26,7 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from db.passwords import MIN_PASSWORD_CHARS
 from services import feedback as feedback_service
 from web import auth_flow, country_codes
-from web.dependencies import current_client, template_context
+from web.dependencies import current_app_user, current_client, template_context
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -39,8 +33,8 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 async def landing(request: Request):
-    if current_client(request):
-        return RedirectResponse("/dashboard", status_code=302)
+    if current_app_user(request):
+        return RedirectResponse("/accounts", status_code=302)
     ctx = template_context(request)
     try:
         ctx["feedback_token"] = feedback_service.issue_feedback_token()
@@ -83,8 +77,8 @@ def _phone_context(ctx: dict, dial_code: str = "", national_number: str = "") ->
 
 @router.get("/enroll", response_class=HTMLResponse)
 async def enroll_page(request: Request):
-    if current_client(request):
-        return RedirectResponse("/dashboard", status_code=302)
+    if current_app_user(request):
+        return RedirectResponse("/accounts", status_code=302)
     ctx = template_context(request, "enroll")
     ctx["min_password_chars"] = MIN_PASSWORD_CHARS
     return templates.TemplateResponse(request, "enroll.html", _phone_context(ctx))
@@ -141,30 +135,66 @@ async def enroll_submit(
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    if current_client(request):
-        return RedirectResponse("/dashboard", status_code=302)
+    if current_app_user(request):
+        return RedirectResponse("/accounts", status_code=302)
     ctx = _phone_context(template_context(request))
     return templates.TemplateResponse(request, "login.html", ctx)
+
+
+@router.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request):
+    if request.session.get("uid"):
+        return RedirectResponse("/accounts", status_code=302)
+    return templates.TemplateResponse(request, "signup.html", {
+        **template_context(request), "min_password_chars": MIN_PASSWORD_CHARS,
+    })
+
+
+@router.get("/legacy-login", response_class=HTMLResponse)
+async def legacy_login_page(request: Request):
+    if current_app_user(request):
+        return RedirectResponse("/accounts", status_code=302)
+    ctx = _phone_context(template_context(request))
+    return templates.TemplateResponse(request, "legacy_login.html", ctx)
+
+
+@router.post("/signup")
+async def signup_submit(request: Request, email: str = Form(...),
+                        app_password: str = Form(...),
+                        app_password_confirm: str = Form(...)):
+    try:
+        auth_flow.signup(request, email, app_password, app_password_confirm)
+    except auth_flow.AuthFlowError as e:
+        return templates.TemplateResponse(request, "signup.html", {
+            **template_context(request), "min_password_chars": MIN_PASSWORD_CHARS,
+            "error": e.message, "email": email.strip().lower(),
+        })
+    return RedirectResponse("/accounts", status_code=302)
 
 
 
 @router.post("/login")
 async def login_submit(
     request: Request,
-    country_code: str = Form(...),
-    whatsapp_number: str = Form(...),
     app_password: str = Form(...),
+    email: str | None = Form(None),
+    country_code: str | None = Form(None),
+    whatsapp_number: str | None = Form(None),
 ):
     try:
-        auth_flow.login(request, country_code, whatsapp_number, app_password)
+        if email:
+            auth_flow.universal_login(request, email, app_password)
+        else:
+            auth_flow.login(request, country_code or "", whatsapp_number or "", app_password)
     except auth_flow.AuthFlowError as e:
         ctx = template_context(request)
         ctx["error"] = e.message
         return templates.TemplateResponse(
-            request, "login.html", _phone_context(ctx, country_code, whatsapp_number)
+            request, "legacy_login.html" if not email else "login.html",
+            _phone_context(ctx, country_code or "", whatsapp_number or "")
         )
 
-    return RedirectResponse("/dashboard", status_code=302)
+    return RedirectResponse("/accounts", status_code=302)
 
 
 

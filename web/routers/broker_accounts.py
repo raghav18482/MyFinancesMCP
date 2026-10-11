@@ -16,7 +16,7 @@ from adminApi import broker_accounts as broker_account_service
 from integrations.zerodha_client import ZerodhaClient
 from services.realtime_feed import feed_relay
 from session_manager import sessions
-from web.dependencies import current_client, session_id
+from web.dependencies import current_app_user, current_client, session_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -40,7 +40,7 @@ def _kite_config() -> tuple[str, str, str]:
 @router.get("/auth/zerodha/connect")
 async def connect_zerodha(request: Request):
     """Start Kite's hosted login for the authenticated MyFinance account."""
-    if not request.session.get("uid") or current_client(request) is None:
+    if current_app_user(request) is None:
         return RedirectResponse("/login?connect=zerodha", status_code=302)
     try:
         api_key, _api_secret, _redirect_url = _kite_config()
@@ -106,7 +106,7 @@ async def zerodha_callback(request: Request):
 @router.get("/api/accounts")
 async def get_linked_accounts(request: Request):
     uid = request.session.get("uid")
-    if not uid or current_client(request) is None:
+    if not uid or current_app_user(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
     try:
         return JSONResponse({"accounts": broker_account_service.list_accounts(int(uid)),

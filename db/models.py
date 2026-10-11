@@ -28,12 +28,15 @@ class User(SQLModel, table=True):
     __tablename__ = "users"
 
     id: int | None = Field(default=None, primary_key=True)
+    email: str | None = Field(default=None, unique=True)
     whatsapp_number: str | None = Field(default=None, index=True, unique=True)
 
-    angel_api_key: str
-    angel_client_id: str = Field(index=True, unique=True)
-    angel_password_encrypted: str
-    angel_totp_secret_encrypted: str
+    # Broker credentials are optional: an app identity can exist before any
+    # brokerage account is connected.
+    angel_api_key: str | None = None
+    angel_client_id: str | None = Field(default=None, index=True, unique=True)
+    angel_password_encrypted: str | None = None
+    angel_totp_secret_encrypted: str | None = None
     angel_access_token: str | None = None
 
     # scrypt hash of the password used to log into *this* app, from

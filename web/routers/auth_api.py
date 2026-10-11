@@ -64,16 +64,28 @@ async def api_auth_login(request: Request):
         return JSONResponse(_INVALID_BODY, status_code=400)
 
     try:
-        client = auth_flow.login(
-            request,
-            _text(body, "country_code"),
-            _text(body, "whatsapp_number"),
-            _text(body, "app_password"),
-        )
+        if _text(body, "email"):
+            client = auth_flow.universal_login(request, _text(body, "email"), _text(body, "app_password"))
+        else:
+            client = auth_flow.login(request, _text(body, "country_code"),
+                                     _text(body, "whatsapp_number"), _text(body, "app_password"))
     except auth_flow.AuthFlowError as e:
         return _flow_error(e)
 
-    return JSONResponse({"ok": True, "client_id": client.client_id})
+    return JSONResponse({"ok": True, "client_id": getattr(client, "client_id", None)})
+
+
+@router.post("/api/auth/signup")
+async def api_auth_signup(request: Request):
+    body = await _json_object(request)
+    if body is None:
+        return JSONResponse(_INVALID_BODY, status_code=400)
+    try:
+        view = auth_flow.signup(request, _text(body, "email"), _text(body, "app_password"),
+                                _text(body, "app_password_confirm"))
+    except auth_flow.AuthFlowError as e:
+        return _flow_error(e)
+    return JSONResponse({"ok": True, "user_id": view["id"]})
 
 
 @router.post("/api/auth/enroll")

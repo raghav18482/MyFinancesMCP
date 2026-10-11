@@ -1,54 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Login{% endblock %}
+{% block title %}Log in{% endblock %}
 {% block content %}
-<div class="container">
-  <div class="form-card card">
-    <h1>Log in</h1>
-    <p class="sub">Your Angel One credentials are already stored, encrypted. Just your number and app password.</p>
-
-    {% if error %}
-    <div class="alert alert-error">{{ error }}</div>
-    {% endif %}
-
-    <form method="post" action="/login">
-      <div class="field">
-        <label for="whatsapp_number">WhatsApp Number</label>
-        <div class="phone-input">
-          <select id="country_code" name="country_code" aria-label="Country dialling code">
-            {% for c in countries %}
-            <option value="{{ c.dial }}" title="{{ c.name }}" {{ 'selected' if c.dial == selected_dial }}>{{ c.name }} ({{ c.label }})</option>
-            {% endfor %}
-          </select>
-          <input type="tel" id="whatsapp_number" name="whatsapp_number" required
-                 autocomplete="username" inputmode="tel"
-                 value="{{ national_number }}"
-                 placeholder="98765 43210">
-        </div>
-      </div>
-      <div class="field">
-        <label for="app_password">App Password</label>
-        <input type="password" id="app_password" name="app_password" required
-               autocomplete="current-password"
-               placeholder="The password you chose during setup">
-      </div>
-      <button type="submit" class="btn btn-primary">Log in</button>
-    </form>
-
-    <p class="signup-prompt" style="text-align:center;margin:1.25rem 0 .75rem;font-size:.92rem;color:var(--muted)">
-      First time here, or registered before app passwords existed?
-      <a href="/enroll" style="color:var(--accent);font-weight:600">Set up your account &rarr;</a>
-    </p>
-
-    <p class="signup-prompt" style="text-align:center;margin:0 0 .75rem;font-size:.92rem;color:var(--muted)">
-      Don't have an Angel One account?
-      <a href="https://angel-one.onelink.me/Wjgr/bnic9p8w" target="_blank" rel="noopener" style="color:var(--accent);font-weight:600">
-        Open a free Demat account &rarr;
-      </a>
-    </p>
-
-    <div class="disclaimer">
-      <strong>Security notice:</strong> Your Angel One credentials are encrypted at rest and decrypted only in server memory, for the duration of your session. Your app password is stored as a one-way hash and cannot be read back by anyone, including us.
-    </div>
-  </div>
-</div>
+<div class="container"><div class="form-card card">
+  <h1>Welcome back</h1>
+  <p class="sub">Log in to MyFinance. You can connect brokerage accounts after signing in.</p>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <div class="field"><label for="email">Email</label><input type="email" id="email" name="email" required autocomplete="username" value="{{ email or '' }}"></div>
+    <div class="field"><label for="app_password">Password</label><input type="password" id="app_password" name="app_password" required autocomplete="current-password"></div>
+    <button type="submit" class="btn btn-primary">Log in</button>
+  </form>
+  <p class="signup-prompt" style="text-align:center;margin:1.25rem 0;font-size:.92rem;color:var(--muted)">New to MyFinance? <a href="/signup" style="color:var(--accent);font-weight:600">Create an account →</a></p>
+  <p class="signup-prompt" style="text-align:center;font-size:.82rem;color:var(--muted)">Existing Angel One account? <a href="/legacy-login">Sign in with your WhatsApp number</a>.</p>
+</div></div>
 {% endblock %}

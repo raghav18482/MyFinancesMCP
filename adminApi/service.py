@@ -31,6 +31,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from sqlmodel import select
+from sqlalchemy.exc import IntegrityError
 
 from db import (
     decrypt_value,
@@ -53,9 +54,7 @@ class UserAlreadyExists(UserServiceError):
     """An active row already exists for this ``angel_client_id``."""
 
     def __init__(self, angel_client_id: str, user_id: int) -> None:
-        super().__init__(
-            f"User with angel_client_id '{angel_client_id}' already exists (id={user_id})."
-        )
+        super().__init__(f"User identity '{angel_client_id}' already exists (id={user_id}).")
         self.angel_client_id = angel_client_id
         self.user_id = user_id
 
@@ -76,6 +75,7 @@ def public_view(user: User) -> dict[str, Any]:
     """
     return {
         "id": user.id,
+        "email": user.email,
         "whatsapp_number": user.whatsapp_number,
         "angel_api_key": user.angel_api_key,
         "angel_client_id": user.angel_client_id,
@@ -172,6 +172,42 @@ def create_user(
         return public_view(user)
 
 
+def create_app_user(email: str, app_password: str) -> dict[str, Any]:
+    """Create a standalone MyFinance identity; broker links are optional."""
+    normalized_email = email.strip().lower()
+    with get_session() as session:
+        existing = session.exec(select(User).where(User.email == normalized_email)).first()
+        if existing:
+            raise UserAlreadyExists(normalized_email, int(existing.id))
+        user = User(email=normalized_email, app_password_hash=hash_password(app_password))
+        session.add(user)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise UserAlreadyExists(normalized_email, 0) from exc
+        session.refresh(user)
+        return public_view(user)
+
+
+def app_user_for_login(email: str, app_password: str) -> User | None:
+    """Verify universal email/password login without requiring a broker."""
+    normalized_email = (email or "").strip().lower()
+    with get_session() as session:
+        user = session.exec(select(User).where(User.email == normalized_email)).first() if normalized_email else None
+        stored = user.app_password_hash if user else None
+        if not verify_password(app_password or "", stored) or not user or not user.is_active:
+            return None
+        if needs_rehash(stored):
+            user.app_password_hash = hash_password(app_password)
+            user.updated_at = utcnow()
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        session.expunge(user)
+        return user
+
+
 def update_user(
     user_id: int,
     *,
@@ -239,6 +275,8 @@ class AngelCredentials:
 
 
 def _decrypt_row(user: User) -> AngelCredentials:
+    if not (user.angel_api_key and user.angel_client_id and user.angel_password_encrypted and user.angel_totp_secret_encrypted):
+        raise ValueError("Angel One is not connected to this app account")
     return AngelCredentials(
         user_id=user.id,
         api_key=user.angel_api_key,

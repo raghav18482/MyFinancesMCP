@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Angel One account login{% endblock %}
+{% block content %}
+<div class="container"><div class="form-card card">
+  <h1>Angel One account login</h1><p class="sub">Existing Angel One users can continue with their WhatsApp number and MyFinance app password.</p>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <div class="field"><label for="whatsapp_number">WhatsApp number</label><div class="phone-input"><select id="country_code" name="country_code" aria-label="Country dialling code">{% for c in countries %}<option value="{{ c.dial }}" {{ 'selected' if c.dial == selected_dial }}>{{ c.name }} ({{ c.label }})</option>{% endfor %}</select><input type="tel" id="whatsapp_number" name="whatsapp_number" required autocomplete="username" value="{{ national_number }}"></div></div>
+    <div class="field"><label for="app_password">MyFinance app password</label><input type="password" id="app_password" name="app_password" required autocomplete="current-password"></div>
+    <button type="submit" class="btn btn-primary">Log in</button>
+  </form>
+  <p style="text-align:center;margin-top:1rem"><a href="/enroll">Need to set up or reset your app password?</a></p>
+  <p style="text-align:center"><a href="/login">Use email login</a></p>
+</div></div>
+{% endblock %}
