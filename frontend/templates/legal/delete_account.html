@@ -1,0 +1,41 @@
+{% extends "legal/_base.html" %}
+{% block title %}Delete your account{% endblock %}
+{% block content %}
+<h1>Delete your Agentfolio account</h1>
+
+{% if done %}
+<p class="ok">Your account has been deleted. You can close this page.</p>
+{% else %}
+<p>In the app: <strong>Account → Delete account</strong>. Or here, with the WhatsApp number and app
+password you sign in with.</p>
+
+<h2>What is deleted</h2>
+<ul>
+  <li>Your account, sign-in details and encrypted broker credentials</li>
+  <li>Saved conversations with the AI agents</li>
+  <li>Your risk profile, daily-brief schedule and its delivery log</li>
+</ul>
+<p>Trade decision records are kept as an audit trail, no longer linked to you. Your broker account
+is not affected; orders already placed stay with your broker.</p>
+
+<div class="card">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/delete-account" autocomplete="on">
+    <label for="number">WhatsApp number</label>
+    <div class="row">
+      <select name="country_code" aria-label="Country code">
+        {% for c in countries %}
+        <option value="{{ c.dial }}" {% if c.dial == default_dial %}selected{% endif %}>{{ c.name }} ({{ c.label }})</option>
+        {% endfor %}
+      </select>
+      <input id="number" name="whatsapp_number" inputmode="tel" autocomplete="tel-national" required>
+    </div>
+    <label for="password">App password</label>
+    <input id="password" name="app_password" type="password" autocomplete="current-password" required>
+    <label class="check"><input type="checkbox" name="confirm" value="yes" required>
+      <span>I understand this permanently deletes my Agentfolio account and cannot be undone.</span></label>
+    <button type="submit">Delete my account</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}
