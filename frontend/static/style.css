@@ -1014,6 +1014,13 @@ td.negative{color:var(--red)}
   background:var(--accent);
   opacity:.6;
 }
+.site-footer-links{
+  flex-basis:100%;
+  display:flex;flex-wrap:wrap;justify-content:center;
+  gap:.4rem 1.25rem;
+}
+.site-footer-links a{color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+.site-footer-links a:hover{color:var(--text-soft)}
 
 /* ── Spinner ── */
 .loading{display:flex;justify-content:center;padding:3rem}
