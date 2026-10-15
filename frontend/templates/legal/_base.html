@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="index, follow">
+  <title>{% block title %}{% endblock %} · Agentfolio</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #0F172A; color: #E2E8F0;
+           font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+    main { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+    a { color: #818CF8; }
+    h1 { font-size: 28px; line-height: 1.25; margin: 8px 0 4px; color: #F8FAFC; }
+    h2 { font-size: 19px; margin: 32px 0 8px; color: #F8FAFC; }
+    .meta { color: #94A3B8; font-size: 14px; }
+    .draft { background: #422006; color: #FDE68A; border: 1px solid #92400E;
+             padding: 10px 14px; border-radius: 10px; font-size: 14px; margin-bottom: 24px; }
+    .card { background: #1E293B; border: 1px solid #334155; border-radius: 14px; padding: 20px; }
+    label { display: block; font-size: 14px; color: #CBD5E1; margin: 14px 0 6px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 11px 12px; border-radius: 10px;
+                    border: 1px solid #334155; background: #0F172A; color: #F8FAFC; font-size: 16px; }
+    .row { display: flex; gap: 8px; } .row select { width: 40%; }
+    .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 16px; }
+    .check input { width: auto; margin-top: 5px; }
+    button { margin-top: 20px; width: 100%; padding: 13px; border: 0; border-radius: 12px;
+             background: #E11D48; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; }
+    .error { background: #4C0519; border: 1px solid #9F1239; color: #FECDD3;
+             padding: 10px 14px; border-radius: 10px; }
+    .ok { background: #052E16; border: 1px solid #166534; color: #BBF7D0;
+          padding: 14px; border-radius: 10px; }
+    nav { margin-top: 48px; font-size: 14px; color: #94A3B8; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="meta"><a href="/">Agentfolio</a></p>
+    <!-- DRAFT: written from what the code collects; awaiting legal review before launch. -->
+    <div class="draft">Draft: this page is being reviewed and may change before Agentfolio's public launch.</div>
+    {% block content %}{% endblock %}
+    <nav>
+      <a href="/privacy">Privacy policy</a> ·
+      <a href="/terms">Terms</a> ·
+      <a href="/risk-disclosure">Risk disclosure</a> ·
+      <a href="/delete-account">Delete your account</a>
+    </nav>
+  </main>
+</body>
+</html>

@@ -23,6 +23,13 @@ ROUTERS_DIR = pathlib.Path(__file__).resolve().parent.parent / "web" / "routers"
 # Every endpoint the dashboard serves, excluding the admin router and the
 # FastAPI/Starlette built-ins. If you add a route, add it here too.
 EXPECTED = {
+    # Account deletion and the public legal pages (store requirements)
+    ("DELETE", "/api/account"),
+    ("GET", "/privacy"),
+    ("GET", "/terms"),
+    ("GET", "/risk-disclosure"),
+    ("GET", "/delete-account"),
+    ("POST", "/delete-account"),
     ("GET", "/"),
     ("GET", "/setup"),
     ("GET", "/connect"),

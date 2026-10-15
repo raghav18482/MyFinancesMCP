@@ -6,6 +6,7 @@ endpoint means touching exactly one domain module plus this list.
 from __future__ import annotations
 
 from web.routers import (
+    account,
     agent,
     ai,
     auth,
@@ -24,6 +25,7 @@ from web.routers import (
 )
 
 all_routers = [
+    account.router,
     auth.router,
     auth_api.router,
     session.router,
