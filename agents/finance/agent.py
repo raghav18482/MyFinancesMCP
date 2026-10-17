@@ -1,11 +1,11 @@
 """
-Finance ``LlmAgent``: OpenRouter via LiteLLM, Angel broker tools, research tools.
+Finance ``LlmAgent``: OpenRouter via LiteLLM, read-only Angel broker tools, research tools.
 
-Set ``ADK_ANGEL_SESSION_ID`` to the same id passed to ``session_manager.sessions.create_session``
-so broker tools resolve your Angel One client. The CLI runner sets this automatically.
-
-For ``adk web``: load ``.env`` from the repo with Angel + OpenRouter vars; a shared in-process
-session is created from env on first agent build if credentials are present (see below).
+Multi-user callers (the web app's runner registry) must pass the caller's own
+``angel_session_id``; an empty id is refused rather than falling back to a
+shared one. The single-developer ``adk web`` / CLI flows opt in to
+``allow_env_bootstrap=True``, which may build a session from ``.env``
+credentials under ``ADK_ANGEL_SESSION_ID`` or a fixed default id.
 """
 from __future__ import annotations
 
@@ -38,9 +38,13 @@ FINANCE_INSTRUCTION = """You are a portfolio and Indian equities assistant (Ange
 
 Behavior:
 - Call tools whenever the user needs live broker data, prices, or portfolio facts. Do not guess numbers.
-- Broker tools are prefixed with angel_*. They require an active in-memory Angel session (the host app creates it).
-- Order tools (angel_place_order, angel_modify_order, angel_cancel_order) move real money. Repeat the full order
-  details back to the user and obtain an explicit yes before you call them.
+- Broker tools are prefixed with angel_*. They are read-only and require an active Angel session (the host app
+  creates it).
+- You are a READ-ONLY assistant. You cannot place, modify or cancel orders, move money, or change account
+  settings, and no tool exists for it. If asked, say so plainly and point the user to the Angel One app.
+- You may discuss hypothetical scenarios and trade ideas. Label every one "Hypothetical — not executed" and never
+  describe it as an order, a placed trade, or something you did. Past orders and trades come only from
+  angel_get_order_book / angel_get_trade_book; describe those as historical facts.
 - Research tools are prefixed with research_* (fundamentals via yfinance, NSE breadth, sector breakdown, FinBERT
   sentiment, technicals from candles, price prediction, Google News search, portfolio news by sector, optional
   news+sentiment bundle). News uses gnews and may rate-limit; sentiment on many articles is slower (FinBERT).
@@ -57,7 +61,7 @@ Predictions — read this before quoting any number from research_price_predicti
 
 Disclaimer: Not financial advice. User should verify data in the Angel One app."""
 
-# Stable default when ``ADK_ANGEL_SESSION_ID`` is unset (``adk web`` + .env bootstrap).
+# Single-developer default for ``adk web`` / CLI only (``allow_env_bootstrap=True``).
 _DEFAULT_ADK_ANGEL_SESSION_ID = "adk-finance-default"
 
 
@@ -89,12 +93,14 @@ def build_finance_root_agent(
     *,
     model: str | None = None,
     api_key: str | None = None,
+    allow_env_bootstrap: bool = False,
 ) -> LlmAgent:
-    sid = (angel_session_id or os.environ.get("ADK_ANGEL_SESSION_ID") or "").strip()
-    if not sid:
-        sid = _DEFAULT_ADK_ANGEL_SESSION_ID
-    os.environ.setdefault("ADK_ANGEL_SESSION_ID", sid)
-    _bootstrap_angel_session_from_env(sid)
+    sid = (angel_session_id or "").strip()
+    if allow_env_bootstrap:
+        sid = sid or (os.environ.get("ADK_ANGEL_SESSION_ID") or "").strip() or _DEFAULT_ADK_ANGEL_SESSION_ID
+        _bootstrap_angel_session_from_env(sid)
+    elif not sid:
+        raise ValueError("build_finance_root_agent needs the caller's own angel_session_id")
     tools = [*make_broker_tools(sid), *make_market_tools(sid)]
     return build_llm_agent(
         name="finance_agent",
@@ -102,7 +108,7 @@ def build_finance_root_agent(
         tools=tools,
         model=model,
         api_key=api_key,
-        description="Angel One portfolio, trading, and India market research.",
+        description="Read-only Angel One portfolio analysis and India market research.",
     )
 
 
@@ -114,6 +120,6 @@ def __getattr__(name: str):
     global _root_agent_cache
     if name == "root_agent":
         if _root_agent_cache is None:
-            _root_agent_cache = build_finance_root_agent()
+            _root_agent_cache = build_finance_root_agent(allow_env_bootstrap=True)
         return _root_agent_cache
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

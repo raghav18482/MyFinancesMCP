@@ -133,7 +133,7 @@ flowchart TB
   end
 
   Browser -->|HTTPS session cookie| Starlette
-  MCPClient -->|SSE /mcp/sse| Starlette
+  MCPClient -->|Streamable HTTP /mcp/mcp + Bearer token| Starlette
   Starlette --> Web
   Starlette --> MCP
   Web --> Admin
@@ -166,7 +166,7 @@ flowchart TB
 
 - **Web login:** Browser posts Angel credentials → server creates an `AngelOneClient` in memory and stores an opaque **`sid`** in a signed session cookie.
 - **Daily briefing:** Scheduler ticks every minute → queries `schedules` for rows where `next_run <= now()` → claims them with `FOR UPDATE SKIP LOCKED` → for each claimed schedule: decrypts credentials from `users`, creates an ephemeral Angel session, generates the briefing, sends WhatsApp, writes to `logs`, and arms `next_run`.
-- **MCP:** Client calls the `login` tool; session stored under a key derived from the MCP connection (`id(ctx.session)`). Web and MCP logins are separate unless bridged explicitly.
+- **MCP:** Read-only. Each request carries `Authorization: Bearer <personal access token>` (created on `/connect`; custom tokens, not OAuth). The user is derived from the verified token and their broker session is rebuilt from their encrypted stored credentials; no credentials pass through tools.
 
 ## Getting Your Angel One API Credentials
 
@@ -238,7 +238,7 @@ python main.py
 The server starts on `http://localhost:8000`:
 - Web dashboard: `http://localhost:8000/`
 - Swagger UI: `http://localhost:8000/docs`
-- MCP SSE endpoint: `http://localhost:8000/mcp/sse`
+- MCP endpoint (Streamable HTTP, bearer token): `http://localhost:8000/mcp/mcp`
 
 The app runs without a trained model. Predictions then come from a rule-based
 technical score, and every response and the dashboard label say so.
@@ -364,13 +364,13 @@ Add to your `.cursor/mcp.json`:
 {
   "mcpServers": {
     "angelone-portfolio": {
-      "url": "http://localhost:8000/mcp/sse"
+      "url": "http://localhost:8000/mcp/mcp"
     }
   }
 }
 ```
 
-Then call the `login` tool with your Angel One credentials to start a session.
+Add an `Authorization: Bearer <token>` header using a token from the `/connect` page. See `/connect` for per-client examples.
 
 ### Claude Desktop
 
@@ -381,7 +381,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "angelone-portfolio": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp/sse"]
+      "args": ["-y", "mcp-remote", "http://localhost:8000/mcp/mcp"]
     }
   }
 }
@@ -391,14 +391,12 @@ Add to your `claude_desktop_config.json`:
 
 Go to **Settings → Beta features → MCP Servers → Add Server** and enter:
 - **Command:** `npx`
-- **Arguments:** `-y mcp-remote http://localhost:8000/mcp/sse`
+- **Arguments:** `-y mcp-remote http://localhost:8000/mcp/mcp`
 
 ## Available MCP Tools
 
 | Tool | Description |
 |---|---|
-| `login` | Authenticate with Angel One (must call first) |
-| `logout` | Discard session credentials |
 | `get_profile` | Account profile |
 | `get_holdings` | Stock holdings with P&L |
 | `get_all_holdings` | Complete holdings overview |
@@ -410,9 +408,12 @@ Go to **Settings → Beta features → MCP Servers → Add Server** and enter:
 | `search_scrip` | Search stocks by name |
 | `portfolio_summary` | High-level portfolio summary |
 | `get_candle_data` | Historical OHLC data |
-| `place_order` | Place a new order |
-| `modify_order` | Modify an existing order |
-| `cancel_order` | Cancel an order |
+| `get_stock_history` | OHLCV history by symbol |
+| `calculate_pnl` | P&L for one symbol |
+| `get_market_depth` | Best 5 bids/asks |
+| `predict_price_direction` | Technical-signal outlook (not advice) |
+
+All tools are read-only. There are no order placement, modification, cancellation or login tools.
 
 ## Deploy to Railway (Recommended)
 
@@ -439,7 +440,7 @@ Go to **Settings → Beta features → MCP Servers → Add Server** and enter:
 {
   "mcpServers": {
     "angelone-portfolio": {
-      "url": "https://your-app.up.railway.app/mcp/sse"
+      "url": "https://your-app.up.railway.app/mcp/mcp"
     }
   }
 }

@@ -1,21 +1,23 @@
 """
-Trading agent tools — proposal-based, no direct order execution.
+Trading-analysis agent tools — read-only, with hypothetical trade ideas only.
 
-Tools close over ``session_id`` for broker data access and proposal ownership.
+Tools close over ``session_id`` for broker data access and only ever hold a
+:class:`services.readonly_broker.ReadOnlyBroker`. Nothing here can place,
+modify or cancel an order, or create anything that later could:
+``trading_hypothetical_trade_idea`` returns an analysis dict and stores nothing.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Callable
 
-from session_manager import sessions
 from services.broker_service import (
     fetch_market_depth,
     fetch_stock_history_candles,
 )
+from services.readonly_broker import readonly_client
 from services.risk_profile import risk_profiles, load_profile
-from services.trade_proposals import proposal_store
+from services.trade_proposals import proposal_store, validate_against_profile
 from services.technical_service import compute_technical_indicators
 
 logger = logging.getLogger(__name__)
@@ -23,8 +25,24 @@ logger = logging.getLogger(__name__)
 _MAX_HISTORY_CANDLES = 40
 
 
+HYPOTHETICAL_LABEL = "Hypothetical — not executed"
+
+HYPOTHETICAL_DISCLAIMER = (
+    "This is a hypothetical idea for analysis only. It has not been and cannot be "
+    "executed by this assistant. Not financial advice: verify everything and place "
+    "any order yourself in the Angel One app."
+)
+
+
 def _client_or_error(session_id: str):
-    return sessions.get_client(session_id)
+    return readonly_client(session_id)
+
+
+def _as_float(val: Any) -> float:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _not_logged_in() -> dict[str, Any]:
@@ -32,7 +50,7 @@ def _not_logged_in() -> dict[str, Any]:
 
 
 def make_trading_tools(session_id: str) -> list[Callable[..., Any]]:
-    """Build trading tool callables bound to the given Angel session id."""
+    """Build read-only trading-analysis tool callables bound to the given Angel session id."""
 
     def trading_get_risk_profile() -> dict[str, Any]:
         """Get the client's stored risk profile (age, goal, tolerance, limits)."""
@@ -144,69 +162,64 @@ def make_trading_tools(session_id: str) -> list[Callable[..., Any]]:
             return _not_logged_in()
         return client.search_scrip(exchange, search_text)
 
-    def trading_propose_order(
-        variety: str,
+    def trading_hypothetical_trade_idea(
         tradingsymbol: str,
-        symboltoken: str,
         transactiontype: str,
-        exchange: str,
-        ordertype: str,
-        producttype: str,
         quantity: str,
         price: str = "0",
-        triggerprice: str = "0",
-        duration: str = "DAY",
+        producttype: str = "DELIVERY",
+        exchange: str = "NSE",
+        rationale: str = "",
     ) -> dict[str, Any]:
         """
-        Propose a trade for client approval. Does NOT execute.
-        Returns a proposal_id that the client must APPROVE or REJECT.
+        Describe a HYPOTHETICAL trade idea for discussion. Never executes, never stores.
+
+        Returns the idea with an estimated value and how it compares with the
+        client's risk profile. Always present the result to the user labelled
+        "Hypothetical — not executed"; the user acts in the Angel One app if at all.
         """
-        client = _client_or_error(session_id)
-        if not client:
-            return _not_logged_in()
+        side = (transactiontype or "").strip().upper()
+        if side not in ("BUY", "SELL"):
+            return {"error": "transactiontype must be BUY or SELL"}
+        qty = _as_float(quantity)
+        px = _as_float(price)
+        if qty <= 0:
+            return {"error": "quantity must be a positive number"}
 
-        order_params = {
-            "variety": variety,
+        params = {
             "tradingsymbol": tradingsymbol,
-            "symboltoken": symboltoken,
-            "transactiontype": transactiontype,
-            "exchange": exchange,
-            "ordertype": ordertype,
-            "producttype": producttype,
-            "duration": duration,
-            "price": price,
-            "triggerprice": triggerprice,
+            "transactiontype": side,
             "quantity": quantity,
+            "price": price,
+            "producttype": (producttype or "").upper(),
+            "exchange": exchange,
         }
-
-        price_display = price if float(price) > 0 else "market"
-        summary = (
-            f"{transactiontype} {quantity} {tradingsymbol} @ {price_display} "
-            f"{producttype} ({exchange})"
-        )
-
-        proposal = proposal_store.create(
-            session_id=session_id,
-            order_params=order_params,
-            summary=summary,
-        )
-
-        logger.info("Proposal %s created: %s", proposal.proposal_id, summary)
+        price_display = f"{px:g}" if px > 0 else "market"
+        findings: list[str] = []
+        profile = risk_profiles.get(session_id)
+        if profile is None:
+            findings.append("No risk profile set; suitability was not checked.")
+        else:
+            try:
+                validate_against_profile(params, profile)
+                findings.append("Within the stated risk-profile limits.")
+            except ValueError as e:
+                findings.append(f"Would breach the risk profile: {e}")
 
         return {
-            "ok": True,
-            "proposal_id": proposal.proposal_id,
-            "summary": summary,
-            "status": "pending",
-            "message": (
-                f"Trade proposal created: {summary}. "
-                f"Proposal ID: {proposal.proposal_id}. "
-                f"The client must click Approve in the UI or type APPROVE {proposal.proposal_id} to execute."
-            ),
+            "hypothetical": True,
+            "executable": False,
+            "label": HYPOTHETICAL_LABEL,
+            "summary": f"{side} {qty:g} {tradingsymbol} @ {price_display} "
+                       f"{params['producttype']} ({exchange})",
+            "estimated_value": round(qty * px, 2) if px > 0 else None,
+            "rationale": rationale,
+            "risk_profile_findings": findings,
+            "disclaimer": HYPOTHETICAL_DISCLAIMER,
         }
 
     def trading_list_pending_proposals() -> dict[str, Any]:
-        """List all trade proposals for this session with their current status."""
+        """List historical trade proposals for this session (read-only; none can be executed)."""
         proposals = proposal_store.list_for_session(session_id)
         return {
             "proposals": [p.to_dict() for p in proposals],
@@ -223,6 +236,6 @@ def make_trading_tools(session_id: str) -> list[Callable[..., Any]]:
         trading_get_stock_history,
         trading_get_technicals,
         trading_search_scrip,
-        trading_propose_order,
+        trading_hypothetical_trade_idea,
         trading_list_pending_proposals,
     ]

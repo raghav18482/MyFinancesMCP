@@ -10,6 +10,7 @@ from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from google.genai import types as genai_types
 
+from agents import readonly_guard
 from agents.config import adk_agent_temperature, adk_litellm_model, openrouter_api_key
 
 
@@ -41,13 +42,21 @@ def build_llm_agent(
     temperature: float | None = None,
     description: str = "",
 ) -> LlmAgent:
-    """Create an LlmAgent with OpenRouter (LiteLLM) and the given tool callables."""
+    """Create an LlmAgent with OpenRouter (LiteLLM) and the given tool callables.
+
+    Every agent is read-only: the tools must be on ``agents.readonly_guard``'s
+    allowlist for ``name`` (checked here, before anything is built), and each
+    call is checked again at execution time by the attached callback.
+    """
+    tools = list(tools)
+    readonly_guard.validate_tools(name, tools)
     temp = temperature if temperature is not None else adk_agent_temperature()
     return LlmAgent(
         model=build_openrouter_lite_llm(model=model, api_key=api_key),
         name=name,
         instruction=instruction,
-        tools=list(tools),
+        tools=tools,
         description=description or name,
         generate_content_config=genai_types.GenerateContentConfig(temperature=temp),
+        before_tool_callback=readonly_guard.make_before_tool_callback(name),
     )

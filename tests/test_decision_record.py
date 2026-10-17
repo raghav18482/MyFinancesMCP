@@ -99,7 +99,7 @@ def test_record_round_trip_against_sqlite():
         db_engine.get_session = lambda: Session(engine)
         try:
             rec_id = decision_record.record(
-                proposal_id="p-123", symbol="RELIANCE-EQ", side="BUY",
+                proposal_id="p-123", symbol="RELIANCE-EQ", side="BUY", user_id=7,
                 quantity=10, price=1200.0, outcome="blocked",
                 session_ref="session-abcdef-longer-than-twelve",
                 payload={"tradingsymbol": "RELIANCE-EQ", "quantity": 10},
@@ -110,7 +110,7 @@ def test_record_round_trip_against_sqlite():
             )
             assert rec_id is not None, "write failed against a working database"
 
-            rows = decision_record.recent(10)
+            rows = decision_record.recent(10, user_id=7)
             assert len(rows) == 1
             row = rows[0]
             assert row["symbol"] == "RELIANCE-EQ"
@@ -120,7 +120,8 @@ def test_record_round_trip_against_sqlite():
             assert row["compliance"]["breaches"][0]["rule_id"] == "restricted_list"
             assert len(row["payload_hash"]) == 64
 
-            filtered = decision_record.recent(10, symbol="NOSUCH")
+            assert decision_record.recent(10, user_id=8) == [], "another user's rows must not show"
+            filtered = decision_record.recent(10, user_id=7, symbol="NOSUCH")
             assert filtered == [], "symbol filter should exclude other names"
             print("ok  a decision record round-trips, including a blocked outcome")
         finally:

@@ -1,3 +1,23 @@
+"""
+Read-only Angel One MCP server (Streamable HTTP, bearer-token authenticated).
+
+Every request must carry ``Authorization: Bearer <token>``, where the token is
+a personal access token the user created in the web app (``/connect``). These
+are custom tokens verified against the database — **not OAuth**: there is no
+authorization server, consent flow or client registration here, and none is
+advertised. The server runs stateless, so each HTTP request is authenticated
+on its own and there is no MCP session id to hijack; revoking a token takes
+effect on the next request.
+
+Identity comes only from the verified token. No tool accepts a session, user,
+account or credential argument, and broker credentials never pass through the
+model: the server rebuilds the user's broker session from their encrypted
+stored credentials.
+
+The tool surface is read-only and fixed: :data:`ALLOWED_MCP_TOOLS` is checked
+at import and the server refuses to start if anything else is registered.
+Tools only ever hold a :class:`services.readonly_broker.ReadOnlyBroker`.
+"""
 import os
 import sys
 
@@ -5,44 +25,214 @@ _project_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(_project_dir)
 sys.path.insert(0, _project_dir)
 
+import contextvars
 import json
 import logging
+import re
 
+import anyio
+from mcp.server.auth.middleware.auth_context import get_access_token
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.transport_security import TransportSecuritySettings
 
-from session_manager import sessions
+from adminApi import service as admin_service
+from agents.readonly_guard import FORBIDDEN_TOOL_RE
+from services import mcp_tokens
 from services.broker_service import (
     calculate_symbol_pnl,
-    cancel_order_result,
     fetch_market_depth,
     fetch_stock_history_candles,
-    modify_order_result,
-    place_order_result,
     portfolio_summary_as_dict,
 )
+from services.readonly_broker import ReadOnlyBroker
+from session_manager import sessions
+from web import security_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("AngelOne Portfolio", host="0.0.0.0")
+PUBLIC_BASE_URL = security_config.public_base_url()
+
+# The exact, read-only tool surface. Nothing here places, modifies or cancels
+# an order, and there are no login/logout tools: authentication is the bearer
+# token, never credentials typed into a tool.
+ALLOWED_MCP_TOOLS: frozenset[str] = frozenset({
+    "get_profile",
+    "get_holdings",
+    "get_all_holdings",
+    "get_positions",
+    "get_order_book",
+    "get_trade_book",
+    "get_funds",
+    "get_ltp",
+    "search_scrip",
+    "portfolio_summary",
+    "get_candle_data",
+    "get_stock_history",
+    "calculate_pnl",
+    "get_market_depth",
+    "predict_price_direction",
+})
+
+_USER_CLIENT_ID_RE = re.compile(r"user:(\d{1,12})")
+
+# Set per request by :class:`ClientIPMiddleware`; read by the token verifier,
+# which only receives the token, so that failed attempts can be limited per IP.
+_client_ip_var: contextvars.ContextVar[str] = contextvars.ContextVar("mcp_client_ip", default="unknown")
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+class ClientIPMiddleware:
+    """ASGI middleware recording the caller's IP for token rate limiting.
+
+    Honours one proxy hop (``X-Forwarded-For``), matching ``web.dependencies.client_ip``.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            ip = "unknown"
+            for name, value in scope.get("headers") or []:
+                if name == b"x-forwarded-for":
+                    ip = value.decode("latin-1").split(",")[0].strip() or ip
+                    break
+            else:
+                client = scope.get("client")
+                if client:
+                    ip = client[0]
+            token = _client_ip_var.set(ip)
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _client_ip_var.reset(token)
+            return
+        await self.app(scope, receive, send)
 
 
-def _get_session_key(ctx: Context) -> str:
-    """Derive a stable key that identifies the current MCP connection."""
-    return str(id(ctx.session))
+class DbTokenVerifier:
+    """FastMCP ``TokenVerifier`` backed by :mod:`services.mcp_tokens`."""
 
-
-def _require_client(ctx: Context):
-    """Return the AngelOneClient for this session, or raise."""
-    client = sessions.get_client(_get_session_key(ctx))
-    if client is None:
-        raise RuntimeError(
-            "Not logged in. Please call the 'login' tool first with your Angel One credentials."
+    async def verify_token(self, token: str) -> AccessToken | None:
+        ip = _client_ip_var.get()
+        verified = await anyio.to_thread.run_sync(mcp_tokens.verify, token, ip)
+        if verified is None:
+            return None
+        return AccessToken(
+            # The raw token is never carried past this point.
+            token="redacted",
+            client_id=f"user:{verified.user_id}",
+            scopes=list(verified.scopes),
+            expires_at=verified.expires_at,
         )
-    return client
+
+
+def _transport_security() -> TransportSecuritySettings:
+    """DNS-rebinding protection keyed to ``ALLOWED_HOSTS``.
+
+    With an explicit host list, the MCP endpoint checks ``Host`` and ``Origin``
+    against it (on top of the outer ``TrustedHostMiddleware``). With no list —
+    local development only; production refuses to start without one — the
+    check is off, matching the web app's "accept any Host" in that case.
+    """
+    hosts = security_config.allowed_hosts()
+    if "*" in hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    allowed_hosts: list[str] = []
+    allowed_origins: list[str] = []
+    for h in hosts:
+        allowed_hosts += [h, f"{h}:*"]
+        schemes = ("http", "https") if h in ("localhost", "127.0.0.1") else ("https",)
+        for scheme in schemes:
+            allowed_origins += [f"{scheme}://{h}", f"{scheme}://{h}:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
+mcp = FastMCP(
+    "AngelOne Portfolio (read-only)",
+    instructions=(
+        "Read-only access to the authenticated user's Angel One portfolio and market data. "
+        "This server cannot place, modify or cancel orders. Present any trade idea as "
+        "hypothetical analysis, never as an executed transaction."
+    ),
+    token_verifier=DbTokenVerifier(),
+    auth=AuthSettings(
+        # Required by the SDK when a verifier is set. No OAuth server runs here:
+        # ``resource_server_url=None`` means no protected-resource metadata is
+        # published, so OAuth-capable clients are not sent looking for one.
+        issuer_url=PUBLIC_BASE_URL,
+        resource_server_url=None,
+        required_scopes=[mcp_tokens.SCOPE_PORTFOLIO_READ],
+    ),
+    stateless_http=True,
+    streamable_http_path="/mcp",
+    transport_security=_transport_security(),
+)
+
+
+# ── Identity ───────────────────────────────────────────────────────────────
+
+
+class NotAuthorized(PermissionError):
+    """The request has no verified identity, or it does not map to a usable account."""
+
+
+def _verified_user_id() -> int:
+    """The user id from this request's verified bearer token. Fails closed."""
+    tok = get_access_token()
+    if tok is None:
+        raise NotAuthorized("Authentication required: send a valid MCP access token.")
+    if mcp_tokens.SCOPE_PORTFOLIO_READ not in (tok.scopes or []):
+        raise NotAuthorized("This token is not allowed to read portfolio data.")
+    m = _USER_CLIENT_ID_RE.fullmatch(tok.client_id or "")
+    if not m:
+        raise NotAuthorized("Authentication required: send a valid MCP access token.")
+    return int(m.group(1))
+
+
+def _require_client(ctx: Context = None) -> ReadOnlyBroker:
+    """The read-only broker for the verified caller, building it on first use.
+
+    The session key is derived from the verified token only. The live client is
+    checked against the user's own broker account, so a mis-filed session can
+    never answer for someone else.
+    """
+    user_id = _verified_user_id()
+    state = admin_service.session_state(user_id)
+    if state is None or not state.is_active:
+        raise NotAuthorized("This account is not active.")
+
+    key = mcp_tokens.mcp_session_key(user_id)
+
+    def _build():
+        creds = admin_service.credentials_for_user(user_id)
+        if creds is None:
+            return None
+        try:
+            return sessions.create_session(
+                key, creds.api_key, creds.client_id, creds.password, creds.totp_secret
+            )
+        except Exception:
+            logger.exception("MCP: Angel One login failed for user id=%s", user_id)
+            raise RuntimeError(
+                "Could not connect to Angel One with your saved credentials. "
+                "Re-enroll in the web app if they have changed."
+            ) from None
+
+    client = sessions.get_or_create(key, _build)
+    if client is None:
+        raise NotAuthorized("No broker account is linked to this user.")
+    if client.client_id != state.angel_client_id:
+        sessions.remove_session(key)
+        logger.error("MCP: session %s did not match user id=%s; dropped", key, user_id)
+        raise NotAuthorized("Session does not belong to this user.")
+    return ReadOnlyBroker(client)
 
 
 def _safe_call(fn, *args, **kwargs) -> str:
@@ -285,38 +475,6 @@ def _format_market_depth_from_dict(d: dict) -> str:
     return "\n".join(lines)
 
 
-# ── Authentication ─────────────────────────────────────────────────────────
-
-
-@mcp.tool()
-def login(api_key: str, client_id: str, password: str, totp_secret: str, ctx: Context = None) -> str:
-    """Log in to Angel One. Must be called before using any other tool.
-
-    Credentials are held in memory only for this session and are never stored on disk.
-
-    Args:
-        api_key: Your Angel One API key
-        client_id: Your Angel One client ID (e.g. "AB1234")
-        password: Your Angel One PIN / password
-        totp_secret: Your TOTP secret for 2FA (base32 string from Angel One)
-    """
-    try:
-        session_key = _get_session_key(ctx)
-        sessions.create_session(session_key, api_key, client_id, password, totp_secret)
-        return f"Logged in successfully as {client_id}. You can now use all portfolio and trading tools."
-    except Exception as e:
-        logger.exception("Login failed")
-        return f"Login failed: {e}"
-
-
-@mcp.tool()
-def logout(ctx: Context = None) -> str:
-    """Log out and discard your session credentials from memory."""
-    session_key = _get_session_key(ctx)
-    sessions.remove_session(session_key)
-    return "Logged out. Credentials removed from memory."
-
-
 # ── Read-Only Tools ────────────────────────────────────────────────────────
 
 
@@ -527,109 +685,6 @@ def get_market_depth(symbol: str, exchange: str = "NSE", ctx: Context = None) ->
     return _format_market_depth_from_dict(d)
 
 
-# ── Trading Tools ──────────────────────────────────────────────────────────
-
-
-@mcp.tool()
-def place_order(
-    variety: str,
-    tradingsymbol: str,
-    symboltoken: str,
-    transactiontype: str,
-    exchange: str,
-    ordertype: str,
-    producttype: str,
-    quantity: str,
-    price: str = "0",
-    triggerprice: str = "0",
-    duration: str = "DAY",
-    ctx: Context = None,
-) -> str:
-    """Place a new order on Angel One. IMPORTANT: This will execute a real trade with real money.
-
-    Args:
-        variety: Order variety - NORMAL, STOPLOSS, AMO, ROBO
-        tradingsymbol: Trading symbol, e.g. "SBIN-EQ"
-        symboltoken: Symbol token, e.g. "3045"
-        transactiontype: BUY or SELL
-        exchange: Exchange - NSE, BSE, NFO, MCX
-        ordertype: Order type - MARKET, LIMIT, STOPLOSS_LIMIT, STOPLOSS_MARKET
-        producttype: Product type - DELIVERY, INTRADAY, CARRYFORWARD, MARGIN, BO
-        quantity: Number of shares/lots to trade
-        price: Limit price (use "0" for market orders)
-        triggerprice: Trigger price for stop-loss orders (use "0" if not applicable)
-        duration: DAY or IOC (Immediate or Cancel)
-    """
-    client = _require_client(ctx)
-    order_params = {
-        "variety": variety,
-        "tradingsymbol": tradingsymbol,
-        "symboltoken": symboltoken,
-        "transactiontype": transactiontype,
-        "exchange": exchange,
-        "ordertype": ordertype,
-        "producttype": producttype,
-        "duration": duration,
-        "price": price,
-        "triggerprice": triggerprice,
-        "quantity": quantity,
-    }
-    pr = place_order_result(client, order_params)
-    if pr.get("ok"):
-        return f"Order placed successfully. Order ID: {pr.get('order_id')}"
-    return pr.get("error", "Order placement failed. Check logs for details.")
-
-
-@mcp.tool()
-def modify_order(
-    variety: str,
-    orderid: str,
-    ordertype: str,
-    quantity: str,
-    price: str,
-    triggerprice: str = "0",
-    producttype: str = "DELIVERY",
-    duration: str = "DAY",
-    ctx: Context = None,
-) -> str:
-    """Modify an existing open order.
-
-    Args:
-        variety: Order variety - NORMAL, STOPLOSS, AMO, ROBO
-        orderid: The order ID to modify
-        ordertype: New order type - MARKET, LIMIT, STOPLOSS_LIMIT, STOPLOSS_MARKET
-        quantity: New quantity
-        price: New limit price
-        triggerprice: New trigger price (use "0" if not applicable)
-        producttype: Product type - DELIVERY, INTRADAY, CARRYFORWARD, MARGIN, BO
-        duration: DAY or IOC
-    """
-    client = _require_client(ctx)
-    order_params = {
-        "variety": variety,
-        "orderid": orderid,
-        "ordertype": ordertype,
-        "producttype": producttype,
-        "duration": duration,
-        "price": price,
-        "triggerprice": triggerprice,
-        "quantity": quantity,
-    }
-    return json.dumps(modify_order_result(client, order_params), indent=2, default=str)
-
-
-@mcp.tool()
-def cancel_order(orderid: str, variety: str = "NORMAL", ctx: Context = None) -> str:
-    """Cancel an open order by its order ID.
-
-    Args:
-        orderid: The order ID to cancel
-        variety: Order variety - NORMAL, STOPLOSS, AMO, ROBO
-    """
-    client = _require_client(ctx)
-    return json.dumps(cancel_order_result(client, orderid, variety), indent=2, default=str)
-
-
 @mcp.tool()
 def predict_price_direction(
     tradingsymbol: str,
@@ -656,9 +711,13 @@ def predict_price_direction(
 
     client = _require_client(ctx)
     search_key = tradingsymbol.split("-")[0] if "-" in tradingsymbol else tradingsymbol
-    sr = _safe_call(client.search_scrip, exchange, search_key)
-    if isinstance(sr, str):
-        return f"Could not find symbol: {sr}"
+    try:
+        sr = client.search_scrip(exchange, search_key)
+    except Exception as e:
+        logger.exception("predict_price_direction: search_scrip failed")
+        return f"Could not find symbol: {e}"
+    if not isinstance(sr, dict) or not sr.get("status"):
+        return f"Could not find symbol {tradingsymbol}."
 
     rows = sr.get("data") or []
     token = None
@@ -674,19 +733,20 @@ def predict_price_direction(
 
     to_dt = datetime.now()
     from_dt = to_dt - timedelta(days=days)
-    candle_result = _safe_call(
-        client.get_candle_data,
-        {
-            "exchange": exchange,
-            "symboltoken": token,
-            "interval": "ONE_DAY",
-            "fromdate": from_dt.strftime("%Y-%m-%d 09:15"),
-            "todate": to_dt.strftime("%Y-%m-%d 15:30"),
-        },
-    )
-    if isinstance(candle_result, str):
-        return f"Could not fetch candle data: {candle_result}"
-    if not candle_result.get("status") or not candle_result.get("data"):
+    try:
+        candle_result = client.get_candle_data(
+            {
+                "exchange": exchange,
+                "symboltoken": token,
+                "interval": "ONE_DAY",
+                "fromdate": from_dt.strftime("%Y-%m-%d 09:15"),
+                "todate": to_dt.strftime("%Y-%m-%d 15:30"),
+            }
+        )
+    except Exception as e:
+        logger.exception("predict_price_direction: get_candle_data failed")
+        return f"Could not fetch candle data: {e}"
+    if not isinstance(candle_result, dict) or not candle_result.get("status") or not candle_result.get("data"):
         return "No candle data available for this symbol."
 
     # Interval passed explicitly: the predictor checks it against the model's
@@ -737,5 +797,23 @@ def predict_price_direction(
     return "\n".join(lines)
 
 
+def _assert_tool_surface() -> None:
+    """Refuse to start if the registered tools are not exactly the read-only allowlist."""
+    names = {t.name for t in mcp._tool_manager.list_tools()}
+    forbidden = sorted(n for n in names if FORBIDDEN_TOOL_RE.search(n))
+    unexpected = sorted(names - ALLOWED_MCP_TOOLS)
+    missing = sorted(ALLOWED_MCP_TOOLS - names)
+    if forbidden or unexpected or missing:
+        raise RuntimeError(
+            "MCP tool surface is not the read-only allowlist: "
+            f"forbidden={forbidden} unexpected={unexpected} missing={missing}"
+        )
+
+
+_assert_tool_surface()
+
+
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    # Standalone: same authenticated Streamable HTTP endpoint (``/mcp``) as the
+    # combined app in ``main.py`` serves at ``/mcp/mcp``.
+    mcp.run(transport="streamable-http")

@@ -1,9 +1,12 @@
 """
-Combined entry point: serves the MCP SSE server and the web dashboard
+Combined entry point: serves the read-only MCP server and the web dashboard
 on a single port behind one uvicorn instance.
 
-MCP clients connect to:   /sse   (SSE transport)
-Web browsers connect to:  /      (FastAPI dashboard)
+MCP clients connect to:   /mcp/mcp   (Streamable HTTP, ``Authorization: Bearer <token>``)
+Web browsers connect to:  /          (FastAPI dashboard)
+
+Both sit behind one ``TrustedHostMiddleware``, so the MCP mount gets the same
+Host-header check as the web app.
 """
 
 import os
@@ -14,6 +17,8 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.routing import Mount
 
 _project_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,19 +35,21 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from mcp_server import mcp     # noqa: E402  — MCP FastMCP instance
+from mcp_server import ClientIPMiddleware, mcp  # noqa: E402  — MCP FastMCP instance
 from web_app import web         # noqa: E402  — FastAPI web dashboard
+from web import security_config  # noqa: E402
+from web.session_cleanup import release_session_resources  # noqa: E402
 from session_manager import sessions  # noqa: E402
 from services.trade_proposals import proposal_store  # noqa: E402
 from services.realtime_feed import feed_relay  # noqa: E402
 
 
 async def _cleanup_loop():
-    """Periodically remove expired sessions and stale proposals."""
+    """Periodically remove expired sessions, their per-session state, and stale proposals."""
     while True:
         await asyncio.sleep(600)
         for sid in sessions.cleanup_expired():
-            feed_relay.stop_feed(sid)
+            release_session_resources(sid)
         proposal_store.cleanup_expired()
 
 
@@ -68,7 +75,9 @@ async def _lifespan(_app: Starlette):
 
     task = asyncio.create_task(_cleanup_loop())
     try:
-        yield
+        # The Streamable HTTP transport's task group must run for the app's lifetime.
+        async with mcp.session_manager.run():
+            yield
     finally:
         if scheduler_enabled:
             try:
@@ -86,10 +95,12 @@ async def _lifespan(_app: Starlette):
 
 
 def create_app() -> Starlette:
-    mcp_starlette = mcp.sse_app()
+    # ``streamable_http_app`` serves ``/mcp``; mounted at ``/mcp`` the endpoint is ``/mcp/mcp``.
+    mcp_starlette = ClientIPMiddleware(mcp.streamable_http_app())
 
     return Starlette(
         lifespan=_lifespan,
+        middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=security_config.allowed_hosts())],
         routes=[
             Mount("/mcp", app=mcp_starlette),
             Mount("/", app=web),

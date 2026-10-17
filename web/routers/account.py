@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from services import account_deletion, login_throttle
 from web import auth_flow, country_codes
-from web.dependencies import client_ip, current_client, registered_user_for_session
+from web.dependencies import client_ip, current_client, current_user
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ async def api_account_delete(request: Request):
     if not isinstance(body, dict):
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if user is None:
         # Nothing stored for this session: there is nothing to delete.
         auth_flow.logout(request)

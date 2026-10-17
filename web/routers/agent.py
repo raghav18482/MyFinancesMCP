@@ -1,8 +1,10 @@
-"""Agent chat threads and the conversation endpoint, including inline
-trade approval commands."""
+"""Agent chat threads and the conversation endpoint.
+
+The agents are read-only. There are no inline approval commands: a message
+such as ``APPROVE <id>`` is ordinary chat text and executes nothing.
+"""
 from __future__ import annotations
 
-import re
 import uuid
 import logging
 from datetime import datetime
@@ -14,9 +16,6 @@ from sqlmodel import select
 from db import get_session
 from db.models import ChatThread
 
-from services.trade_proposals import proposal_store, execute_proposal
-
-from session_manager import sessions
 from services.adk_runner_registry import app_name_for, registry
 
 from db.models import utcnow
@@ -32,13 +31,6 @@ from web.dependencies import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-_APPROVE_RE = re.compile(r"^APPROVE\s+([a-f0-9]{8,16})$", re.IGNORECASE)
-
-
-_REJECT_RE = re.compile(r"^REJECT\s+([a-f0-9]{8,16})$", re.IGNORECASE)
-
 
 
 # ── Agent chat persistence (conversation threads) ──────────────────────────
@@ -234,6 +226,9 @@ async def api_agent_chat(request: Request):
     if current_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     sid = session_id(request)
+    if not sid:
+        # The agent's tools are bound to this caller's own session; never run without one.
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         body = await request.json()
@@ -269,26 +264,16 @@ async def api_agent_chat(request: Request):
         )
         adk_session_id = ensure_adk_chat_session_id(request, session_key)
 
-    approval_result = None
-    if agent_type == "trading":
-        approval_result = _try_handle_approval(sid, message)
-
-    effective_message = message
-    if approval_result:
-        effective_message = f"[System: {approval_result}] {message}"
-
     try:
         result = await registry.chat(
             angel_sid=sid,
             adk_session_id=adk_session_id,
-            message=effective_message,
+            message=message,
             agent_type=agent_type,
             debug=debug,
             user_id=chat_user_id,
             persist=persist,
         )
-        if approval_result:
-            result["approval_result"] = approval_result
         if thread is not None:
             _touch_thread(thread.id, message)
             result["thread_id"] = thread.id
@@ -302,35 +287,6 @@ async def api_agent_chat(request: Request):
         logger.exception("ADK agent chat error")
         return JSONResponse({"error": f"Agent error: {e}"}, status_code=500)
 
-
-
-def _try_handle_approval(sid: str, message: str) -> str | None:
-    """If message is APPROVE/REJECT <id>, handle it server-side and return a status string."""
-    m = _APPROVE_RE.match(message.strip())
-    if m:
-        pid = m.group(1)
-        try:
-            client = sessions.get_client(sid)
-            proposal_store.approve(sid, pid)
-            if client:
-                result = execute_proposal(sid, pid, client)
-                if result.get("ok"):
-                    return f"Proposal {pid} APPROVED and executed. Order ID: {result.get('order_id')}"
-                return f"Proposal {pid} APPROVED but execution failed: {result.get('error')}"
-            return f"Proposal {pid} approved but no broker session found."
-        except (ValueError, PermissionError) as e:
-            return f"Approval failed: {e}"
-
-    m = _REJECT_RE.match(message.strip())
-    if m:
-        pid = m.group(1)
-        try:
-            proposal_store.reject(sid, pid)
-            return f"Proposal {pid} REJECTED."
-        except (ValueError, PermissionError) as e:
-            return f"Rejection failed: {e}"
-
-    return None
 
 
 

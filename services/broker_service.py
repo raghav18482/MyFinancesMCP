@@ -2,6 +2,9 @@
 Structured Angel One / SmartAPI helpers for reuse by MCP tools and ADK agents.
 
 Returns JSON-friendly dicts; presentation formatting stays in mcp_server where needed.
+
+Read-only by design: there are no order placement, modification or cancellation
+helpers here, and none should be added. See ``services.readonly_broker``.
 """
 from __future__ import annotations
 
@@ -257,30 +260,6 @@ def fetch_market_depth(client: Any, symbol: str, exchange: str = "NSE") -> dict[
     }
 
 
-def place_order_result(client: Any, order_params: dict) -> dict[str, Any]:
-    try:
-        result = client.place_order(order_params)
-        if result:
-            return {"ok": True, "order_id": str(result), "raw": result}
-        return {"ok": False, "error": "Order placement failed (no id returned)."}
-    except Exception as e:
-        logger.exception("place_order")
-        return {"ok": False, "error": str(e)}
-
-
-def modify_order_result(client: Any, order_params: dict) -> dict[str, Any]:
-    try:
-        result = client.modify_order(order_params)
-        if isinstance(result, dict) and not result.get("status"):
-            return {
-                "ok": False,
-                "error": result.get("message", str(result)),
-                "raw": result,
-            }
-        return {"ok": True, "raw": result}
-    except Exception as e:
-        logger.exception("modify_order")
-        return {"ok": False, "error": str(e)}
 
 
 def holdings_for_sector_analysis(client: Any) -> list[dict]:
@@ -313,18 +292,3 @@ def holdings_for_sector_analysis(client: Any) -> list[dict]:
     except Exception as e:
         logger.exception("holdings_for_sector_analysis: %s", e)
     return rows
-
-
-def cancel_order_result(client: Any, order_id: str, variety: str = "NORMAL") -> dict[str, Any]:
-    try:
-        result = client.cancel_order(order_id, variety)
-        if isinstance(result, dict) and not result.get("status"):
-            return {
-                "ok": False,
-                "error": result.get("message", str(result)),
-                "raw": result,
-            }
-        return {"ok": True, "raw": result}
-    except Exception as e:
-        logger.exception("cancel_order")
-        return {"ok": False, "error": str(e)}

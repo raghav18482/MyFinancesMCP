@@ -13,7 +13,7 @@ from adminApi import service as admin_service
 from web import country_codes
 from web.dependencies import (
     current_client,
-    registered_user_for_session,
+    current_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def api_premium_status(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if user and user.is_active:
         return JSONResponse({
             "registered": True,
@@ -78,7 +78,7 @@ async def api_premium_register(request: Request):
             status_code=400,
         )
 
-    existing = registered_user_for_session(client)
+    existing = current_user(request)
     if existing and existing.is_active:
         return JSONResponse(
             {"ok": False, "error": "You are already registered for premium."},

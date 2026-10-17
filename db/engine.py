@@ -34,6 +34,8 @@ _COLUMN_MIGRATIONS: tuple[str, ...] = (
     # No default: NULL means "this user has not set an app password yet", which
     # the login path treats as "cannot log in, re-enroll to set one".
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS app_password_hash VARCHAR",
+    # Logout bumps this; cookies issued with an older value stop working.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
 )
 
 

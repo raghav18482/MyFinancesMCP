@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from web.dependencies import current_client, registered_user_for_session
+from web.dependencies import current_client, current_user
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ async def api_session_bootstrap(request: Request):
     if client is None:
         return JSONResponse({"authenticated": False}, headers=_NO_STORE)
 
-    user = registered_user_for_session(client)
+    user = current_user(request)
     premium = bool(user and user.is_active)
     return JSONResponse(
         {

@@ -1,26 +1,24 @@
 """
-Angel One broker tools for ADK, aligned with MCP server capabilities.
+Read-only Angel One broker tools for ADK, aligned with MCP server capabilities.
 
-Tools close over ``session_id`` (in-memory Angel session from session_manager).
-Do not pass secrets through the LLM; create the session in the runner first.
+Tools close over ``session_id`` (in-memory Angel session from session_manager)
+and only ever hold a :class:`services.readonly_broker.ReadOnlyBroker`, which has
+no order methods. Do not pass secrets through the LLM; the host app creates the
+session before the agent runs.
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Callable
 
-from session_manager import sessions
 from services.broker_service import (
     calculate_symbol_pnl,
-    cancel_order_result,
     fetch_market_depth,
     fetch_stock_history_candles,
     holdings_for_sector_analysis,
-    modify_order_result,
-    place_order_result,
     portfolio_summary_as_dict,
 )
+from services.readonly_broker import readonly_client
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +26,7 @@ _MAX_HISTORY_CANDLES = 40
 
 
 def _client_or_error(session_id: str):
-    c = sessions.get_client(session_id)
-    if c is None:
-        return None
-    return c
+    return readonly_client(session_id)
 
 
 def _not_logged_in() -> dict[str, Any]:
@@ -41,7 +36,7 @@ def _not_logged_in() -> dict[str, Any]:
 
 
 def make_broker_tools(session_id: str) -> list[Callable[..., Any]]:
-    """Build broker tool callables bound to the given Angel session id."""
+    """Build read-only broker tool callables bound to the given Angel session id."""
 
     def angel_get_profile() -> dict[str, Any]:
         """Get Angel One account profile (name, client ID, email, exchanges, products)."""
@@ -176,74 +171,6 @@ def make_broker_tools(session_id: str) -> list[Callable[..., Any]]:
             return _not_logged_in()
         return fetch_market_depth(client, symbol, exchange)
 
-    def angel_place_order(
-        variety: str,
-        tradingsymbol: str,
-        symboltoken: str,
-        transactiontype: str,
-        exchange: str,
-        ordertype: str,
-        producttype: str,
-        quantity: str,
-        price: str = "0",
-        triggerprice: str = "0",
-        duration: str = "DAY",
-    ) -> dict[str, Any]:
-        """Place a live order. Confirm all parameters with the user before calling."""
-        client = _client_or_error(session_id)
-        if not client:
-            return _not_logged_in()
-        order_params = {
-            "variety": variety,
-            "tradingsymbol": tradingsymbol,
-            "symboltoken": symboltoken,
-            "transactiontype": transactiontype,
-            "exchange": exchange,
-            "ordertype": ordertype,
-            "producttype": producttype,
-            "duration": duration,
-            "price": price,
-            "triggerprice": triggerprice,
-            "quantity": quantity,
-        }
-        logger.info("place_order %s", json.dumps(order_params, default=str))
-        return place_order_result(client, order_params)
-
-    def angel_modify_order(
-        variety: str,
-        orderid: str,
-        ordertype: str,
-        quantity: str,
-        price: str,
-        triggerprice: str = "0",
-        producttype: str = "DELIVERY",
-        duration: str = "DAY",
-    ) -> dict[str, Any]:
-        """Modify an open order."""
-        client = _client_or_error(session_id)
-        if not client:
-            return _not_logged_in()
-        order_params = {
-            "variety": variety,
-            "orderid": orderid,
-            "ordertype": ordertype,
-            "producttype": producttype,
-            "duration": duration,
-            "price": price,
-            "triggerprice": triggerprice,
-            "quantity": quantity,
-        }
-        logger.info("modify_order %s", json.dumps(order_params, default=str))
-        return modify_order_result(client, order_params)
-
-    def angel_cancel_order(orderid: str, variety: str = "NORMAL") -> dict[str, Any]:
-        """Cancel an open order by id."""
-        client = _client_or_error(session_id)
-        if not client:
-            return _not_logged_in()
-        logger.info("cancel_order orderid=%s variety=%s", orderid, variety)
-        return cancel_order_result(client, orderid, variety)
-
     return [
         angel_get_profile,
         angel_get_holdings,
@@ -260,7 +187,4 @@ def make_broker_tools(session_id: str) -> list[Callable[..., Any]]:
         angel_get_stock_history,
         angel_calculate_pnl,
         angel_get_market_depth,
-        angel_place_order,
-        angel_modify_order,
-        angel_cancel_order,
     ]

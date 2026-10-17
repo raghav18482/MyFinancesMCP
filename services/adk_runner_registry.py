@@ -1,6 +1,10 @@
 """
 In-process ADK runners for the web UI: one InMemoryRunner per (Angel web session, agent_type).
 
+Every agent built here is read-only (see ``agents.readonly_guard``) and bound
+to the calling user's own web session id; runners are evicted when that
+session ends.
+
 Broker tools are bound to sid at agent build time; chat state uses ADK session ids stored
 in the Starlette session (see web.routers.agent).
 """
@@ -113,6 +117,21 @@ class AdkRunnerRegistry:
         self._locks: dict[tuple[str, str, bool], asyncio.Lock] = {}
         self._registry_lock = asyncio.Lock()
 
+    def evict(self, angel_sid: str) -> int:
+        """Drop every runner (and its in-memory chat state) bound to ``angel_sid``.
+
+        Called when a web session ends, so a runner whose tools are bound to a
+        dead session cannot linger. Returns how many runners were removed.
+        """
+        keys = [k for k in self._runners if k[0] == angel_sid]
+        for k in keys:
+            self._runners.pop(k, None)
+        for k in [k for k in self._locks if k[0] == angel_sid]:
+            self._locks.pop(k, None)
+        if keys:
+            logger.info("ADK runners evicted: %d (session_prefix=%s)", len(keys), angel_sid[:8])
+        return len(keys)
+
     async def _lock_for_key(self, key: tuple[str, str, bool]) -> asyncio.Lock:
         async with self._registry_lock:
             if key not in self._locks:
@@ -131,7 +150,11 @@ class AdkRunnerRegistry:
         if builder_entry is None:
             raise ValueError(f"Unknown agent_type: {agent_type!r}. Available: {list(_AGENT_BUILDERS)}")
 
+        if not angel_sid:
+            raise ValueError("An authenticated Angel session id is required.")
         build_fn, app_name = builder_entry
+        # Never ``allow_env_bootstrap`` here: this path serves many users, and
+        # each runner must be bound to its own caller's session.
         agent = build_fn(angel_sid)
 
         db_service = _get_db_session_service() if persist else None

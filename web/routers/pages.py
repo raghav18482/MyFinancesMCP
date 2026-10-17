@@ -15,7 +15,7 @@ from services.portfolio_service import get_portfolio_cached
 from web.dependencies import (
     ADK_TRADING_CHAT_SESSION_KEY,
     ensure_adk_chat_session_id,
-    registered_user_for_session,
+    current_user,
     require_login,
     session_id,
     template_context,
@@ -214,7 +214,7 @@ async def trading_page(request: Request):
     sid = session_id(request)
     ctx = template_context(request, "trading")
 
-    user = registered_user_for_session(client)
+    user = current_user(request)
     is_premium = bool(user and user.is_active)
     ctx["is_premium_registered"] = is_premium
     ctx["registered_whatsapp"] = user.whatsapp_number if user else ""

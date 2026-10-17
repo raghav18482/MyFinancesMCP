@@ -20,10 +20,9 @@ from fastapi import Request
 from adminApi import service as admin_service
 from db.passwords import MIN_PASSWORD_CHARS
 from services import login_throttle
-from services.realtime_feed import feed_relay
 from session_manager import sessions
 from web import country_codes
-from web.dependencies import client_ip, session_id, start_session
+from web.dependencies import bind_user, client_ip, end_web_session, start_session
 
 logger = logging.getLogger(__name__)
 
@@ -202,19 +201,26 @@ def enroll(
         logger.exception("Enrollment failed during the database write")
         raise AuthFlowError(str(e), 500) from None
 
-    request.session["uid"] = view["id"]
+    bind_user(request, view["id"])
     logger.info("enrollment complete for user id=%s", view["id"])
     return view
 
 
 def logout(request: Request) -> None:
-    """End the broker session and forget the cookie's user.
+    """End the broker session and revoke every copy of this user's cookie.
 
-    Clears ``uid`` too, so the next request does not silently rebuild the
-    session the user just ended.
+    The cookie is signed but stateless, so clearing it here does nothing about
+    a copy saved earlier. Bumping the user's ``session_version`` does: every
+    cookie issued before now carries the old version and is refused from the
+    next request on — on this device and any other. The live broker session,
+    its ADK runners and its caches are released too.
     """
-    sid = session_id(request)
-    if sid:
-        feed_relay.stop_feed(sid)
-        sessions.remove_session(sid)
-    request.session.clear()
+    uid = request.session.get("uid")
+    if uid:
+        try:
+            admin_service.bump_session_version(int(uid))
+        except Exception:
+            # Still end this device's session; say so loudly, since saved copies
+            # of the cookie stay valid until the bump succeeds.
+            logger.exception("Logout: could not bump session version for uid=%s", uid)
+    end_web_session(request)

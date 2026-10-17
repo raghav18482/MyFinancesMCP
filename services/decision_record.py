@@ -94,8 +94,17 @@ def record(
         return None
 
 
-def recent(limit: int = 50, *, symbol: Optional[str] = None) -> list[dict]:
-    """Read back recent decisions, newest first. For the audit view."""
+def recent(limit: int = 50, *, user_id: Optional[int], symbol: Optional[str] = None) -> list[dict]:
+    """Read back ``user_id``'s own recent decisions, newest first.
+
+    ``user_id`` is required and has no default, so no caller can read the
+    whole table by forgetting it. ``None`` returns nothing. Rows whose owner is
+    unknown (``user_id IS NULL`` — written before ownership was recorded, or
+    unlinked by account deletion) never match any user and are not returned;
+    ownership is never inferred from ``session_ref``.
+    """
+    if user_id is None:
+        return []
     try:
         from sqlmodel import select
 
@@ -103,7 +112,11 @@ def recent(limit: int = 50, *, symbol: Optional[str] = None) -> list[dict]:
         from db.models import DecisionRecord
 
         with get_session() as session:
-            stmt = select(DecisionRecord).order_by(DecisionRecord.created_at.desc())
+            stmt = (
+                select(DecisionRecord)
+                .where(DecisionRecord.user_id == int(user_id))
+                .order_by(DecisionRecord.created_at.desc())
+            )
             if symbol:
                 stmt = stmt.where(DecisionRecord.symbol == str(symbol).upper())
             rows = session.exec(stmt.limit(limit)).all()

@@ -26,7 +26,7 @@ the only functions here that return plaintext secrets; everything else returns
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
@@ -232,10 +232,11 @@ class AngelCredentials:
     """The four values ``AngelOneClient`` needs, plus the row they came from."""
 
     user_id: int
-    api_key: str
+    # ``repr=False`` so an accidental log of this object never prints a secret.
+    api_key: str = field(repr=False)
     client_id: str
-    password: str
-    totp_secret: str
+    password: str = field(repr=False)
+    totp_secret: str = field(repr=False)
 
 
 def _decrypt_row(user: User) -> AngelCredentials:
@@ -298,16 +299,55 @@ def credentials_for_login(
 def credentials_for_user(user_id: int) -> Optional[AngelCredentials]:
     """Decrypted credentials for an already-authenticated user, by row id.
 
-    Used to rebuild an expired in-memory broker session from a browser cookie
-    that still identifies the user. No password is checked here — the signed
-    cookie *is* the proof — so only call this with an id read from
-    ``request.session``, never from user-supplied input.
+    Used to rebuild an expired in-memory broker session for an identity the
+    server has already verified: a signed cookie whose session version still
+    matches, or a verified MCP bearer token. No password is checked here, so
+    never call this with an id taken from request parameters or tool arguments.
     """
     with get_session() as session:
         user = session.get(User, user_id)
         if not user or not user.is_active:
             return None
         return _decrypt_row(user)
+
+
+@dataclass(frozen=True)
+class SessionState:
+    """What a request needs to know to trust an existing session for ``user_id``."""
+
+    user_id: int
+    is_active: bool
+    session_version: int
+    angel_client_id: str
+
+
+def session_state(user_id: int) -> Optional[SessionState]:
+    """Current activation, session version and broker account for a user, or None."""
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if not user:
+            return None
+        return SessionState(
+            user_id=user.id,
+            is_active=bool(user.is_active),
+            session_version=int(user.session_version or 0),
+            angel_client_id=user.angel_client_id,
+        )
+
+
+def bump_session_version(user_id: int) -> Optional[int]:
+    """Invalidate every cookie issued to ``user_id``; return the new version."""
+    with get_session() as session:
+        user = session.get(User, user_id)
+        if not user:
+            return None
+        user.session_version = int(user.session_version or 0) + 1
+        user.updated_at = utcnow()
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        logger.info("session version bumped for user id=%s", user_id)
+        return user.session_version
 
 
 def _mask(whatsapp_number: str) -> str:
