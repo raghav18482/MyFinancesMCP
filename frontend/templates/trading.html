@@ -7,7 +7,7 @@
     <div class="agent-top-text">
       <p class="agent-eyebrow">Risk-aware trading</p>
       <h1>Trading agent</h1>
-      <p class="agent-lead">Chat with the AI trading assistant. It proposes trades based on your risk profile &mdash; you approve or reject before any order is placed.</p>
+      <p class="agent-lead">Chat with the AI trading-analysis assistant. It is <strong>read-only</strong>: it explains prices, technicals and risk, and describes hypothetical trade ideas labelled &ldquo;Hypothetical &mdash; not executed&rdquo;. It never places, modifies or cancels orders &mdash; you act in the Angel One app if you choose to.</p>
     </div>
     {% if is_premium_registered %}
     <button type="button" class="btn btn-muted agent-new-btn" id="trading-new-chat" title="Start a new conversation">New conversation</button>
@@ -29,7 +29,7 @@
     {% else %}
     <div class="premium-cta" id="premium-cta">
       <p class="premium-headline">Activate the Premium Trading Agent</p>
-      <p class="premium-sub">Get trade proposals and approvals delivered to WhatsApp. We use the Angel One credentials from your current session, so you only need to share a number.</p>
+      <p class="premium-sub">Get portfolio briefings delivered to WhatsApp. We use the Angel One credentials from your current session, so you only need to share a number.</p>
       <form id="premium-form" class="premium-form" novalidate>
         <label class="premium-label" for="premium-whatsapp">WhatsApp number</label>
         <div class="premium-row">
@@ -197,7 +197,7 @@
       <section class="card trading-section">
         <h2 class="trading-section-title">Trade Proposals</h2>
         <div id="proposals-list" class="proposals-list">
-          <p class="proposals-empty">No proposals yet. Chat with the trading agent to get trade ideas.</p>
+          <p class="proposals-empty">No saved proposals. Hypothetical ideas from the assistant are analysis only and are never executed.</p>
         </div>
       </section>
     </div>
@@ -211,11 +211,11 @@
               <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="1.5" opacity="0.35"/><path d="M14 20l10-6 10 6M14 28l10 6 10-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/></svg>
             </div>
             <h2 class="agent-empty-title">Trading Assistant</h2>
-            <p class="agent-empty-desc">Ask for trade ideas or type <kbd>APPROVE &lt;id&gt;</kbd> to execute a proposal.</p>
+            <p class="agent-empty-desc">Ask for analysis or hypothetical trade ideas. Nothing here places an order.</p>
             <div class="agent-starters" id="agent-starters" role="group">
               <button type="button" class="agent-starter" data-q="What trades would you recommend based on my risk profile and current holdings?">Suggest trades</button>
               <button type="button" class="agent-starter" data-q="Analyze RELIANCE-EQ technically and tell me if it's a good entry point.">Analyze RELIANCE</button>
-              <button type="button" class="agent-starter" data-q="Show my current pending proposals.">Pending proposals</button>
+              <button type="button" class="agent-starter" data-q="Give me a hypothetical idea for my largest holding, with the risks.">Hypothetical idea</button>
               <button type="button" class="agent-starter" data-q="What is my available margin and current exposure?">Check margin</button>
             </div>
           </div>
@@ -229,12 +229,12 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
           </button>
         </div>
-        <p class="agent-footnote">Proposals must be approved before execution. Type <code>APPROVE &lt;id&gt;</code> or use the panel.</p>
+        <p class="agent-footnote">Read-only assistant. Ideas are hypothetical and are not executed. Not financial advice.</p>
       </div>
     </div>
   </div>
   {% else %}
-  <p class="trading-locked-note">Activate Premium above to unlock your risk profile, real-time charts, trade proposals, and the AI trading assistant.</p>
+  <p class="trading-locked-note">Activate Premium above to unlock your risk profile, real-time charts, and the read-only AI trading-analysis assistant.</p>
   {% endif %}
 </div>
 

@@ -43,8 +43,35 @@ class User(SQLModel, table=True):
     app_password_hash: str | None = None
 
     is_active: bool = Field(default=True)
+
+    # Bumped on logout. The signed session cookie records the value it was
+    # issued with (``uv``) and is only honoured while the two match, which is
+    # what makes logout revoke every saved copy of a stateless cookie.
+    session_version: int = Field(default=0)
+
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class McpToken(SQLModel, table=True):
+    """A personal access token for the read-only MCP endpoint.
+
+    Custom bearer tokens issued from the web app, not OAuth. Only a SHA-256
+    hash of the token is stored; the raw value is shown to the user once.
+    """
+
+    __tablename__ = "mcp_tokens"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    name: str = Field(default="MCP client")
+    token_prefix: str  # first characters, for display only
+    token_hash: str = Field(index=True, unique=True)
+    scopes: str = Field(default="portfolio:read")  # space-separated
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
 
 
 class Schedule(SQLModel, table=True):
@@ -93,9 +120,11 @@ class RiskProfile(SQLModel, table=True):
 class DecisionRecord(SQLModel, table=True):
     """Append-only record of every trade decision, including blocked ones.
 
-    Written from ``services.trade_proposals.execute_proposal`` on success, on
-    compliance block, and on execution failure. A blocked trade is precisely
-    the thing an audit asks about, so it is recorded rather than discarded.
+    Historical: rows were written when the app could still execute approved
+    proposals (on success, on compliance block, and on failure). Execution has
+    since been removed, so nothing writes new rows today; the table is kept,
+    unaltered, as audit history. Rows are only ever shown to their owner
+    (``user_id``); rows with no owner are never shown to any user.
 
     There is deliberately no update path. Correcting a record means writing a
     new one; mutating history is the thing this table exists to prevent.

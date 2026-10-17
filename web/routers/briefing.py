@@ -18,7 +18,7 @@ from session_manager import sessions
 
 from web.dependencies import (
     current_client,
-    registered_user_for_session,
+    current_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ async def api_briefing_schedule_get(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if not user:
         return JSONResponse({"exists": False})
     schedule = _get_briefing_schedule(user.id)
@@ -97,7 +97,7 @@ async def api_briefing_schedule_save(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered for premium"}, status_code=403)
     try:
@@ -143,7 +143,7 @@ async def api_briefing_schedule_delete(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered"}, status_code=403)
     with get_session() as db:
@@ -218,7 +218,7 @@ async def api_briefing_send_now(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered for premium"}, status_code=403)
     asyncio.create_task(_run_briefing_now_bg(user.id, user.whatsapp_number))
@@ -231,7 +231,7 @@ async def api_briefing_logs(request: Request):
     client = current_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    user = registered_user_for_session(client)
+    user = current_user(request)
     if not user:
         return JSONResponse({"logs": []})
     with get_session() as db:

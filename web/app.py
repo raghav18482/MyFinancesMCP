@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +21,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from adminApi import admin_router
+from web import security_config
 from web.routers import all_routers
 
 logger = logging.getLogger(__name__)
@@ -105,30 +105,10 @@ def _spa_dist_dir() -> str | None:
 
 
 def _allowed_hosts() -> list[str]:
-    """Hostnames this app will answer to, from ``ALLOWED_HOSTS`` (comma-separated).
-
-    Anything that reads the ``Host`` header — ``request.base_url`` on ``/connect``,
-    absolute links, redirects — trusts whatever the client sent unless the host is
-    validated here. Set this to your real domain in production, e.g.::
-
-        ALLOWED_HOSTS=myfinancemcp.onrender.com
-
-    Unset means "accept any Host", which is fine locally but leaves Host-header
-    reflection open in production, so we log a warning at import time.
-    """
-    raw = os.environ.get("ALLOWED_HOSTS", "").strip()
-    if not raw:
-        logger.warning(
-            "ALLOWED_HOSTS is not set — accepting any Host header. "
-            "Set it to your deployment domain in production."
-        )
-        return ["*"]
-    hosts = [h.strip() for h in raw.split(",") if h.strip()]
-    # Loopback stays allowed so health checks and local curl keep working.
-    for local in ("localhost", "127.0.0.1"):
-        if local not in hosts:
-            hosts.append(local)
-    logger.info("TrustedHostMiddleware active for: %s", ", ".join(hosts))
+    """Hostnames this app will answer to. See :func:`web.security_config.allowed_hosts`."""
+    hosts = security_config.allowed_hosts()
+    if hosts != ["*"]:
+        logger.info("TrustedHostMiddleware active for: %s", ", ".join(hosts))
     return hosts
 
 
@@ -159,21 +139,28 @@ def _session_cookie_max_age() -> int:
 
 
 def create_app() -> FastAPI:
-    """Construct the dashboard application."""
+    """Construct the dashboard application.
+
+    Raises :class:`web.security_config.InsecureConfiguration` on a production
+    deployment that is missing a security-critical setting.
+    """
+    security_config.validate_production_config()
+    docs = security_config.api_docs_enabled()
     app = FastAPI(
-        docs_url="/docs",
-        redoc_url="/redoc",
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
         title="MyFinanceMCP API",
-        description="Internal admin and portfolio APIs. Remove docs_url/redoc_url before public deployment.",
+        description="Internal admin and portfolio APIs. Docs are disabled in production.",
         version="1.0.0",
     )
 
     app.add_middleware(
         SessionMiddleware,
-        secret_key=os.environ.get("SESSION_SECRET", uuid.uuid4().hex),
+        secret_key=security_config.session_secret(),
         max_age=_session_cookie_max_age(),
         same_site="lax",
-        https_only=os.environ.get("SESSION_COOKIE_SECURE", "").strip() == "1",
+        https_only=security_config.cookie_https_only(),
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 

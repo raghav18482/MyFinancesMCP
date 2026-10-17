@@ -333,7 +333,11 @@
 
   loadHoldings();
 
-  // ── Proposals panel ─────────────────────────────────────
+  // ── Proposals panel (history only) ──────────────────────
+  //
+  // The assistant is read-only: there is no approve or execute action, and
+  // nothing on this page can place an order. Earlier proposals are listed as
+  // history; pending ones can still be dismissed.
 
   var $proposals = document.getElementById('proposals-list');
 
@@ -342,45 +346,30 @@
       var res = await fetch('/api/trading/proposals');
       var data = await res.json();
       if (!data.proposals || !data.proposals.length) {
-        $proposals.innerHTML = '<p class="proposals-empty">No proposals yet. Chat with the trading agent to get trade ideas.</p>';
+        $proposals.innerHTML = '<p class="proposals-empty">No saved proposals. Ask the assistant for hypothetical trade ideas &mdash; they are analysis only and are never executed.</p>';
         return;
       }
       $proposals.innerHTML = data.proposals.map(function (p) {
         var statusClass = 'proposal-status--' + p.status;
-        var canAct = p.status === 'pending';
+        var canDismiss = p.status === 'pending';
         return '<div class="proposal-card">' +
           '<div class="proposal-summary">' + escapeHtml(p.summary) + '</div>' +
           '<div class="proposal-meta">' +
             '<span class="proposal-id">' + p.proposal_id + '</span>' +
             '<span class="proposal-status ' + statusClass + '">' + p.status.toUpperCase() + '</span>' +
           '</div>' +
-          (canAct ? '<div class="proposal-actions">' +
-            '<button class="btn btn-sm btn-green proposal-approve-btn" data-id="' + p.proposal_id + '">Approve</button>' +
-            '<button class="btn btn-sm btn-danger proposal-reject-btn" data-id="' + p.proposal_id + '">Reject</button>' +
+          (canDismiss ? '<div class="proposal-actions">' +
+            '<button class="btn btn-sm btn-danger proposal-reject-btn" data-id="' + p.proposal_id + '">Dismiss</button>' +
           '</div>' : '') +
-          (p.order_id ? '<div class="proposal-result">Order ID: ' + p.order_id + '</div>' : '') +
+          (p.order_id ? '<div class="proposal-result">Order ID: ' + escapeHtml(String(p.order_id)) + '</div>' : '') +
           (p.error ? '<div class="proposal-error">' + escapeHtml(p.error) + '</div>' : '') +
         '</div>';
       }).join('');
 
-      $proposals.querySelectorAll('.proposal-approve-btn').forEach(function (btn) {
-        btn.addEventListener('click', function () { handleApprove(btn.dataset.id); });
-      });
       $proposals.querySelectorAll('.proposal-reject-btn').forEach(function (btn) {
         btn.addEventListener('click', function () { handleReject(btn.dataset.id); });
       });
     } catch (e) { /* ignore */ }
-  }
-
-  async function handleApprove(id) {
-    if (!confirm('Execute this trade? This will place a REAL order on Angel One.')) return;
-    try {
-      var res = await fetch('/api/trading/proposals/' + id + '/approve', { method: 'POST' });
-      var data = await res.json();
-      if (data.ok) alert('Order executed! Order ID: ' + (data.order_id || 'N/A'));
-      else alert('Error: ' + (data.error || 'Unknown'));
-    } catch (e) { alert('Network error: ' + e.message); }
-    refreshProposals();
   }
 
   async function handleReject(id) {

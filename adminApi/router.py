@@ -13,6 +13,7 @@ Then browse to  http://localhost:8000/docs  to test via Swagger UI.
 from __future__ import annotations
 
 import logging
+import hmac
 import os
 from datetime import datetime
 from typing import Optional
@@ -37,7 +38,8 @@ def check_admin_key(x_admin_key: str = Header(..., description="Value of ADMIN_A
     expected = os.environ.get("ADMIN_API_KEY", "").strip()
     if not expected:
         raise HTTPException(status_code=500, detail="ADMIN_API_KEY not configured on the server.")
-    if x_admin_key != expected:
+    # Constant time, so response timing says nothing about how much of a guess matched.
+    if not hmac.compare_digest(x_admin_key.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid admin key.")
 
 

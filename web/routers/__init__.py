@@ -14,6 +14,7 @@ from web.routers import (
     briefing,
     feedback,
     market,
+    mcp_tokens,
     news,
     pages,
     portfolio,
@@ -41,6 +42,7 @@ all_routers = [
     briefing.router,
     trading.router,
     market.router,
+    mcp_tokens.router,
 ]
 
 __all__ = ["all_routers"]

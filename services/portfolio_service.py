@@ -27,6 +27,11 @@ def get_portfolio_cached(sid: str, client) -> dict:
     return data
 
 
+def forget_portfolio_cache(sid: str) -> None:
+    """Drop the cached portfolio for an ended session."""
+    _portfolio_cache.pop(sid, None)
+
+
 
 # ── AI API endpoints ──────────────────────────────────────────────────────
 

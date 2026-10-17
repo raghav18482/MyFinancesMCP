@@ -4,31 +4,51 @@
 <div class="container">
   <div class="guide">
     <h1>Connect MyFinanceMCP to Your AI Assistant</h1>
-    <p class="guide-intro">Follow the steps below to connect this MCP server to Claude Desktop, ChatGPT, Cursor, or any MCP-compatible client. Once connected, you can track your Angel One portfolio and even place trades through your AI assistant.</p>
+    <p class="guide-intro">Connect this MCP server to Claude Desktop, Cursor, or any MCP client that can send an HTTP header. Your assistant can then <strong>read</strong> your Angel One portfolio and market data and help you analyse it. It is <strong>read-only</strong>: it cannot place, modify or cancel orders, and any trade idea it gives you is hypothetical.</p>
 
     <div class="guide-note" style="margin-bottom:1.5rem">
-      <strong>Don't want to set up MCP?</strong> You can get AI-powered portfolio insights directly from the <a href="/login">web dashboard</a> &mdash; just log in and add your OpenRouter API key. No MCP configuration needed.
+      <strong>Don't want to set up MCP?</strong> The <a href="/login">web dashboard</a> has the same read-only assistant built in. No MCP configuration needed.
     </div>
 
-    <!-- Prerequisites -->
-    <div class="card guide-section">
-      <h2>Before You Start</h2>
-      <ul class="checklist">
-        <li>Your Angel One <strong>API Key</strong>, <strong>Client ID</strong>, <strong>PIN</strong>, and <strong>TOTP Secret</strong> &mdash; <a href="/setup">learn how to generate them</a></li>
-        <li><strong>Node.js</strong> installed (required for Claude Desktop &mdash; <a href="https://nodejs.org" target="_blank">download here</a>). Not needed for ChatGPT or Cursor.</li>
-      </ul>
-    </div>
-
-    <!-- Step 1: Claude Desktop -->
-    <div class="card guide-section">
+    <!-- Step 0: Access token -->
+    <div class="card guide-section" id="mcp-token">
       <div class="step-header">
         <span class="step-number">1</span>
+        <h2>Create a personal access token</h2>
+      </div>
+      <div class="step-body">
+        <p>The MCP server identifies you by a <strong>personal access token</strong> that you create here and paste into your client. This is a simple bearer token &mdash; <strong>not OAuth</strong>: there is no sign-in pop-up, and you never type Angel One credentials into an AI chat.</p>
+        <ul class="checklist">
+          <li>Shown <strong>once</strong>. We store only a hash of it.</li>
+          <li>Expires after 30 days by default (up to 90), and you can revoke it here at any time.</li>
+          <li>Grants <code>portfolio:read</code> only. Anyone holding it can read your portfolio, so treat it like a password.</li>
+        </ul>
+
+        {% if logged_in %}
+        <form id="mcp-token-form" class="form" autocomplete="off" onsubmit="return false;">
+          <label>Token name <input type="text" id="mcp-token-name" maxlength="60" placeholder="e.g. Claude Desktop on my laptop"></label>
+          <label>Expires in (days) <input type="number" id="mcp-token-ttl" min="1" max="90" value="30"></label>
+          <label>App password (to confirm it is you) <input type="password" id="mcp-token-password" autocomplete="current-password"></label>
+          <button type="button" class="btn" id="mcp-token-create">Create token</button>
+        </form>
+        <div id="mcp-token-result" class="guide-note" style="display:none"></div>
+        <h3>Your tokens</h3>
+        <div id="mcp-token-list"><p class="muted">Loading&hellip;</p></div>
+        {% else %}
+        <p><a href="/login">Log in</a> to create a token.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Claude Desktop -->
+    <div class="card guide-section">
+      <div class="step-header">
+        <span class="step-number">2</span>
         <h2>Claude Desktop</h2>
       </div>
 
       <div class="step-body">
         <h3>Find your config file</h3>
-        <p>Open the Claude Desktop config file at:</p>
         <div class="code-block">
           <div class="code-label">macOS</div>
           <pre><code>~/Library/Application Support/Claude/claude_desktop_config.json</code></pre>
@@ -39,150 +59,74 @@
         </div>
 
         <h3>Add the MCP server</h3>
-        <p>Add the following to the <code>mcpServers</code> object in the config file:</p>
+        <p>Claude Desktop reaches remote servers through <code>mcp-remote</code> (installed automatically by <code>npx</code>; needs <a href="https://nodejs.org" target="_blank">Node.js</a>). The token goes in an environment variable, not in the command line:</p>
         <div class="code-block">
           <div class="code-label">claude_desktop_config.json</div>
           <pre><code>{
   "mcpServers": {
     "angelone-portfolio": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "<span class="highlight">{{ server_url }}/mcp/sse</span>"]
+      "args": [
+        "-y", "mcp-remote", "<span class="highlight">{{ server_url }}/mcp/mcp</span>",
+        "--header", "Authorization:${AUTH_HEADER}"
+      ],
+      "env": { "AUTH_HEADER": "Bearer <span class="highlight">mfm_your_token_here</span>" }
     }
   }
 }</code></pre>
         </div>
-        <div class="guide-note">
-          <strong>Note:</strong> Claude Desktop doesn't support SSE natively, so we use <code>mcp-remote</code> as a bridge. It is installed automatically via <code>npx</code>.
-        </div>
-
-        <h3>Restart Claude Desktop</h3>
-        <p>Quit Claude Desktop completely and reopen it. You should see a hammer icon indicating MCP tools are available.</p>
-
-        <h3>Login</h3>
-        <p>In your first message, ask Claude to log in with your credentials:</p>
-        <div class="code-block">
-          <div class="code-label">Example prompt</div>
-          <pre><code>Log in to my Angel One account with these credentials:
-- API Key: YOUR_API_KEY
-- Client ID: YOUR_CLIENT_ID
-- Password: YOUR_PIN
-- TOTP Secret: YOUR_TOTP_SECRET</code></pre>
-        </div>
-        <p>Claude will call the <code>login</code> tool, and then you can ask things like <em>"Show my portfolio summary"</em> or <em>"What are my holdings?"</em></p>
+        <p>Restart Claude Desktop, then ask things like <em>"Show my portfolio summary"</em> or <em>"How concentrated are my holdings?"</em></p>
       </div>
     </div>
 
-    <!-- Step 2: ChatGPT -->
-    <div class="card guide-section">
-      <div class="step-header">
-        <span class="step-number">2</span>
-        <h2>ChatGPT</h2>
-      </div>
-
-      <div class="step-body">
-        <h3>Open Settings</h3>
-        <p>On <a href="https://chatgpt.com" target="_blank">chatgpt.com</a>, click your profile icon and go to <strong>Settings &rarr; Connected apps</strong>.</p>
-
-        <h3>Add an MCP server</h3>
-        <p>Click <strong>"Add"</strong> and fill in the following:</p>
-        <div class="step-list">
-          <div class="step-item">
-            <span class="step-bullet">a</span>
-            <div><strong>Name:</strong> AngelOne Portfolio</div>
-          </div>
-          <div class="step-item">
-            <span class="step-bullet">b</span>
-            <div><strong>Description:</strong> Angel One portfolio tracker via MCP</div>
-          </div>
-          <div class="step-item">
-            <span class="step-bullet">c</span>
-            <div><strong>MCP Server URL:</strong></div>
-          </div>
-        </div>
-        <div class="code-block">
-          <div class="code-label">MCP Server URL</div>
-          <pre><code><span class="highlight">{{ server_url }}/mcp/sse</span></code></pre>
-        </div>
-        <div class="step-list">
-          <div class="step-item">
-            <span class="step-bullet">d</span>
-            <div><strong>Authentication:</strong> select <strong>None</strong></div>
-          </div>
-          <div class="step-item">
-            <span class="step-bullet">e</span>
-            <div>Check the <strong>"I understand and want to continue"</strong> checkbox</div>
-          </div>
-          <div class="step-item">
-            <span class="step-bullet">f</span>
-            <div>Click <strong>Create</strong></div>
-          </div>
-        </div>
-        <div class="guide-note">
-          <strong>Note:</strong> MCP support is available on ChatGPT web (chatgpt.com). No desktop app or Node.js required.
-        </div>
-
-        <h3>Login &amp; use</h3>
-        <p>Start a new chat and ask ChatGPT to log in with your Angel One credentials, then ask about your portfolio, holdings, or place trades.</p>
-      </div>
-    </div>
-
-    <!-- Step 3: Cursor IDE -->
+    <!-- Cursor -->
     <div class="card guide-section">
       <div class="step-header">
         <span class="step-number">3</span>
         <h2>Cursor IDE</h2>
       </div>
-
       <div class="step-body">
-        <h3>Add the MCP config</h3>
-        <p>Create or edit <code>.cursor/mcp.json</code> in your project root:</p>
+        <p>Create or edit <code>.cursor/mcp.json</code>:</p>
         <div class="code-block">
           <div class="code-label">.cursor/mcp.json</div>
           <pre><code>{
   "mcpServers": {
     "angelone-portfolio": {
-      "url": "<span class="highlight">{{ server_url }}/mcp/sse</span>"
+      "url": "<span class="highlight">{{ server_url }}/mcp/mcp</span>",
+      "headers": { "Authorization": "Bearer <span class="highlight">mfm_your_token_here</span>" }
     }
   }
 }</code></pre>
         </div>
-        <div class="guide-note">
-          <strong>Note:</strong> Cursor supports the <code>url</code> field directly &mdash; no bridge needed.
-        </div>
-
-        <h3>Login &amp; use</h3>
-        <p>Open Cursor's AI chat and ask it to log in with your Angel One credentials, then use any portfolio or trading tool.</p>
+        <div class="guide-note"><strong>Keep this file out of git</strong> &mdash; it contains your token.</div>
       </div>
     </div>
 
-    <!-- Step 4: Other MCP Clients -->
+    <!-- Other clients -->
     <div class="card guide-section">
       <div class="step-header">
         <span class="step-number">4</span>
         <h2>Other MCP Clients</h2>
       </div>
       <div class="step-body">
-        <p>Any MCP-compatible client that supports SSE transport can connect using:</p>
+        <p>Any client that speaks the <strong>Streamable HTTP</strong> transport and can send a custom header works:</p>
         <div class="code-block">
-          <pre><code>{{ server_url }}/mcp/sse</code></pre>
+          <pre><code>URL:    {{ server_url }}/mcp/mcp
+Header: Authorization: Bearer mfm_your_token_here</code></pre>
         </div>
-        <p>If your client only supports stdio, use <code>mcp-remote</code> as a bridge:</p>
-        <div class="code-block">
-          <pre><code>npx -y mcp-remote <span class="highlight">{{ server_url }}/mcp/sse</span></code></pre>
+        <div class="guide-note">
+          Clients that only support OAuth sign-in (for example ChatGPT connectors) cannot use these tokens. The old <code>/mcp/sse</code> endpoint has been removed.
         </div>
       </div>
     </div>
 
-    <!-- Step 5: Run Locally -->
+    <!-- Run Locally -->
     <div class="card guide-section">
       <div class="step-header">
         <span class="step-number">5</span>
         <h2>Run Locally (Self-Hosted)</h2>
       </div>
       <div class="step-body">
-        <p>Don't want to use our hosted server? Clone the repo and run everything on your machine &mdash; no data leaves localhost.</p>
-
-        <h3>Clone &amp; install</h3>
         <div class="code-block">
           <div class="code-label">Terminal</div>
           <pre><code>git clone https://github.com/raghav18482/MyFinancesMCP.git
@@ -190,36 +134,7 @@ cd MyFinancesMCP
 pip install -r requirements.txt
 python main.py</code></pre>
         </div>
-        <p>The server starts on <code>http://localhost:8000</code>. Open it in your browser for the web dashboard, or connect your AI assistant using the local MCP endpoint.</p>
-
-        <h3>Claude Desktop &mdash; direct Python config (no Node.js needed)</h3>
-        <p>When running locally, you can skip <code>mcp-remote</code> entirely and point Claude Desktop straight at the Python server:</p>
-        <div class="code-block">
-          <div class="code-label">claude_desktop_config.json</div>
-          <pre><code>{
-  "mcpServers": {
-    "angelone-portfolio": {
-      "command": "<span class="highlight">python3</span>",
-      "args": ["<span class="highlight">/full/path/to/MyFinancesMCP/mcp_server.py</span>"],
-      "env": {
-        "ANGELONE_API_KEY": "YOUR_API_KEY",
-        "ANGELONE_CLIENT_ID": "YOUR_CLIENT_ID",
-        "ANGELONE_PASSWORD": "YOUR_PIN",
-        "ANGELONE_TOTP_SECRET": "YOUR_TOTP_SECRET"
-      }
-    }
-  }
-}</code></pre>
-        </div>
-        <div class="guide-note">
-          <strong>Replace</strong> the highlighted paths and credential values with your own. On macOS/Linux you can find the full Python path by running <code>which python3</code> in your terminal. This config runs the MCP server as a subprocess of Claude Desktop using stdio transport &mdash; no extra dependencies needed.
-        </div>
-
-        <h3>Cursor &amp; ChatGPT &mdash; local SSE</h3>
-        <p>With <code>python main.py</code> running, use the local URL in the configs shown in Steps 1&ndash;3 above:</p>
-        <div class="code-block">
-          <pre><code>http://localhost:8000/mcp/sse</code></pre>
-        </div>
+        <p>Open <code>http://localhost:8000</code>, enroll, create a token on this page, and point your client at <code>http://localhost:8000/mcp/mcp</code> with the same header.</p>
       </div>
     </div>
 
@@ -227,33 +142,29 @@ python main.py</code></pre>
     <div class="card guide-section">
       <div class="step-header">
         <span class="step-number">6</span>
-        <h2>Available Tools</h2>
+        <h2>Available Tools (all read-only)</h2>
       </div>
       <div class="step-body">
-        <p>Once connected and logged in, your AI assistant can use these tools:</p>
         <div class="table-wrap">
           <table>
             <thead>
               <tr><th>Tool</th><th>Description</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>login</code></td><td>Authenticate with Angel One (must call first)</td></tr>
-              <tr><td><code>logout</code></td><td>Discard session credentials from memory</td></tr>
               <tr><td><code>portfolio_summary</code></td><td>Overall portfolio: invested, current value, P&amp;L</td></tr>
-              <tr><td><code>get_holdings</code></td><td>All stock holdings with P&amp;L per stock</td></tr>
+              <tr><td><code>get_holdings</code> / <code>get_all_holdings</code></td><td>Stock holdings with P&amp;L per stock, and totals</td></tr>
               <tr><td><code>get_positions</code></td><td>Open intraday / delivery positions</td></tr>
               <tr><td><code>get_funds</code></td><td>Available cash, margin, and net value</td></tr>
-              <tr><td><code>get_order_book</code></td><td>Today's orders and their status</td></tr>
-              <tr><td><code>get_trade_book</code></td><td>Executed trades for today</td></tr>
-              <tr><td><code>search_scrip</code></td><td>Search stocks by name or symbol</td></tr>
-              <tr><td><code>get_ltp</code></td><td>Last traded price for a stock</td></tr>
-              <tr><td><code>get_candle_data</code></td><td>Historical OHLC candle data</td></tr>
-              <tr><td><code>place_order</code></td><td>Place a buy/sell order (real money!)</td></tr>
-              <tr><td><code>modify_order</code></td><td>Modify an existing open order</td></tr>
-              <tr><td><code>cancel_order</code></td><td>Cancel an open order</td></tr>
+              <tr><td><code>get_order_book</code> / <code>get_trade_book</code></td><td>Today's orders and executed trades (history only)</td></tr>
+              <tr><td><code>get_profile</code></td><td>Account profile</td></tr>
+              <tr><td><code>search_scrip</code> / <code>get_ltp</code> / <code>get_market_depth</code></td><td>Find instruments, last price, order-book depth</td></tr>
+              <tr><td><code>get_candle_data</code> / <code>get_stock_history</code></td><td>Historical OHLC data</td></tr>
+              <tr><td><code>calculate_pnl</code></td><td>P&amp;L for one symbol</td></tr>
+              <tr><td><code>predict_price_direction</code></td><td>Technical-signal outlook (not advice)</td></tr>
             </tbody>
           </table>
         </div>
+        <p>There are no order, login or account-changing tools.</p>
       </div>
     </div>
 
@@ -261,14 +172,75 @@ python main.py</code></pre>
     <div class="card guide-section">
       <h2>Security</h2>
       <ul class="checklist">
-        <li>Credentials are <strong>never stored on disk</strong> &mdash; they live only in server memory</li>
-        <li>Sessions <strong>auto-expire after 8 hours</strong></li>
-        <li>All traffic goes over <strong>HTTPS</strong> when deployed (Railway/Render provide TLS)</li>
-        <li>Your OpenRouter API key (for dashboard AI insights) is <strong>encrypted client-side</strong> and never stored on the server</li>
-        <li>You can call <code>logout</code> at any time to immediately discard your session</li>
+        <li>Your Angel One credentials are <strong>encrypted at rest</strong> on the server and are never sent to, or typed into, the AI model</li>
+        <li>The MCP server is <strong>read-only</strong>: no tool can place, modify or cancel an order</li>
+        <li>Each token sees <strong>only its owner's</strong> data; revoking it takes effect on the next request</li>
+        <li>All traffic goes over <strong>HTTPS</strong> when deployed</li>
       </ul>
     </div>
 
   </div>
 </div>
+
+{% if logged_in %}
+<script>
+(function () {
+  var $list = document.getElementById('mcp-token-list');
+  var $result = document.getElementById('mcp-token-result');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  async function refresh() {
+    try {
+      var res = await fetch('/api/mcp/tokens', { credentials: 'same-origin' });
+      var data = await res.json();
+      if (!res.ok) { $list.innerHTML = '<p>' + esc(data.error || 'Could not load tokens') + '</p>'; return; }
+      if (!data.tokens.length) { $list.innerHTML = '<p class="muted">No tokens yet.</p>'; return; }
+      $list.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Token</th><th>Expires</th><th>Last used</th><th></th></tr></thead><tbody>' +
+        data.tokens.map(function (t) {
+          var state = t.revoked ? 'revoked' : (t.active ? '' : 'expired');
+          return '<tr><td>' + esc(t.name) + '</td><td><code>' + esc(t.prefix) + '&hellip;</code></td><td>' +
+            esc((t.expires_at || '').slice(0, 10)) + '</td><td>' + esc((t.last_used_at || 'never').slice(0, 16)) +
+            '</td><td>' + (state ? esc(state) : '<button class="btn btn-sm btn-danger" data-id="' + esc(t.id) + '">Revoke</button>') + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+      $list.querySelectorAll('button[data-id]').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Revoke this token? Clients using it stop working immediately.')) return;
+          await fetch('/api/mcp/tokens/' + encodeURIComponent(b.dataset.id), { method: 'DELETE', credentials: 'same-origin' });
+          refresh();
+        });
+      });
+    } catch (e) { $list.innerHTML = '<p>Could not load tokens.</p>'; }
+  }
+
+  document.getElementById('mcp-token-create').addEventListener('click', async function () {
+    var $pw = document.getElementById('mcp-token-password');
+    $result.style.display = 'block';
+    $result.textContent = 'Creating…';
+    try {
+      var res = await fetch('/api/mcp/tokens', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: document.getElementById('mcp-token-name').value,
+          ttl_days: parseInt(document.getElementById('mcp-token-ttl').value || '30', 10),
+          app_password: $pw.value
+        })
+      });
+      var data = await res.json();
+      $pw.value = '';
+      if (!res.ok) { $result.textContent = data.error || 'Could not create token.'; return; }
+      $result.innerHTML = '<strong>Copy this token now &mdash; it will not be shown again:</strong>' +
+        '<pre><code>' + esc(data.token) + '</code></pre>';
+      refresh();
+    } catch (e) { $result.textContent = 'Network error.'; }
+  });
+
+  refresh();
+})();
+</script>
+{% endif %}
 {% endblock %}

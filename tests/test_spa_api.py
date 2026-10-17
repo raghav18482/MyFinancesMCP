@@ -402,21 +402,35 @@ def test_feedback_token_is_single_use():
 def test_premium_register_normalises_a_dropdown_number():
     with harness() as h:
         h.http.post("/api/auth/enroll", json=ENROLL)
-        row = h.service.find_by_client_id("AB1234")
-        h.service.deactivate_user(row["id"])
 
         bad = h.http.post("/api/premium/register",
                           json={"country_code": "999", "whatsapp_number": "9876543210"})
         assert bad.status_code == 400
 
+        # An enrolled user is already registered; the row keeps the E.164 number.
         res = h.http.post("/api/premium/register",
                           json={"country_code": "91", "whatsapp_number": "09876 543210"})
-        assert res.status_code == 200, res.text
+        assert res.status_code == 409, res.text
         stored = h.service.find_by_client_id("AB1234")
 
     assert stored["whatsapp_number"] == NUMBER
     assert stored["is_active"] is True
-    print("ok  premium registration stores the same E.164 number login looks up")
+    print("ok  premium registration rejects a bad dropdown code; an enrolled user is already registered")
+
+
+def test_a_deactivated_user_loses_access_on_the_next_request():
+    """Deactivation is immediate: a still-live broker session is not enough."""
+    with harness() as h:
+        h.http.post("/api/auth/enroll", json=ENROLL)
+        assert h.http.get("/api/portfolio/positions").status_code == 200
+        row = h.service.find_by_client_id("AB1234")
+        h.service.deactivate_user(row["id"])
+
+        assert h.http.get("/api/portfolio/positions").status_code == 401
+        assert h.http.post("/api/premium/register",
+                           json={"country_code": "91", "whatsapp_number": "9876543210"}).status_code == 401
+        assert not h.live, "the deactivated user's broker session must be torn down"
+    print("ok  a deactivated account is refused on its next request and its session ends")
 
 
 # ── Positions, orders and trades ───────────────────────────────────────────

@@ -2,7 +2,8 @@
 
 What goes: the ``users`` row (and with it the encrypted broker credentials and
 the app password hash), saved chat threads and their ADK conversations,
-briefing schedules and their logs, and the risk profile.
+briefing schedules and their logs, the risk profile, and every MCP personal
+access token (so a token stops working the moment its account is gone).
 
 What stays: ``decision_records``. That table is the append-only audit trail of
 trade decisions — what an audit asks about — so rows are kept but their
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from sqlmodel import select
 
 from db import get_session
-from db.models import ChatThread, DecisionRecord, Log, RiskProfile, Schedule, User
+from db.models import ChatThread, DecisionRecord, Log, McpToken, RiskProfile, Schedule, User
 from db.passwords import verify_password
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class DeletionReport:
     logs: int = 0
     risk_profiles: int = 0
     decisions_unlinked: int = 0
+    mcp_tokens: int = 0
 
 
 def password_matches(user: User | None, app_password: str) -> bool:
@@ -80,6 +82,10 @@ def delete_user(user_id: int) -> DeletionReport:
             db.delete(p)
             report.risk_profiles += 1
 
+        for tok in db.exec(select(McpToken).where(McpToken.user_id == user_id)).all():
+            db.delete(tok)
+            report.mcp_tokens += 1
+
         for d in db.exec(select(DecisionRecord).where(DecisionRecord.user_id == user_id)).all():
             d.user_id = None
             db.add(d)
@@ -91,15 +97,22 @@ def delete_user(user_id: int) -> DeletionReport:
             db.delete(user)
         db.commit()
 
+    # Drop any live MCP broker session for this user right away.
+    from services.mcp_tokens import mcp_session_key
+    from session_manager import sessions
+
+    sessions.remove_session(mcp_session_key(user_id))
+
     logger.info(
         "Deleted user %s: %d threads, %d schedules, %d logs, %d risk profiles, "
-        "%d decision records unlinked",
+        "%d decision records unlinked, %d MCP tokens",
         user_id,
         len(report.threads),
         report.schedules,
         report.logs,
         report.risk_profiles,
         report.decisions_unlinked,
+        report.mcp_tokens,
     )
     return report
 

@@ -9,7 +9,6 @@ import json
 import os
 from typing import Any, Callable
 
-from session_manager import sessions
 from services.broker_service import fetch_stock_history_candles, holdings_for_sector_analysis
 from services.fundamental_service import get_stock_fundamentals
 from services.news_service import (
@@ -21,6 +20,7 @@ from services.news_service import (
 )
 from services.features import FeatureContractMismatch
 from services.prediction_service import model_status, predict_direction
+from services.readonly_broker import readonly_client
 from services.sector_service import get_market_breadth, get_sector_overview
 from services.sentiment_service import analyze_text
 from services.technical_service import compute_technical_indicators
@@ -47,7 +47,7 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
 
     def research_sector_portfolio_overview() -> dict[str, Any]:
         """Sector weights and index performance for the logged-in user's holdings."""
-        client = sessions.get_client(session_id)
+        client = readonly_client(session_id)
         if client is None:
             return {"error": "No Angel session; cannot load holdings for sector overview."}
         rows = holdings_for_sector_analysis(client)
@@ -64,7 +64,7 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
         days: int = 120,
     ) -> dict[str, Any]:
         """RSI, MACD, MAs, support/resistance from daily candles; uses your avg buy if held."""
-        client = sessions.get_client(session_id)
+        client = readonly_client(session_id)
         if client is None:
             return {"error": "No Angel session; required to fetch price history."}
         days = max(30, min(int(days), 365))
@@ -94,7 +94,7 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
         ``disclaimer`` saying so. Quote ``probability_up``; never restate it as
         a different number.
         """
-        client = sessions.get_client(session_id)
+        client = readonly_client(session_id)
         if client is None:
             return {"error": "No Angel session; required to fetch price history."}
 
@@ -127,7 +127,7 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
 
     def research_portfolio_sector_news(period: str = "7d") -> dict[str, Any]:
         """Fetch Google News headlines grouped by portfolio sector (top sectors by invested value)."""
-        client = sessions.get_client(session_id)
+        client = readonly_client(session_id)
         if client is None:
             return {"error": "No Angel session; required for holdings-based sector news."}
         p = normalize_news_period(period)
@@ -135,7 +135,7 @@ def make_market_tools(session_id: str) -> list[Callable[..., Any]]:
 
     def research_portfolio_news_with_sentiment(period: str = "7d") -> dict[str, Any]:
         """Same as sector portfolio news plus FinBERT sentiment per article and sector aggregates."""
-        client = sessions.get_client(session_id)
+        client = readonly_client(session_id)
         if client is None:
             return {"error": "No Angel session; required for holdings-based news."}
         p = normalize_news_period(period)

@@ -1,4 +1,8 @@
-"""Risk profile and trade proposal approval endpoints."""
+"""Risk profile, read-only proposal history and the user's own decision record.
+
+There is no approval or execution endpoint: this application never places
+orders. Proposals listed here are history only.
+"""
 from __future__ import annotations
 
 import logging
@@ -9,11 +13,11 @@ from fastapi.responses import JSONResponse
 
 from services import compliance, decision_record
 from services.risk_profile import risk_profiles, build_profile_from_dict, load_profile, save_profile
-from services.trade_proposals import proposal_store, execute_proposal
+from services.trade_proposals import proposal_store
 
 from web.dependencies import (
     current_client,
-    registered_user_for_session,
+    current_user,
     session_id,
 )
 
@@ -29,12 +33,13 @@ router = APIRouter()
 @router.get("/api/trading/profile")
 async def api_trading_profile_get(request: Request):
     client = current_client(request)
-    sid = session_id(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    # Read after current_client, which may have rebuilt the session under a new sid.
+    sid = session_id(request)
     profile = risk_profiles.get(sid)
     if profile is None:
-        user = registered_user_for_session(client)
+        user = current_user(request)
         if user:
             profile = load_profile(user.id)
             if profile:
@@ -48,9 +53,10 @@ async def api_trading_profile_get(request: Request):
 @router.post("/api/trading/profile")
 async def api_trading_profile_set(request: Request):
     client = current_client(request)
-    sid = session_id(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    # Read after current_client, which may have rebuilt the session under a new sid.
+    sid = session_id(request)
     try:
         body = await request.json()
     except Exception:
@@ -58,7 +64,7 @@ async def api_trading_profile_set(request: Request):
     try:
         profile = build_profile_from_dict(body)
         risk_profiles.set(sid, profile)
-        user = registered_user_for_session(client)
+        user = current_user(request)
         if user:
             save_profile(user.id, profile)
         return JSONResponse({"ok": True, "profile": profile.to_dict()})
@@ -80,23 +86,6 @@ async def api_trading_proposals(request: Request):
 
 
 
-@router.post("/api/trading/proposals/{proposal_id}/approve")
-async def api_trading_approve(request: Request, proposal_id: str):
-    client = current_client(request)
-    sid = session_id(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    try:
-        proposal_store.approve(sid, proposal_id)
-        result = execute_proposal(sid, proposal_id, client)
-        return JSONResponse(result)
-    except (ValueError, PermissionError) as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except Exception as e:
-        logger.exception("Proposal approval error")
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
 
 @router.get("/api/trading/compliance")
 async def api_trading_compliance(request: Request):
@@ -116,25 +105,28 @@ async def api_trading_compliance(request: Request):
 
 @router.get("/api/trading/decisions")
 async def api_trading_decisions(request: Request):
-    """The append-only decision record, newest first.
+    """The signed-in user's own decision records, newest first.
 
-    Includes blocked and failed decisions, not only executed ones — a blocked
-    trade is what an audit asks about.
+    Only rows owned by this user are returned. Records with unknown ownership
+    are never shown to anyone here; there is no admin audit view.
     """
     if current_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    user = current_user(request)
+    if user is None:
+        return JSONResponse({"decisions": []})
 
     symbol = request.query_params.get("symbol")
     try:
-        limit = min(int(request.query_params.get("limit", 50)), 200)
+        limit = max(1, min(int(request.query_params.get("limit", 50)), 200))
     except ValueError:
         limit = 50
 
     try:
-        return JSONResponse({"decisions": decision_record.recent(limit, symbol=symbol)})
-    except Exception as e:
+        return JSONResponse({"decisions": decision_record.recent(limit, user_id=user.id, symbol=symbol)})
+    except Exception:
         logger.exception("Decision record read error")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": "Could not read decisions"}, status_code=500)
 
 
 @router.post("/api/trading/proposals/{proposal_id}/reject")

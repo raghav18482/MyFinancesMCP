@@ -93,11 +93,13 @@ EXPECTED = {
     ("GET", "/api/trading/profile"),
     ("POST", "/api/trading/profile"),
     ("GET", "/api/trading/proposals"),
-    ("POST", "/api/trading/proposals/{proposal_id}/approve"),
     ("POST", "/api/trading/proposals/{proposal_id}/reject"),
     ("GET", "/api/trading/compliance"),
     ("GET", "/api/trading/decisions"),
     ("GET", "/api/market/stream"),
+    ("GET", "/api/mcp/tokens"),
+    ("POST", "/api/mcp/tokens"),
+    ("DELETE", "/api/mcp/tokens/{token_id}"),
 }
 
 

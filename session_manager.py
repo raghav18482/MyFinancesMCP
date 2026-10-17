@@ -1,7 +1,7 @@
 import time
 import threading
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from angel_client import AngelOneClient
 
@@ -13,14 +13,23 @@ SESSION_TTL_SECONDS = 8 * 3600  # 8 hours, matching Angel One session lifetime
 class SessionManager:
     """Maps session IDs to per-user AngelOneClient instances.
 
-    Credentials are never persisted — they live only in memory for the
+    Credentials are never persisted here — they live only in memory for the
     duration of a session and are discarded on expiry or server restart.
+
+    Keys are chosen by the caller and must come from a verified identity: a
+    random web ``sid`` stored in the signed cookie, ``mcp-user-<id>`` derived
+    from a verified MCP bearer token, or a scheduler job's throwaway id. Nothing
+    here ever takes a key from request parameters or tool arguments.
+
+    Everything is per process. With several workers each keeps its own sessions
+    (so one user can hold one broker login per worker) and its own locks.
     """
 
     def __init__(self):
         self._sessions: dict[str, AngelOneClient] = {}
         self._created_at: dict[str, float] = {}
         self._lock = threading.Lock()
+        self._key_locks: dict[str, threading.Lock] = {}
 
     def create_session(
         self,
@@ -37,6 +46,30 @@ class SessionManager:
             self._created_at[session_id] = time.time()
         logger.info("Session created for client %s (session %s)", client_id, session_id[:8])
         return client
+
+    def key_lock(self, key: str) -> threading.Lock:
+        """A lock unique to ``key``, so concurrent first requests log in once."""
+        with self._lock:
+            lock = self._key_locks.get(key)
+            if lock is None:
+                lock = self._key_locks[key] = threading.Lock()
+            return lock
+
+    def get_or_create(self, key: str, factory: Callable[[], Optional[object]]):
+        """The live client for ``key``, or the one ``factory`` builds, created at most once.
+
+        ``factory`` runs under a per-key lock and must itself register the
+        session (normally by calling :meth:`create_session` with ``key``). A
+        second caller that was waiting re-checks and reuses the result.
+        """
+        client = self.get_client(key)
+        if client is not None:
+            return client
+        with self.key_lock(key):
+            client = self.get_client(key)
+            if client is not None:
+                return client
+            return factory()
 
     def get_client(self, session_id: str) -> Optional[AngelOneClient]:
         with self._lock:
@@ -56,6 +89,7 @@ class SessionManager:
     def _remove_unlocked(self, session_id: str):
         self._sessions.pop(session_id, None)
         self._created_at.pop(session_id, None)
+        self._key_locks.pop(session_id, None)
         logger.info("Session removed: %s", session_id[:8])
 
     def cleanup_expired(self) -> list[str]:
