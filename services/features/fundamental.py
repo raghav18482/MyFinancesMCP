@@ -61,6 +61,9 @@ def build(panel: pd.DataFrame, pit_root: str | None = None) -> pd.DataFrame:
 
     out = out.sort_values(["date", "symbol"])
     snaps = snaps.sort_values("observed_at")
+    # Parquet reads observed_at back as datetime64[ms], while the panel's dates
+    # are [us] or [ns]. merge_asof refuses keys of different resolutions.
+    snaps["observed_at"] = snaps["observed_at"].astype(out["date"].dtype)
 
     # merge_asof with direction="backward" is the point-in-time join: for each
     # row take the newest snapshot at or before its date, and nothing after.

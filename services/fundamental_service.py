@@ -1,3 +1,4 @@
+import os
 import time
 import logging
 from typing import Optional
@@ -9,6 +10,25 @@ from yfinance.data import YfData
 from services.fundamental_scoring import score_fundamentals
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_yahoo_proxy() -> None:
+    """Send yfinance's requests through ``YAHOO_PROXY_URL`` when it is set.
+
+    Yahoo refuses requests from Render's shared outbound IPs, so production
+    needs another IP. yfinance's config is process-wide, which also covers the
+    estimates, ownership and peer services. Only yfinance uses it: Angel One
+    and OpenRouter traffic still goes out directly.
+    """
+    proxy = os.environ.get("YAHOO_PROXY_URL", "").strip()
+    if not proxy:
+        return
+    yf.config.network.proxy = proxy
+    # Log the host only: the URL carries the proxy's username and password.
+    logger.info("Yahoo Finance requests go through proxy %s", proxy.rsplit("@", 1)[-1])
+
+
+_configure_yahoo_proxy()
 
 _cache: dict[str, dict] = {}
 _CACHE_TTL = 6 * 3600  # 6 hours

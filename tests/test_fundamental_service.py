@@ -188,6 +188,41 @@ def test_a_transient_failure_recovers_on_the_next_request():
     print("ok  Retry after a failure fetches fresh data instead of a cached error")
 
 
+def test_yahoo_proxy_url_sends_yfinance_through_the_proxy():
+    import yfinance as yf
+
+    saved_env, saved_proxy = os.environ.get("YAHOO_PROXY_URL"), yf.config.network.proxy
+    records: list[logging.LogRecord] = []
+
+    class Grab(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler, saved_level = Grab(), fs.logger.level
+    fs.logger.addHandler(handler)
+    fs.logger.setLevel(logging.INFO)
+    try:
+        os.environ.pop("YAHOO_PROXY_URL", None)
+        yf.config.network.proxy = None
+        fs._configure_yahoo_proxy()
+        assert yf.config.network.proxy is None, "unset means Yahoo is called directly"
+
+        os.environ["YAHOO_PROXY_URL"] = " http://user:secret@proxy.example:8080 "
+        fs._configure_yahoo_proxy()
+        assert yf.config.network.proxy == "http://user:secret@proxy.example:8080"
+        logged = " ".join(r.getMessage() for r in records)
+        assert "proxy.example:8080" in logged and "secret" not in logged, logged
+    finally:
+        fs.logger.removeHandler(handler)
+        fs.logger.setLevel(saved_level)
+        yf.config.network.proxy = saved_proxy
+        if saved_env is None:
+            os.environ.pop("YAHOO_PROXY_URL", None)
+        else:
+            os.environ["YAHOO_PROXY_URL"] = saved_env
+    print("ok  YAHOO_PROXY_URL sends yfinance through the proxy and keeps its password out of the log")
+
+
 # ── API ────────────────────────────────────────────────────────────────────
 
 
