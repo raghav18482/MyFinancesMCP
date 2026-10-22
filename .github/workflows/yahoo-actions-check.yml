@@ -1,0 +1,45 @@
+# Throwaway feasibility check: can GitHub Actions runners fetch fundamentals
+# from Yahoo Finance? (Render's IPs are refused.) Delete this branch afterwards.
+name: yahoo-actions-check
+on:
+  push:
+    branches: [ci/yahoo-actions-check]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet yfinance==1.7.0
+      - name: Fetch 30 NSE stocks from Yahoo, paced like the real job
+        shell: python
+        run: |
+          import logging, time, yfinance as yf
+          errors = []
+          class Grab(logging.Handler):
+              def emit(self, r): errors.append(r.getMessage()[:160])
+          logging.getLogger("yfinance").addHandler(Grab(level=logging.WARNING))
+          symbols = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","HINDUNILVR","ITC","SBIN","BHARTIARTL","KOTAKBANK",
+                     "LT","AXISBANK","ASIANPAINT","MARUTI","SUNPHARMA","TITAN","ULTRACEMCO","BAJFINANCE","NESTLEIND","WIPRO",
+                     "HCLTECH","POWERGRID","NTPC","ONGC","TATASTEEL","JSWSTEEL","ADANIPORTS","COALINDIA","SUZLON","IRCTC"]
+          ok, failed = 0, []
+          for s in symbols:
+              t = yf.Ticker(f"{s}.NS")
+              try:
+                  info = t.info or {}
+                  fin = t.financials
+                  bs = t.balance_sheet
+                  holders = t.major_holders
+                  if info.get("regularMarketPrice") is not None and fin is not None and not fin.empty:
+                      ok += 1
+                  else:
+                      failed.append(s)
+              except Exception as e:
+                  failed.append(f"{s}({type(e).__name__})")
+              time.sleep(0.5)
+          print(f"::notice title=Yahoo from GitHub Actions::{ok}/{len(symbols)} stocks fetched OK; failed: {failed or 'none'}")
+          if errors:
+              print(f"::warning title=yfinance errors::{len(errors)} errors, first: {errors[0]}")
+          raise SystemExit(0 if ok == len(symbols) else 1)
