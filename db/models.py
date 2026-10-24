@@ -183,3 +183,21 @@ class ChatThread(SQLModel, table=True):
     archived: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class FundamentalSnapshot(SQLModel, table=True):
+    """The latest fundamentals for one stock, fetched away from this server.
+
+    Yahoo Finance refuses requests from Render's IPs, so a scheduled GitHub
+    Actions job (``scripts/refresh_fundamentals.py``) fetches fundamentals and
+    posts them to ``/api/internal/fundamentals``, and the app serves them from
+    here. A row with no ``data_json`` is a request: a user asked for a stock
+    that hasn't been fetched yet, and the job's next run picks it up.
+    """
+
+    __tablename__ = "fundamental_snapshots"
+
+    symbol: str = Field(primary_key=True)  # base NSE symbol, e.g. "SUZLON"
+    data_json: str | None = None  # a get_stock_fundamentals() result
+    fetched_at: datetime | None = Field(default=None, index=True)
+    requested_at: datetime | None = None

@@ -72,6 +72,8 @@ EXPECTED = {
     ("GET", "/api/research/estimates"),
     ("GET", "/api/research/ownership"),
     ("GET", "/api/research/model-status"),
+    ("GET", "/api/internal/fundamentals/queue"),
+    ("POST", "/api/internal/fundamentals"),
     ("GET", "/api/sectors/overview"),
     ("GET", "/api/sectors/breadth"),
     ("POST", "/api/ai/insights"),

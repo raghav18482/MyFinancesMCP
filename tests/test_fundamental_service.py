@@ -23,6 +23,7 @@ from yfinance.exceptions import YFRateLimitError
 
 import services.fundamental_service as fs
 from services.marketstore import pit
+from tests.test_fundamental_store import temp_store
 
 QUOTE = {
     "regularMarketPrice": 37.6,
@@ -86,7 +87,8 @@ def fake_yahoo(info, probe=None):
     pit.write_snapshot = lambda *a, **k: False
     fs._cache.clear()
     try:
-        yield yahoo
+        with temp_store():  # an empty store, so every request reaches the fake Yahoo
+            yield yahoo
     finally:
         fs.yf.Ticker, fs.YfData, fs._RETRY_BACKOFF, pit.write_snapshot = saved[:4]
         fs._cache.clear()
@@ -179,13 +181,13 @@ def test_an_empty_info_for_a_quoted_symbol_is_a_failure():
     print("ok  Yahoo quoting a symbol whose info came back empty is a failure")
 
 
-def test_a_transient_failure_recovers_on_the_next_request():
+def test_a_transient_failure_leaves_nothing_behind():
     with fake_yahoo(YFRateLimitError()) as yahoo:
-        assert fs.get_stock_fundamentals("SUZLON-EQ")["retryable"] is True
+        assert fs.fetch_live("SUZLON-EQ")["retryable"] is True
         yahoo.info = QUOTE
-        r = fs.get_stock_fundamentals("SUZLON-EQ")
+        r = fs.fetch_live("SUZLON-EQ")
         assert r["error"] is None and r["current_price"] == 37.6, r
-    print("ok  Retry after a failure fetches fresh data instead of a cached error")
+    print("ok  the next fetch after a failure gets fresh data, not a remembered error")
 
 
 # ── API ────────────────────────────────────────────────────────────────────

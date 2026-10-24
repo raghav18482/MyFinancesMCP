@@ -77,6 +77,27 @@ def test_build_panel_emits_every_contract_feature():
     print("ok  build_panel emits every feature the contract names")
 
 
+def test_a_real_snapshot_joins_onto_the_panel():
+    """Snapshots come back from parquet as datetime64[ms]; the join must accept them."""
+    import tempfile
+    from datetime import date
+
+    from services.features import fundamental
+    from services.marketstore import pit
+
+    with tempfile.TemporaryDirectory() as root:
+        snapshot = {"symbol": "AAA-EQ", "valuation": {"pe_ratio": 16.5}, "health": {"roe": 39.4}}
+        assert pit.write_snapshot(snapshot, observed_at=date(2024, 3, 1), root=root)
+        panel = _panel()
+        panel["date"] = pd.to_datetime(panel["date"])
+        out = fundamental.build(panel, pit_root=root)
+
+    aaa = out[out["symbol"] == "AAA"]
+    assert aaa.loc[aaa["date"] < "2024-03-01", "fund_pe_ratio"].isna().all(), "no figures before they were known"
+    assert (aaa.loc[aaa["date"] >= "2024-03-01", "fund_pe_ratio"] == 16.5).all()
+    print("ok  a snapshot read back from parquet joins onto the panel")
+
+
 def test_feature_matrix_matches_the_contract_width_and_order():
     panel = features.build_panel(_panel())
     X = features.feature_matrix(panel)

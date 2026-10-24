@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import yfinance as yf
 from yfinance.data import YfData
 
+from services import fundamental_store
 from services.fundamental_scoring import score_fundamentals
 
 logger = logging.getLogger(__name__)
@@ -48,18 +49,63 @@ def _yf_symbol(trading_symbol: str) -> str:
 
 
 def get_stock_fundamentals(trading_symbol: str) -> dict:
-    """Fetch full fundamental analysis — heavy yfinance properties
-    are loaded in parallel threads to cut latency by ~3x.
+    """Fundamentals for one stock: from the store if fetched already, else live.
+
+    Yahoo refuses requests from the production server's IPs, so production is
+    served from ``fundamental_store``, which a scheduled GitHub Actions job
+    keeps filled (``scripts/refresh_fundamentals.py``). A stock that isn't
+    stored yet is fetched live, which works from a residential IP. If Yahoo
+    refuses, the stock is queued for the job and the caller gets a retryable
+    "being fetched" answer.
     """
     cache_key = f"fundamental:{trading_symbol}"
     cached = _cache_get(cache_key)
     if cached:
         return cached
 
-    yf_sym = _yf_symbol(trading_symbol)
-    result: dict = {
+    stored = fundamental_store.load(trading_symbol)
+    if stored is not None:
+        _cache_set(cache_key, stored)
+        return stored
+
+    # Already queued: don't ask Yahoo again from a server it refuses.
+    if fundamental_store.requested_recently(trading_symbol):
+        return _being_fetched(trading_symbol)
+
+    result = fetch_live(trading_symbol)
+    if result.get("retryable"):
+        return _being_fetched(trading_symbol) if fundamental_store.request(trading_symbol) else result
+    if result["error"] is not None:
+        return result  # Yahoo has no data for it; not cached, see fetch_live
+
+    _cache_set(cache_key, result)
+    fundamental_store.save(result)
+
+    # Every live fetch becomes a point-in-time snapshot. yfinance only ever
+    # reports the current, possibly restated figure, so the only way to know
+    # what was knowable on a past date is to have written it down on that date.
+    # Best-effort: a snapshot failure must never break the caller's request.
+    try:
+        from services.marketstore import pit
+
+        pit.write_snapshot(result)
+    except Exception as e:  # pragma: no cover - defensive, see pit.write_snapshot
+        logger.debug("point-in-time snapshot skipped for %s: %s", trading_symbol, e)
+
+    return result
+
+
+def drop_cached(keys: set[str]) -> None:
+    """Forget cached results for these stocks (base symbols) after a refresh."""
+    for cache_key in list(_cache):
+        if fundamental_store.key(cache_key.split(":", 1)[-1]) in keys:
+            _cache.pop(cache_key, None)
+
+
+def _empty_result(trading_symbol: str) -> dict:
+    return {
         "symbol": trading_symbol,
-        "yf_symbol": yf_sym,
+        "yf_symbol": _yf_symbol(trading_symbol),
         "valuation": {},
         "health": {},
         "revenue_trend": [],
@@ -67,6 +113,28 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
         "score": None,
         "error": None,
     }
+
+
+def _being_fetched(trading_symbol: str) -> dict:
+    result = _empty_result(trading_symbol)
+    result["error"] = (
+        f"Fundamentals for {result['yf_symbol']} are being fetched in the background. "
+        "Please check back in an hour or two."
+    )
+    result["retryable"] = True
+    result["score"] = score_fundamentals(result)
+    return result
+
+
+def fetch_live(trading_symbol: str) -> dict:
+    """Fetch full fundamental analysis from Yahoo, uncached and unstored.
+
+    Heavy yfinance properties are loaded in parallel threads to cut latency
+    by ~3x. ``error`` is None on success; a transient failure also sets
+    ``retryable``. The scheduled job calls this directly.
+    """
+    result = _empty_result(trading_symbol)
+    yf_sym = result["yf_symbol"]
 
     try:
         ticker = yf.Ticker(yf_sym)
@@ -149,23 +217,9 @@ def get_stock_fundamentals(trading_symbol: str) -> dict:
         result["score"] = score_fundamentals(result)
         return result
 
-    # Scored last so the 0-100 breakdown rides the same 6h cache, and so the
-    # agent tool and the research API both get it without extra work.
+    # Scored last so the 0-100 breakdown is stored and cached with the figures,
+    # and so the agent tool and the research API both get it without extra work.
     result["score"] = score_fundamentals(result)
-
-    _cache_set(cache_key, result)
-
-    # Every live fetch becomes a point-in-time snapshot. yfinance only ever
-    # reports the current, possibly restated figure, so the only way to know
-    # what was knowable on a past date is to have written it down on that date.
-    # Best-effort: a snapshot failure must never break the caller's request.
-    try:
-        from services.marketstore import pit
-
-        pit.write_snapshot(result)
-    except Exception as e:  # pragma: no cover - defensive, see pit.write_snapshot
-        logger.debug("point-in-time snapshot skipped for %s: %s", trading_symbol, e)
-
     return result
 
 

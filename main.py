@@ -8,6 +8,7 @@ Web browsers connect to:  /          (FastAPI dashboard)
 Both sit behind one ``TrustedHostMiddleware``, so the MCP mount gets the same
 Host-header check as the web app.
 """
+#claude mcp add -s user --transport http myfinance http://localhost:8000/mcp/mcp --header "Authorization: Bearer mfm_piUx8hffUVlTOdCE18tGq0MdBzbrCdYqmxgKHzOedn4"
 
 import os
 import sys

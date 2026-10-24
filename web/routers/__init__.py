@@ -13,6 +13,7 @@ from web.routers import (
     auth_api,
     briefing,
     feedback,
+    internal_fundamentals,
     market,
     mcp_tokens,
     news,
@@ -43,6 +44,7 @@ all_routers = [
     trading.router,
     market.router,
     mcp_tokens.router,
+    internal_fundamentals.router,
 ]
 
 __all__ = ["all_routers"]
