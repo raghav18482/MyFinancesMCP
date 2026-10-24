@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Direct OpenRouter slug (no ``openrouter/`` prefix — that's LiteLLM-only).
 FEEDBACK_MODEL = os.environ.get(
-    "FEEDBACK_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"
+    "FEEDBACK_MODEL", "nvidia/nemotron-3.5-lightning:free"
 ).strip()
 PROJECT_URL = "agentfolio.in"
 _CLOSING_LINE = f"Manage your portfolio smartly → {PROJECT_URL}"
