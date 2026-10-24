@@ -4,6 +4,8 @@ on a single port behind one uvicorn instance.
 
 MCP clients connect to:   /mcp/mcp   (Streamable HTTP, ``Authorization: Bearer <token>``)
 Web browsers connect to:  /          (FastAPI dashboard)
+OAuth 2.1 for MCP:        /.well-known/oauth-*, /oauth/*  (served by the dashboard app,
+                          see ``web/routers/oauth.py``: they must sit at the domain root)
 
 Both sit behind one ``TrustedHostMiddleware``, so the MCP mount gets the same
 Host-header check as the web app.
@@ -35,7 +37,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from mcp_server import ClientIPMiddleware, mcp  # noqa: E402  — MCP FastMCP instance
+from mcp_server import ClientIPMiddleware, auth_settings, mcp  # noqa: E402  — MCP FastMCP instance
 from web_app import web         # noqa: E402  — FastAPI web dashboard
 from web import security_config  # noqa: E402
 from web.session_cleanup import release_session_resources  # noqa: E402
@@ -51,6 +53,12 @@ async def _cleanup_loop():
         for sid in sessions.cleanup_expired():
             release_session_resources(sid)
         proposal_store.cleanup_expired()
+        try:
+            from services.oauth_provider import purge_expired
+
+            await asyncio.to_thread(purge_expired)
+        except Exception:
+            logger.exception("OAuth purge failed; will retry")
 
 
 @asynccontextmanager
@@ -95,6 +103,8 @@ async def _lifespan(_app: Starlette):
 
 
 def create_app() -> Starlette:
+    # Resource URL and issuer follow PUBLIC_BASE_URL as it is now.
+    mcp.settings.auth = auth_settings()
     # ``streamable_http_app`` serves ``/mcp``; mounted at ``/mcp`` the endpoint is ``/mcp/mcp``.
     mcp_starlette = ClientIPMiddleware(mcp.streamable_http_app())
 

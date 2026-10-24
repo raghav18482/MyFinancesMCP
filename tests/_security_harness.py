@@ -149,12 +149,13 @@ def _modules_with_get_session():
     import adminApi.service
     import services.account_deletion
     import services.mcp_tokens
+    import services.oauth_provider
     import web.dependencies
     import web.routers.agent
     import web.routers.briefing
 
     return [adminApi.router, adminApi.service, services.account_deletion, services.mcp_tokens,
-            web.dependencies, web.routers.agent, web.routers.briefing]
+            services.oauth_provider, web.dependencies, web.routers.agent, web.routers.briefing]
 
 
 class Harness:
@@ -195,7 +196,7 @@ def harness(*, app_factory=None):
     import session_manager
     from adminApi import service
     from db import models  # noqa: F401
-    from services import login_throttle, mcp_tokens
+    from services import login_throttle, mcp_tokens, oauth_provider
 
     tmp = tempfile.TemporaryDirectory()
     engine = create_engine(
@@ -231,6 +232,7 @@ def harness(*, app_factory=None):
     login_throttle._by_identifier.clear()
     login_throttle._by_ip.clear()
     mcp_tokens.reset_rate_limits()
+    oauth_provider.reset_rate_limits()
     import web.dependencies as deps
     deps._recent_rebuilds.clear()
 

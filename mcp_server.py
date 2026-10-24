@@ -1,13 +1,19 @@
 """
 Read-only Angel One MCP server (Streamable HTTP, bearer-token authenticated).
 
-Every request must carry ``Authorization: Bearer <token>``, where the token is
-a personal access token the user created in the web app (``/connect``). These
-are custom tokens verified against the database — **not OAuth**: there is no
-authorization server, consent flow or client registration here, and none is
-advertised. The server runs stateless, so each HTTP request is authenticated
-on its own and there is no MCP session id to hijack; revoking a token takes
-effect on the next request.
+Every request must carry ``Authorization: Bearer <token>``. Two kinds of token
+are accepted, both verified against the database:
+
+- **OAuth 2.1 access tokens** (``mfa_…``), issued by the authorization server
+  in :mod:`services.oauth_provider` — what claude.ai custom connectors use. The
+  protected-resource metadata advertised here points clients at it.
+- **Personal access tokens** (``mfm_…``) that the user created in the web app
+  (``/connect``), for clients that can simply send a header.
+
+Tokens are bound to this endpoint (RFC 8707): the bearer middleware refuses a
+token issued for any other resource. The server runs stateless, so each HTTP
+request is authenticated on its own and there is no MCP session id to hijack;
+revoking a token takes effect on the next request.
 
 Identity comes only from the verified token. No tool accepts a session, user,
 account or credential argument, and broker credentials never pass through the
@@ -36,10 +42,11 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 
 from adminApi import service as admin_service
 from agents.readonly_guard import FORBIDDEN_TOOL_RE
-from services import mcp_tokens
+from services import mcp_tokens, oauth_provider
 from services.broker_service import (
     calculate_symbol_pnl,
     fetch_market_depth,
@@ -53,7 +60,6 @@ from web import security_config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PUBLIC_BASE_URL = security_config.public_base_url()
 
 # The exact, read-only tool surface. Nothing here places, modifies or cancels
 # an order, and there are no login/logout tools: authentication is the bearer
@@ -76,7 +82,7 @@ ALLOWED_MCP_TOOLS: frozenset[str] = frozenset({
     "predict_price_direction",
 })
 
-_USER_CLIENT_ID_RE = re.compile(r"user:(\d{1,12})")
+_USER_SUBJECT_RE = re.compile(r"user:(\d{1,12})")
 
 # Set per request by :class:`ClientIPMiddleware`; read by the token verifier,
 # which only receives the token, so that failed attempts can be limited per IP.
@@ -112,20 +118,50 @@ class ClientIPMiddleware:
         await self.app(scope, receive, send)
 
 
+def resource_url() -> str:
+    """The canonical URL of this MCP endpoint: the resource tokens are bound to."""
+    return security_config.public_base_url().rstrip("/") + oauth_provider.MCP_RESOURCE_PATH
+
+
+def auth_settings() -> AuthSettings:
+    """Resource-server settings, read from ``PUBLIC_BASE_URL`` when called.
+
+    ``resource_server_url`` makes FastMCP answer 401s with a
+    ``WWW-Authenticate: Bearer resource_metadata=…`` pointer to the
+    protected-resource metadata (served at the domain root by
+    :mod:`web.routers.oauth`), and ``validate_token_resource`` makes it refuse
+    tokens issued for another resource.
+    """
+    return AuthSettings(
+        issuer_url=security_config.public_base_url(),
+        resource_server_url=resource_url(),
+        validate_token_resource=True,
+        required_scopes=[mcp_tokens.SCOPE_PORTFOLIO_READ],
+        service_documentation_url=security_config.public_base_url().rstrip("/") + "/connect",
+    )
+
+
 class DbTokenVerifier:
-    """FastMCP ``TokenVerifier`` backed by :mod:`services.mcp_tokens`."""
+    """FastMCP ``TokenVerifier`` for OAuth access tokens and personal access tokens."""
 
     async def verify_token(self, token: str) -> AccessToken | None:
         ip = _client_ip_var.get()
-        verified = await anyio.to_thread.run_sync(mcp_tokens.verify, token, ip)
+        raw = (token or "").strip()
+        if raw.startswith(oauth_provider.ACCESS_PREFIX):
+            # Carries the grant's resource, which the bearer middleware checks.
+            return await anyio.to_thread.run_sync(oauth_provider.verify_access_token, raw, ip)
+        verified = await anyio.to_thread.run_sync(mcp_tokens.verify, raw, ip)
         if verified is None:
             return None
         return AccessToken(
             # The raw token is never carried past this point.
             token="redacted",
-            client_id=f"user:{verified.user_id}",
+            client_id=f"pat:{verified.token_id}",
+            subject=f"user:{verified.user_id}",
             scopes=list(verified.scopes),
             expires_at=verified.expires_at,
+            # A personal access token is only ever for this endpoint.
+            resource=resource_url(),
         )
 
 
@@ -162,14 +198,8 @@ mcp = FastMCP(
         "hypothetical analysis, never as an executed transaction."
     ),
     token_verifier=DbTokenVerifier(),
-    auth=AuthSettings(
-        # Required by the SDK when a verifier is set. No OAuth server runs here:
-        # ``resource_server_url=None`` means no protected-resource metadata is
-        # published, so OAuth-capable clients are not sent looking for one.
-        issuer_url=PUBLIC_BASE_URL,
-        resource_server_url=None,
-        required_scopes=[mcp_tokens.SCOPE_PORTFOLIO_READ],
-    ),
+    # Rebuilt by ``main.create_app`` so a changed ``PUBLIC_BASE_URL`` applies.
+    auth=auth_settings(),
     stateless_http=True,
     streamable_http_path="/mcp",
     transport_security=_transport_security(),
@@ -190,7 +220,7 @@ def _verified_user_id() -> int:
         raise NotAuthorized("Authentication required: send a valid MCP access token.")
     if mcp_tokens.SCOPE_PORTFOLIO_READ not in (tok.scopes or []):
         raise NotAuthorized("This token is not allowed to read portfolio data.")
-    m = _USER_CLIENT_ID_RE.fullmatch(tok.client_id or "")
+    m = _USER_SUBJECT_RE.fullmatch(tok.subject or "")
     if not m:
         raise NotAuthorized("Authentication required: send a valid MCP access token.")
     return int(m.group(1))
@@ -478,7 +508,26 @@ def _format_market_depth_from_dict(d: dict) -> str:
 # ── Read-Only Tools ────────────────────────────────────────────────────────
 
 
-@mcp.tool()
+def _read_tool(title: str):
+    """Register a tool with a title and read-only annotations.
+
+    Every tool here only reads, so each one says so (``readOnlyHint``); clients
+    such as claude.ai use these hints to decide what needs confirmation.
+    ``_assert_tool_surface`` refuses to start if any tool lacks them.
+    """
+    return mcp.tool(
+        title=title,
+        annotations=ToolAnnotations(
+            title=title,
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+
+
+@_read_tool('Get account profile')
 def get_profile(ctx: Context = None) -> str:
     """Get your Angel One account profile: name, client ID, email, enabled exchanges, and broker info."""
     client = _require_client(ctx)
@@ -498,7 +547,7 @@ def get_profile(ctx: Context = None) -> str:
     return _safe_call(lambda: result)
 
 
-@mcp.tool()
+@_read_tool('Get holdings')
 def get_holdings(ctx: Context = None) -> str:
     """Get all stock holdings in your Angel One demat account with quantity, average price, LTP, and P&L for each stock."""
     client = _require_client(ctx)
@@ -506,14 +555,14 @@ def get_holdings(ctx: Context = None) -> str:
     return _format_holdings_table(data)
 
 
-@mcp.tool()
+@_read_tool('Get holdings overview')
 def get_all_holdings(ctx: Context = None) -> str:
     """Get complete holdings overview including total investment value, current value, and overall P&L."""
     client = _require_client(ctx)
     return _safe_call(client.get_all_holdings)
 
 
-@mcp.tool()
+@_read_tool('Get open positions')
 def get_positions(ctx: Context = None) -> str:
     """Get all open intraday and delivery positions with unrealized P&L."""
     client = _require_client(ctx)
@@ -521,7 +570,7 @@ def get_positions(ctx: Context = None) -> str:
     return _format_positions_table(data)
 
 
-@mcp.tool()
+@_read_tool("Get today's order book")
 def get_order_book(ctx: Context = None) -> str:
     """Get all orders placed today with their current status (open, completed, rejected, cancelled)."""
     client = _require_client(ctx)
@@ -529,14 +578,14 @@ def get_order_book(ctx: Context = None) -> str:
     return _format_order_book(data)
 
 
-@mcp.tool()
+@_read_tool("Get today's trade book")
 def get_trade_book(ctx: Context = None) -> str:
     """Get all executed trades for today with fill prices and quantities."""
     client = _require_client(ctx)
     return _safe_call(client.get_trade_book)
 
 
-@mcp.tool()
+@_read_tool('Get funds and margin')
 def get_funds(ctx: Context = None) -> str:
     """Get your account fund details: available margin, used margin, and net balance across segments."""
     client = _require_client(ctx)
@@ -556,7 +605,7 @@ def get_funds(ctx: Context = None) -> str:
     return _safe_call(lambda: result)
 
 
-@mcp.tool()
+@_read_tool('Get last traded price')
 def get_ltp(exchange: str, tradingsymbol: str, symboltoken: str, ctx: Context = None) -> str:
     """Get last traded price for a specific stock/instrument.
 
@@ -569,7 +618,7 @@ def get_ltp(exchange: str, tradingsymbol: str, symboltoken: str, ctx: Context = 
     return _safe_call(client.get_ltp, exchange, tradingsymbol, symboltoken)
 
 
-@mcp.tool()
+@_read_tool('Search instruments')
 def search_scrip(exchange: str, search_text: str, ctx: Context = None) -> str:
     """Search for a stock/instrument by name or symbol on a given exchange. Use this to find symbol tokens needed by other tools.
 
@@ -589,14 +638,14 @@ def search_scrip(exchange: str, search_text: str, ctx: Context = None) -> str:
     return _safe_call(lambda: result)
 
 
-@mcp.tool()
+@_read_tool('Get portfolio summary')
 def portfolio_summary(ctx: Context = None) -> str:
     """Get a high-level summary of your entire portfolio: total invested, current value, overall P&L, and day's P&L."""
     client = _require_client(ctx)
     return _format_portfolio_summary_from_dict(portfolio_summary_as_dict(client))
 
 
-@mcp.tool()
+@_read_tool('Get candle data')
 def get_candle_data(
     exchange: str,
     symboltoken: str,
@@ -628,7 +677,7 @@ def get_candle_data(
 # ── New Convenience Tools ──────────────────────────────────────────────────
 
 
-@mcp.tool()
+@_read_tool('Get stock price history')
 def get_stock_history(symbol: str, days: int = 30, interval: str = "ONE_DAY", ctx: Context = None) -> str:
     """Get historical OHLCV price data for a stock using just its name/symbol.
 
@@ -649,7 +698,7 @@ def get_stock_history(symbol: str, days: int = 30, interval: str = "ONE_DAY", ct
     return _format_stock_history_from_candles(raw)
 
 
-@mcp.tool()
+@_read_tool('Calculate P&L for a stock')
 def calculate_pnl(symbol: str, ctx: Context = None) -> str:
     """Calculate detailed P&L for a specific stock from your holdings and today's positions.
 
@@ -668,7 +717,7 @@ def calculate_pnl(symbol: str, ctx: Context = None) -> str:
     return _format_pnl_from_dict(d)
 
 
-@mcp.tool()
+@_read_tool('Get market depth')
 def get_market_depth(symbol: str, exchange: str = "NSE", ctx: Context = None) -> str:
     """Get full market depth (best 5 bids and asks) for a stock.
 
@@ -685,7 +734,7 @@ def get_market_depth(symbol: str, exchange: str = "NSE", ctx: Context = None) ->
     return _format_market_depth_from_dict(d)
 
 
-@mcp.tool()
+@_read_tool('Predict price direction')
 def predict_price_direction(
     tradingsymbol: str,
     exchange: str = "NSE",
@@ -799,14 +848,21 @@ def predict_price_direction(
 
 def _assert_tool_surface() -> None:
     """Refuse to start if the registered tools are not exactly the read-only allowlist."""
-    names = {t.name for t in mcp._tool_manager.list_tools()}
+    tools = mcp._tool_manager.list_tools()
+    names = {t.name for t in tools}
+    unannotated = sorted(
+        t.name for t in tools
+        if not t.title or not t.annotations or t.annotations.readOnlyHint is not True
+        or t.annotations.destructiveHint is not False
+    )
     forbidden = sorted(n for n in names if FORBIDDEN_TOOL_RE.search(n))
     unexpected = sorted(names - ALLOWED_MCP_TOOLS)
     missing = sorted(ALLOWED_MCP_TOOLS - names)
-    if forbidden or unexpected or missing:
+    if forbidden or unexpected or missing or unannotated:
         raise RuntimeError(
             "MCP tool surface is not the read-only allowlist: "
-            f"forbidden={forbidden} unexpected={unexpected} missing={missing}"
+            f"forbidden={forbidden} unexpected={unexpected} missing={missing} "
+            f"without read-only annotations={unannotated}"
         )
 
 

@@ -100,6 +100,19 @@ EXPECTED = {
     ("GET", "/api/mcp/tokens"),
     ("POST", "/api/mcp/tokens"),
     ("DELETE", "/api/mcp/tokens/{token_id}"),
+    # OAuth 2.1 for the MCP endpoint (claude.ai custom connectors)
+    ("GET", "/.well-known/oauth-authorization-server"),
+    ("GET", "/.well-known/oauth-protected-resource"),
+    ("GET", "/.well-known/oauth-protected-resource/mcp/mcp"),
+    ("GET", "/oauth/authorize"),
+    ("POST", "/oauth/authorize"),
+    ("POST", "/oauth/token"),
+    ("POST", "/oauth/register"),
+    ("POST", "/oauth/revoke"),
+    ("GET", "/oauth/consent"),
+    ("POST", "/oauth/consent"),
+    ("GET", "/api/oauth/connections"),
+    ("DELETE", "/api/oauth/connections/{grant_id}"),
 }
 
 

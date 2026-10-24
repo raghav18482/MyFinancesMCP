@@ -74,6 +74,78 @@ class McpToken(SQLModel, table=True):
     revoked_at: datetime | None = None
 
 
+# ── OAuth 2.1 for the MCP endpoint (see services/oauth_provider.py) ───────────
+# New tables only, so ``create_all`` adds them and no column migration is
+# needed. Every secret (client secret, code, access/refresh token) is stored as
+# a SHA-256 hash; the raw values exist only in the HTTP response that issues them.
+
+
+class OAuthClient(SQLModel, table=True):
+    """A client registered through Dynamic Client Registration (RFC 7591)."""
+
+    __tablename__ = "oauth_clients"
+
+    id: int | None = Field(default=None, primary_key=True)
+    client_id: str = Field(index=True, unique=True)
+    client_secret_hash: str | None = None  # None for public clients (auth method "none")
+    # The registered metadata as JSON, minus any secret. Redirect URIs are in here.
+    metadata_json: str
+    client_name: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class OAuthGrant(SQLModel, table=True):
+    """One user's consent for one client. Revoking it kills every token it issued."""
+
+    __tablename__ = "oauth_grants"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    client_id: str = Field(index=True)
+    scopes: str  # space-separated
+    resource: str  # RFC 8707: the MCP endpoint these tokens are for
+    created_at: datetime = Field(default_factory=utcnow)
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class OAuthAuthCode(SQLModel, table=True):
+    """A short-lived, single-use authorization code (PKCE S256)."""
+
+    __tablename__ = "oauth_codes"
+
+    id: int | None = Field(default=None, primary_key=True)
+    code_hash: str = Field(index=True, unique=True)
+    client_id: str = Field(index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    scopes: str
+    resource: str
+    code_challenge: str
+    redirect_uri: str
+    redirect_uri_provided_explicitly: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    used_at: datetime | None = None
+    # Set when the code is exchanged, so a replayed code can revoke what it issued.
+    grant_id: int | None = Field(default=None, foreign_key="oauth_grants.id")
+
+
+class OAuthToken(SQLModel, table=True):
+    """An access or refresh token belonging to a grant."""
+
+    __tablename__ = "oauth_tokens"
+
+    id: int | None = Field(default=None, primary_key=True)
+    grant_id: int = Field(foreign_key="oauth_grants.id", index=True)
+    kind: str = Field(index=True)  # "access" | "refresh"
+    token_hash: str = Field(index=True, unique=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: datetime
+    # Refresh tokens rotate: set when exchanged. Presenting it again is reuse.
+    used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
 class Schedule(SQLModel, table=True):
     __tablename__ = "schedules"
 

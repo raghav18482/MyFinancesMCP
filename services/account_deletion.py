@@ -19,7 +19,18 @@ from dataclasses import dataclass, field
 from sqlmodel import select
 
 from db import get_session
-from db.models import ChatThread, DecisionRecord, Log, McpToken, RiskProfile, Schedule, User
+from db.models import (
+    ChatThread,
+    DecisionRecord,
+    Log,
+    McpToken,
+    OAuthAuthCode,
+    OAuthGrant,
+    OAuthToken,
+    RiskProfile,
+    Schedule,
+    User,
+)
 from db.passwords import verify_password
 
 logger = logging.getLogger(__name__)
@@ -36,6 +47,7 @@ class DeletionReport:
     risk_profiles: int = 0
     decisions_unlinked: int = 0
     mcp_tokens: int = 0
+    oauth_grants: int = 0
 
 
 def password_matches(user: User | None, app_password: str) -> bool:
@@ -86,6 +98,18 @@ def delete_user(user_id: int) -> DeletionReport:
             db.delete(tok)
             report.mcp_tokens += 1
 
+        # OAuth: tokens belong to grants, and codes may point at grants.
+        grant_ids = [g.id for g in db.exec(select(OAuthGrant).where(OAuthGrant.user_id == user_id)).all()]
+        for code in db.exec(select(OAuthAuthCode).where(OAuthAuthCode.user_id == user_id)).all():
+            db.delete(code)
+        if grant_ids:
+            for tok in db.exec(select(OAuthToken).where(OAuthToken.grant_id.in_(grant_ids))).all():
+                db.delete(tok)
+        db.flush()
+        for g in db.exec(select(OAuthGrant).where(OAuthGrant.user_id == user_id)).all():
+            db.delete(g)
+            report.oauth_grants += 1
+
         for d in db.exec(select(DecisionRecord).where(DecisionRecord.user_id == user_id)).all():
             d.user_id = None
             db.add(d)
@@ -105,7 +129,7 @@ def delete_user(user_id: int) -> DeletionReport:
 
     logger.info(
         "Deleted user %s: %d threads, %d schedules, %d logs, %d risk profiles, "
-        "%d decision records unlinked, %d MCP tokens",
+        "%d decision records unlinked, %d MCP tokens, %d OAuth grants",
         user_id,
         len(report.threads),
         report.schedules,
@@ -113,6 +137,7 @@ def delete_user(user_id: int) -> DeletionReport:
         report.risk_profiles,
         report.decisions_unlinked,
         report.mcp_tokens,
+        report.oauth_grants,
     )
     return report
 

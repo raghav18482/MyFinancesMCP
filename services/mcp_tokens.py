@@ -1,9 +1,11 @@
 """Personal access tokens for the read-only MCP endpoint.
 
-These are custom bearer tokens, **not OAuth**. A signed-in web user creates one
-(re-entering their app password), pastes it into their MCP client's
-``Authorization: Bearer`` header, and can revoke it at any time. There is no
-authorization server, consent screen, refresh token or client registration.
+These are custom bearer tokens, separate from OAuth. A signed-in web user creates
+one (re-entering their app password), pastes it into their MCP client's
+``Authorization: Bearer`` header, and can revoke it at any time. They are for
+clients that can send a header (Claude Code, Cursor, ``mcp-remote``); clients
+that need OAuth, such as claude.ai custom connectors, go through
+:mod:`services.oauth_provider` instead. Both kinds verify at the same endpoint.
 
 Properties:
 
@@ -14,15 +16,34 @@ Properties:
   ``revoked_at`` in the database, so revocation takes effect on the next request.
 - **Owner-scoped.** List and revoke only ever touch the caller's own rows.
 - **Bound to an active user.** A deactivated user's tokens stop verifying.
-- **Rate limited.** Failed verifications are counted per client IP; past the
-  cap, verification is refused without touching the database. Creation is
-  limited per user and per IP.
+- **Rate limited, without shared-IP lockouts.** See "Verification limiter" below.
+  Creation is limited per user and per IP.
+
+Verification limiter
+--------------------
+Tokens carry 256 random bits, so guessing one is hopeless; the limiter exists
+to stop a flood of guesses from turning into a flood of database lookups. It
+must not lock out real users, and claude.ai users all arrive from Anthropic's
+shared egress addresses, so a plain per-IP lockout would let one noisy client
+(or many legitimately expired tokens) shut out everyone behind the same IP.
+So:
+
+- Only *unknown* tokens count: well-formed, but matching no row. A malformed
+  token is rejected without a lookup and costs nothing; a token that exists but
+  is expired or revoked is a real client that needs a refresh or a new token,
+  not a guess.
+- Unknown lookups are capped per IP and globally. Past either cap, a token is
+  refused without a lookup **unless** its hash was issued or verified recently
+  by this process. Those still go to the database (so expiry and revocation
+  are always checked), which keeps real users working while guesses from the
+  same addresses are dropped cheaply.
 
 The limiter is in-memory and per process, like :mod:`services.login_throttle`;
 behind several workers the effective limit multiplies by the worker count.
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import hmac
 import logging
@@ -53,16 +74,22 @@ _MIN_TOKEN_LEN = len(TOKEN_PREFIX) + 40
 _MAX_TOKEN_LEN = 128
 _LAST_USED_RESOLUTION_SEC = 60
 
-# Failed verifications per client IP.
+# Verification limiter (see the module docstring). Unknown-token lookups only.
 _VERIFY_WINDOW_SEC = 15 * 60
-_MAX_VERIFY_FAILURES_PER_IP = 30
+_MAX_UNKNOWN_PER_IP = 300
+_MAX_UNKNOWN_GLOBAL = 5000
+# Hashes issued or verified recently bypass the caps (they are still checked).
+_KNOWN_TTL_SEC = 24 * 3600
+_MAX_KNOWN = 50_000
 # Token creation.
 _ISSUE_WINDOW_SEC = 60 * 60
 _MAX_ISSUE_PER_USER = 10
 _MAX_ISSUE_PER_IP = 20
 
 _lock = threading.Lock()
-_verify_failures: dict[str, list[float]] = {}
+_unknown_by_ip: dict[str, list[float]] = {}
+_unknown_global: collections.deque[float] = collections.deque()
+_known: collections.OrderedDict[str, float] = collections.OrderedDict()
 _issue_by_user: dict[str, list[float]] = {}
 _issue_by_ip: dict[str, list[float]] = {}
 
@@ -120,26 +147,58 @@ def _check_and_record(store: dict[str, list[float]], key: str, cap: int, window:
         store[key] = hits
 
 
-def _verify_blocked(client_ip: str) -> bool:
+def lookup_allowed(client_ip: str, digest: str) -> bool:
+    """May a well-formed token with this hash be looked up in the database?
+
+    True unless an unknown-token cap is exceeded and the hash is not one this
+    process issued or verified recently. Shared by PATs and OAuth access tokens.
+    """
     now = time.time()
     with _lock:
-        hits = _fresh(_verify_failures, client_ip, now, _VERIFY_WINDOW_SEC)
-        _verify_failures[client_ip] = hits
-        return len(hits) >= _MAX_VERIFY_FAILURES_PER_IP
+        seen = _known.get(digest)
+        if seen is not None and now - seen < _KNOWN_TTL_SEC:
+            return True
+        while _unknown_global and now - _unknown_global[0] >= _VERIFY_WINDOW_SEC:
+            _unknown_global.popleft()
+        hits = _fresh(_unknown_by_ip, client_ip, now, _VERIFY_WINDOW_SEC)
+        if hits:
+            _unknown_by_ip[client_ip] = hits
+        else:
+            _unknown_by_ip.pop(client_ip, None)
+        return len(hits) < _MAX_UNKNOWN_PER_IP and len(_unknown_global) < _MAX_UNKNOWN_GLOBAL
 
 
-def _record_verify_failure(client_ip: str) -> None:
+def record_unknown(client_ip: str) -> None:
+    """A well-formed token matched no row."""
     now = time.time()
     with _lock:
-        hits = _fresh(_verify_failures, client_ip, now, _VERIFY_WINDOW_SEC)
+        hits = _fresh(_unknown_by_ip, client_ip, now, _VERIFY_WINDOW_SEC)
         hits.append(now)
-        _verify_failures[client_ip] = hits
+        _unknown_by_ip[client_ip] = hits
+        _unknown_global.append(now)
+        # The IP comes from X-Forwarded-For, which a client can vary, so drop
+        # idle entries rather than let the map grow without bound.
+        if len(_unknown_by_ip) > _MAX_UNKNOWN_GLOBAL * 2:
+            for ip in [k for k, v in _unknown_by_ip.items() if not v or now - v[-1] >= _VERIFY_WINDOW_SEC]:
+                del _unknown_by_ip[ip]
+
+
+def remember_known(digest: str) -> None:
+    """This hash belongs to a real token: let it past the caps for a while."""
+    now = time.time()
+    with _lock:
+        _known[digest] = now
+        _known.move_to_end(digest)
+        while len(_known) > _MAX_KNOWN:
+            _known.popitem(last=False)
 
 
 def reset_rate_limits() -> None:
     """Forget all limiter state (tests, or an operator clearing a lockout)."""
     with _lock:
-        _verify_failures.clear()
+        _unknown_by_ip.clear()
+        _unknown_global.clear()
+        _known.clear()
         _issue_by_user.clear()
         _issue_by_ip.clear()
 
@@ -217,43 +276,42 @@ def issue(
         db.commit()
         db.refresh(row)
         view = _row_view(row)
+    remember_known(row.token_hash)
 
     logger.info("MCP token id=%s issued for user id=%s (expires in %d days)", row.id, user_id, ttl)
     return raw, view
 
 
+def well_formed(token: str, prefix: str) -> bool:
+    return token.startswith(prefix) and _MIN_TOKEN_LEN <= len(token) <= _MAX_TOKEN_LEN
+
+
 def verify(raw: Optional[str], client_ip: str = "unknown") -> Optional[VerifiedToken]:
     """Return the verified token, or None for every kind of failure.
 
-    Failures are deliberately indistinguishable to the caller. Past the
-    per-IP failure cap, returns None without querying the database.
+    Failures are deliberately indistinguishable to the caller. A malformed token
+    is refused without a lookup; past the unknown-token caps, so is any token
+    this process has not recently seen (see the module docstring).
     """
-    if _verify_blocked(client_ip):
-        logger.warning("MCP token verification throttled for ip=%s", client_ip)
-        return None
-
     token = (raw or "").strip()
-    if (
-        not token.startswith(TOKEN_PREFIX)
-        or not _MIN_TOKEN_LEN <= len(token) <= _MAX_TOKEN_LEN
-    ):
-        _record_verify_failure(client_ip)
+    if not well_formed(token, TOKEN_PREFIX):
         return None
 
     digest = hash_token(token)
+    if not lookup_allowed(client_ip, digest):
+        logger.warning("MCP token verification throttled for ip=%s", client_ip)
+        return None
+
     now = utcnow()
     try:
         with get_session() as db:
             row = db.exec(select(McpToken).where(McpToken.token_hash == digest)).first()
-            ok = (
-                row is not None
-                and hmac.compare_digest(row.token_hash, digest)
-                and row.revoked_at is None
-                and _aware(row.expires_at) > now
-            )
+            if row is None or not hmac.compare_digest(row.token_hash, digest):
+                record_unknown(client_ip)
+                return None
+            ok = row.revoked_at is None and _aware(row.expires_at) > now
             user = db.get(User, row.user_id) if ok else None
             if not ok or user is None or not user.is_active:
-                _record_verify_failure(client_ip)
                 return None
 
             last = _aware(row.last_used_at)
@@ -263,6 +321,7 @@ def verify(raw: Optional[str], client_ip: str = "unknown") -> Optional[VerifiedT
                 db.commit()
                 db.refresh(row)
 
+            remember_known(digest)
             return VerifiedToken(
                 token_id=row.id,
                 user_id=row.user_id,

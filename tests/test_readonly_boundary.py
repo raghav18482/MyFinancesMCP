@@ -335,7 +335,7 @@ def test_read_only_mcp_tools_still_work_for_their_owner():
     from mcp.server.auth.provider import AccessToken
 
     with harness() as h:
-        tok = AccessToken(token="redacted", client_id=f"user:{h.ids['A']}",
+        tok = AccessToken(token="redacted", client_id="pat:test", subject=f"user:{h.ids['A']}",
                           scopes=["portfolio:read"], expires_at=None)
         reset = auth_context_var.set(AuthenticatedUser(tok))
         try:

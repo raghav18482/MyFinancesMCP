@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Connect an app{% endblock %}
+{% block nav %}
+<nav class="site-nav">
+  <div class="inner">
+    <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>MyFinance<span class="brand-suffix">MCP</span></a>
+  </div>
+</nav>
+{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="form-card card">
+    {% if not pending %}
+    <h1>Link expired</h1>
+    <p class="sub">This connection request is invalid or has expired. Go back to the app you were connecting and start again.</p>
+    {% else %}
+    <h1>Connect {% if pending.is_claude %}Claude{% else %}an app{% endif %} to your portfolio</h1>
+    <p class="sub">
+      {% if pending.is_claude %}
+      <strong>Claude</strong> ({{ pending.redirect_host }})
+      {% elif pending.is_loopback %}
+      An app running on your own computer{% if pending.client_name %}, calling itself <strong>&ldquo;{{ pending.client_name }}&rdquo;</strong>,{% endif %}
+      {% else %}
+      {% if pending.client_name %}<strong>&ldquo;{{ pending.client_name }}&rdquo;</strong> (name supplied by the app){% else %}An app{% endif %}
+      at <strong>{{ pending.redirect_host }}</strong>
+      {% endif %}
+      is asking for:
+    </p>
+
+    <div class="disclaimer" style="margin:0 0 1.25rem">
+      <strong>Read-only portfolio access</strong> (<code>portfolio:read</code>)
+      <ul class="checklist" style="margin:.6rem 0 0">
+        <li>View your Angel One profile, holdings, positions, orders, trades and funds</li>
+        <li>Look up prices, candles and market depth</li>
+        <li><strong>Cannot</strong> place, modify or cancel orders, or move money</li>
+        <li>Never sees your Angel One PIN, TOTP secret or API key</li>
+      </ul>
+      <p style="margin:.6rem 0 0">You can disconnect at any time from <a href="/connect" style="color:var(--accent)">Connect MCP</a> or from the app.</p>
+    </div>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/oauth/consent" autocomplete="on">
+      <input type="hidden" name="request" value="{{ request_blob }}">
+      <div class="field">
+        <label for="whatsapp_number">WhatsApp Number</label>
+        <div class="phone-input">
+          <select id="country_code" name="country_code" aria-label="Country dialling code">
+            {% for c in countries %}
+            <option value="{{ c.dial }}" title="{{ c.name }}" {{ 'selected' if c.dial == selected_dial }}>{{ c.name }} ({{ c.label }})</option>
+            {% endfor %}
+          </select>
+          <input type="tel" id="whatsapp_number" name="whatsapp_number"
+                 autocomplete="username" inputmode="tel"
+                 value="{{ national_number }}" placeholder="98765 43210">
+        </div>
+      </div>
+      <div class="field">
+        <label for="app_password">App Password</label>
+        <input type="password" id="app_password" name="app_password"
+               autocomplete="current-password" placeholder="The password you chose during setup">
+      </div>
+      <div style="display:flex;gap:.75rem">
+        <button type="submit" name="decision" value="allow" class="btn btn-primary">Sign in and allow</button>
+        <button type="submit" name="decision" value="deny" class="btn btn-ghost" formnovalidate>Deny</button>
+      </div>
+    </form>
+
+    <div class="disclaimer">
+      Only allow apps you started connecting yourself. Your app password is checked here, on this site, and is never shared with the app.
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

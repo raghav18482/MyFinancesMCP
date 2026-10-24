@@ -166,7 +166,7 @@ flowchart TB
 
 - **Web login:** Browser posts Angel credentials → server creates an `AngelOneClient` in memory and stores an opaque **`sid`** in a signed session cookie.
 - **Daily briefing:** Scheduler ticks every minute → queries `schedules` for rows where `next_run <= now()` → claims them with `FOR UPDATE SKIP LOCKED` → for each claimed schedule: decrypts credentials from `users`, creates an ephemeral Angel session, generates the briefing, sends WhatsApp, writes to `logs`, and arms `next_run`.
-- **MCP:** Read-only. Each request carries `Authorization: Bearer <personal access token>` (created on `/connect`; custom tokens, not OAuth). The user is derived from the verified token and their broker session is rebuilt from their encrypted stored credentials; no credentials pass through tools.
+- **MCP:** Read-only. Each request carries `Authorization: Bearer <token>`: either an OAuth 2.1 access token (claude.ai custom connectors and other OAuth clients; PKCE S256, Dynamic Client Registration, consent at `/oauth/consent`, tokens hashed and bound to the `/mcp/mcp` resource) or a personal access token created on `/connect`. The user is derived from the verified token and their broker session is rebuilt from their encrypted stored credentials; no credentials pass through tools.
 
 ## Getting Your Angel One API Credentials
 
@@ -355,6 +355,12 @@ curl -X POST http://localhost:8000/api/admin/users \
 ```
 
 ## Connect from an MCP Client
+
+### Claude (claude.ai, Desktop, mobile): custom connector
+
+**Settings → Connectors → Add custom connector**, URL `https://agentfolio.in/mcp/mcp` (use the apex domain; `www` redirects). Claude discovers the OAuth server from `/.well-known/oauth-protected-resource/mcp/mcp`, registers itself, and sends you to a sign-in page (WhatsApp number + app password) to approve read-only `portfolio:read` access. No token to paste. Connected apps can be disconnected on `/connect`.
+
+OAuth needs `PUBLIC_BASE_URL` set to the exact public origin (e.g. `https://agentfolio.in`): the issuer, the endpoints and the resource that tokens are bound to are all derived from it. Optional: `OAUTH_EXTRA_REDIRECT_URIS` (comma-separated, exact) to allow other clients' callbacks beyond claude.ai/claude.com and loopback; `OAUTH_ALLOW_LOOPBACK_REDIRECTS=0` to refuse `http://localhost` callbacks.
 
 ### Cursor
 

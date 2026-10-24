@@ -4,20 +4,42 @@
 <div class="container">
   <div class="guide">
     <h1>Connect MyFinanceMCP to Your AI Assistant</h1>
-    <p class="guide-intro">Connect this MCP server to Claude Desktop, Cursor, or any MCP client that can send an HTTP header. Your assistant can then <strong>read</strong> your Angel One portfolio and market data and help you analyse it. It is <strong>read-only</strong>: it cannot place, modify or cancel orders, and any trade idea it gives you is hypothetical.</p>
+    <p class="guide-intro">Connect this MCP server to Claude (claude.ai, Claude Desktop and mobile) as a custom connector, or to Claude Code, Cursor, or any MCP client that can send an HTTP header. Your assistant can then <strong>read</strong> your Angel One portfolio and market data and help you analyse it. It is <strong>read-only</strong>: it cannot place, modify or cancel orders, and any trade idea it gives you is hypothetical.</p>
 
     <div class="guide-note" style="margin-bottom:1.5rem">
       <strong>Don't want to set up MCP?</strong> The <a href="/login">web dashboard</a> has the same read-only assistant built in. No MCP configuration needed.
     </div>
 
-    <!-- Step 0: Access token -->
-    <div class="card guide-section" id="mcp-token">
+    <!-- Claude custom connector (OAuth) -->
+    <div class="card guide-section" id="claude-connector">
       <div class="step-header">
         <span class="step-number">1</span>
-        <h2>Create a personal access token</h2>
+        <h2>Claude: add a custom connector (no token needed)</h2>
       </div>
       <div class="step-body">
-        <p>The MCP server identifies you by a <strong>personal access token</strong> that you create here and paste into your client. This is a simple bearer token &mdash; <strong>not OAuth</strong>: there is no sign-in pop-up, and you never type Angel One credentials into an AI chat.</p>
+        <ol>
+          <li>In Claude, open <strong>Settings &rarr; Connectors &rarr; Add custom connector</strong>.</li>
+          <li>Paste this URL and choose <strong>Add</strong>:
+            <div class="code-block"><pre><code>{{ server_url }}/mcp/mcp</code></pre></div>
+          </li>
+          <li>Choose <strong>Connect</strong>. A sign-in page from this site opens: enter your WhatsApp number and app password and approve <strong>read-only portfolio access</strong>.</li>
+        </ol>
+        <p>Claude never sees your app password or Angel One credentials; it receives a read-only token (<code>portfolio:read</code>) that refreshes itself. You can disconnect from Claude or below at any time.</p>
+        {% if logged_in %}
+        <h3>Connected apps</h3>
+        <div id="oauth-connections"><p class="muted">Loading&hellip;</p></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Personal access token -->
+    <div class="card guide-section" id="mcp-token">
+      <div class="step-header">
+        <span class="step-number">2</span>
+        <h2>Other clients: create a personal access token</h2>
+      </div>
+      <div class="step-body">
+        <p>For clients that send an HTTP header instead of signing in (Claude Code, Cursor, <code>mcp-remote</code>), the MCP server identifies you by a <strong>personal access token</strong> that you create here and paste into your client. You never type Angel One credentials into an AI chat.</p>
         <ul class="checklist">
           <li>Shown <strong>once</strong>. We store only a hash of it.</li>
           <li>Expires after 30 days by default (up to 90), and you can revoke it here at any time.</li>
@@ -43,7 +65,7 @@
     <!-- Claude Desktop -->
     <div class="card guide-section">
       <div class="step-header">
-        <span class="step-number">2</span>
+        <span class="step-number">3</span>
         <h2>Claude Desktop</h2>
       </div>
 
@@ -82,7 +104,7 @@
     <!-- Cursor -->
     <div class="card guide-section">
       <div class="step-header">
-        <span class="step-number">3</span>
+        <span class="step-number">4</span>
         <h2>Cursor IDE</h2>
       </div>
       <div class="step-body">
@@ -105,7 +127,7 @@
     <!-- Other clients -->
     <div class="card guide-section">
       <div class="step-header">
-        <span class="step-number">4</span>
+        <span class="step-number">5</span>
         <h2>Other MCP Clients</h2>
       </div>
       <div class="step-body">
@@ -115,7 +137,7 @@
 Header: Authorization: Bearer mfm_your_token_here</code></pre>
         </div>
         <div class="guide-note">
-          Clients that only support OAuth sign-in (for example ChatGPT connectors) cannot use these tokens. The old <code>/mcp/sse</code> endpoint has been removed.
+          Clients that sign in with OAuth instead of a header discover the sign-in flow automatically from <code>{{ server_url }}/.well-known/oauth-protected-resource/mcp/mcp</code>. The old <code>/mcp/sse</code> endpoint has been removed.
         </div>
       </div>
     </div>
@@ -123,7 +145,7 @@ Header: Authorization: Bearer mfm_your_token_here</code></pre>
     <!-- Run Locally -->
     <div class="card guide-section">
       <div class="step-header">
-        <span class="step-number">5</span>
+        <span class="step-number">6</span>
         <h2>Run Locally (Self-Hosted)</h2>
       </div>
       <div class="step-body">
@@ -141,7 +163,7 @@ python main.py</code></pre>
     <!-- Available Tools -->
     <div class="card guide-section">
       <div class="step-header">
-        <span class="step-number">6</span>
+        <span class="step-number">7</span>
         <h2>Available Tools (all read-only)</h2>
       </div>
       <div class="step-body">
@@ -175,6 +197,7 @@ python main.py</code></pre>
         <li>Your Angel One credentials are <strong>encrypted at rest</strong> on the server and are never sent to, or typed into, the AI model</li>
         <li>The MCP server is <strong>read-only</strong>: no tool can place, modify or cancel an order</li>
         <li>Each token sees <strong>only its owner's</strong> data; revoking it takes effect on the next request</li>
+        <li>Connector sign-in is <strong>OAuth 2.1 with PKCE</strong>; tokens are stored only as hashes and are bound to this MCP endpoint</li>
         <li>All traffic goes over <strong>HTTPS</strong> when deployed</li>
       </ul>
     </div>
@@ -240,6 +263,30 @@ python main.py</code></pre>
   });
 
   refresh();
+
+  var $conns = document.getElementById('oauth-connections');
+  async function refreshConnections() {
+    try {
+      var res = await fetch('/api/oauth/connections', { credentials: 'same-origin' });
+      var data = await res.json();
+      if (!res.ok) { $conns.innerHTML = '<p>' + esc(data.error || 'Could not load connections') + '</p>'; return; }
+      if (!data.connections.length) { $conns.innerHTML = '<p class="muted">No apps connected.</p>'; return; }
+      $conns.innerHTML = '<div class="table-wrap"><table><thead><tr><th>App</th><th>Access</th><th>Connected</th><th>Last used</th><th></th></tr></thead><tbody>' +
+        data.connections.map(function (c) {
+          return '<tr><td>' + esc(c.client_name) + '</td><td><code>' + esc(c.scopes.join(' ')) + '</code></td><td>' +
+            esc((c.created_at || '').slice(0, 10)) + '</td><td>' + esc((c.last_used_at || 'never').slice(0, 16)) +
+            '</td><td><button class="btn btn-sm btn-danger" data-grant="' + esc(c.id) + '">Disconnect</button></td></tr>';
+        }).join('') + '</tbody></table></div>';
+      $conns.querySelectorAll('button[data-grant]').forEach(function (b) {
+        b.addEventListener('click', async function () {
+          if (!confirm('Disconnect this app? It loses access immediately.')) return;
+          await fetch('/api/oauth/connections/' + encodeURIComponent(b.dataset.grant), { method: 'DELETE', credentials: 'same-origin' });
+          refreshConnections();
+        });
+      });
+    } catch (e) { $conns.innerHTML = '<p>Could not load connections.</p>'; }
+  }
+  refreshConnections();
 })();
 </script>
 {% endif %}

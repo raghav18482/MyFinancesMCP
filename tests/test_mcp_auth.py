@@ -247,8 +247,10 @@ def test_failed_verifications_are_rate_limited_per_ip():
 
     with mcp_harness() as h:
         cap = 5
-        original_cap = mcp_tokens._MAX_VERIFY_FAILURES_PER_IP
-        mcp_tokens._MAX_VERIFY_FAILURES_PER_IP = cap
+        original_cap = mcp_tokens._MAX_UNKNOWN_PER_IP
+        mcp_tokens._MAX_UNKNOWN_PER_IP = cap
+        real_token = _issue(h.ids["A"])
+        mcp_tokens.reset_rate_limits()  # forget that this process just issued it
         lookups = {"n": 0}
         real = mcp_tokens.get_session
 
@@ -258,18 +260,27 @@ def test_failed_verifications_are_rate_limited_per_ip():
 
         mcp_tokens.get_session = counting
         try:
+            # Malformed tokens cost no lookup and do not count.
+            for _ in range(cap * 2):
+                assert _rpc(h.http, "initialize", _INIT, "mfm_short").status_code == 401
+            assert lookups["n"] == 0
+            # A real token, seen once, is remembered.
+            assert _rpc(h.http, "initialize", _INIT, real_token).status_code == 200
+            n_after_real = lookups["n"]
             for _ in range(cap):
                 guess = "mfm_" + secrets.token_urlsafe(32)
                 assert _rpc(h.http, "initialize", _INIT, guess).status_code == 401
-            assert lookups["n"] == cap
-            # Over the cap: refused without touching the database, even for a real token.
+            assert lookups["n"] == n_after_real + cap
+            # Over the cap: an unknown token is refused without touching the database...
             good = "mfm_" + secrets.token_urlsafe(32)
             assert _rpc(h.http, "initialize", _INIT, good).status_code == 401
-            assert lookups["n"] == cap, "throttled verification still queried the database"
+            assert lookups["n"] == n_after_real + cap, "throttled verification still queried the database"
+            # ...but a real token from the same (shared) IP keeps working.
+            assert _rpc(h.http, "initialize", _INIT, real_token).status_code == 200
         finally:
             mcp_tokens.get_session = real
-            mcp_tokens._MAX_VERIFY_FAILURES_PER_IP = original_cap
-    print("ok  past the per-IP failure cap, verification is refused without a DB lookup")
+            mcp_tokens._MAX_UNKNOWN_PER_IP = original_cap
+    print("ok  past the per-IP unknown-token cap, guesses are dropped without a DB lookup; real tokens still work")
 
 
 def _as_user(user_id):
@@ -277,7 +288,7 @@ def _as_user(user_id):
     from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
     from mcp.server.auth.provider import AccessToken
 
-    tok = AccessToken(token="redacted", client_id=f"user:{user_id}",
+    tok = AccessToken(token="redacted", client_id="pat:test", subject=f"user:{user_id}",
                       scopes=["portfolio:read"], expires_at=None)
     return auth_context_var.set(AuthenticatedUser(tok))
 
