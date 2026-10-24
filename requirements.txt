@@ -31,6 +31,10 @@ google-adk==2.10.0
 # March 2026 supply-chain incident. See agents/config.py.
 litellm==1.82.6
 openai==3.19.2
+# LangSmith tracing for ADK agents (agents/tracing.py). The [google-adk] extra
+# only adds wrapt, which is pinned below with it.
+langsmith==0.14.12
+wrapt==2.5.1
 
 # ── Market data, research and news ─────────────────────────────────────────
 yfinance==1.7.0

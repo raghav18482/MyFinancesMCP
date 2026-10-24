@@ -12,6 +12,7 @@ from google.genai import types as genai_types
 
 from agents import readonly_guard
 from agents.config import adk_agent_temperature, adk_litellm_model, openrouter_api_key
+from agents.tracing import configure_tracing
 
 
 def build_openrouter_lite_llm(
@@ -48,6 +49,7 @@ def build_llm_agent(
     allowlist for ``name`` (checked here, before anything is built), and each
     call is checked again at execution time by the attached callback.
     """
+    configure_tracing()
     tools = list(tools)
     readonly_guard.validate_tools(name, tools)
     temp = temperature if temperature is not None else adk_agent_temperature()
