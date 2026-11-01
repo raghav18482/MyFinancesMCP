@@ -241,7 +241,7 @@ async def generate_daily_briefing(
             "Call sessions.create_session(...) first."
         )
 
-    records = _holdings_records(client)
+    records = await asyncio.to_thread(_holdings_records, client)  # a blocking broker call
     if not records:
         logger.info("briefing: no holdings for session %s", session_id[:8])
         return "Daily portfolio brief — no holdings found. Not financial advice."

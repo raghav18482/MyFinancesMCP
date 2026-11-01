@@ -15,14 +15,23 @@ from __future__ import annotations
 
 import logging
 
+from functools import partial
+
+import anyio
 from fastapi import Request
 
 from adminApi import service as admin_service
 from db.passwords import MIN_PASSWORD_CHARS
 from services import login_throttle
 from session_manager import sessions
-from web import country_codes
-from web.dependencies import bind_user, end_web_session, start_session, trusted_ip
+from web import broker_sessions, country_codes
+from web.dependencies import (
+    bind_user,
+    end_web_session,
+    session_id,
+    sign_out_everywhere,
+    trusted_ip,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +62,24 @@ class AuthFlowError(Exception):
         self.retry_after_sec = retry_after_sec
 
 
+async def _broker_login(request: Request, key: str, creds):
+    """Log in to Angel One off the event loop and point the cookie at the session.
+
+    Concurrent logins under ``key`` share one broker login. Raises whatever the
+    login raises (``angel_client.AngelAuthError``).
+    """
+    runtime = broker_sessions.get_runtime()
+    result = await runtime.login(key, lambda: creds)
+    if result is None:  # pragma: no cover - the loader always returns creds
+        raise RuntimeError("no credentials to log in with")
+    sid, client = result
+    old_sid = session_id(request)
+    request.session["sid"] = sid
+    if old_sid and old_sid != sid:
+        sessions.mark_for_release(old_sid)
+    return sid, client
+
+
 def _normalized_number(country_code: str, whatsapp_number: str) -> str:
     try:
         return country_codes.normalize_whatsapp(country_code, whatsapp_number)
@@ -60,7 +87,7 @@ def _normalized_number(country_code: str, whatsapp_number: str) -> str:
         raise AuthFlowError(str(e), 400, field="whatsapp_number") from None
 
 
-def login(request: Request, country_code: str, whatsapp_number: str, app_password: str):
+async def login(request: Request, country_code: str, whatsapp_number: str, app_password: str):
     """Start a session from a WhatsApp number and app password.
 
     Returns the live broker client. Raises :class:`AuthFlowError` otherwise.
@@ -74,7 +101,10 @@ def login(request: Request, country_code: str, whatsapp_number: str, app_passwor
         raise AuthFlowError(str(e), 429, retry_after_sec=e.retry_after_sec) from None
 
     try:
-        creds = admin_service.credentials_for_login(number, app_password)
+        # scrypt is deliberately slow (~100 ms); keep it off the event loop too.
+        creds = await anyio.to_thread.run_sync(
+            partial(admin_service.credentials_for_login, number, app_password)
+        )
     except Exception as e:
         # Almost always a missing or rotated ENCRYPTION_KEY, which no amount of
         # retrying fixes, so say something a user can act on.
@@ -92,7 +122,7 @@ def login(request: Request, country_code: str, whatsapp_number: str, app_passwor
         )
 
     try:
-        _sid, client = start_session(request, creds)
+        _sid, client = await _broker_login(request, f"user:{creds.user_id}", creds)
     except Exception as e:
         logger.exception("Angel One login failed for stored credentials")
         raise AuthFlowError(
@@ -101,11 +131,12 @@ def login(request: Request, country_code: str, whatsapp_number: str, app_passwor
             502,
         ) from None
 
+    bind_user(request, creds.user_id)
     login_throttle.clear(number, ip)
     return client
 
 
-def enroll(
+async def enroll(
     request: Request,
     *,
     api_key: str,
@@ -157,10 +188,11 @@ def enroll(
 
     # Step 1: prove the broker credentials by actually logging in with them.
     try:
-        sid, _client = start_session(
+        sid, _client = await _broker_login(
             request,
+            enroll_key,
             admin_service.AngelCredentials(
-                user_id=0,  # replaced below once the row id is known
+                user_id=0,  # the row id is bound below once it exists
                 api_key=api_key,
                 client_id=client_id,
                 password=password,
@@ -228,8 +260,8 @@ def logout(request: Request) -> None:
     The cookie is signed but stateless, so clearing it here does nothing about
     a copy saved earlier. Bumping the user's ``session_version`` does: every
     cookie issued before now carries the old version and is refused from the
-    next request on — on this device and any other. The live broker session,
-    its ADK runners and its caches are released too.
+    next request on — on this device and any other. The broker sessions of
+    every device, with their ADK runners and caches, are released now too.
     """
     uid = request.session.get("uid")
     if uid:
@@ -239,4 +271,5 @@ def logout(request: Request) -> None:
             # Still end this device's session; say so loudly, since saved copies
             # of the cookie stay valid until the bump succeeds.
             logger.exception("Logout: could not bump session version for uid=%s", uid)
+        sign_out_everywhere(request, int(uid))
     end_web_session(request)

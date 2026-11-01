@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from web.dependencies import current_client, current_user
+from web.dependencies import broker_client, current_user
 
 router = APIRouter()
 
@@ -25,10 +25,10 @@ async def api_session_bootstrap(request: Request):
     Anonymous is a 200, not a 401: it is an answer, not a failure, and the
     client needs to tell it apart from a request that did fail.
 
-    Like every logged-in page, this goes through :func:`current_client`, so a
+    Like every logged-in page, this goes through :func:`broker_client`, so a
     cookie whose broker session lapsed is reconnected here rather than bounced.
     """
-    client = current_client(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"authenticated": False}, headers=_NO_STORE)
 

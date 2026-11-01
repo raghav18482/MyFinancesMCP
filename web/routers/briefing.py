@@ -17,7 +17,7 @@ from services.realtime_feed import feed_relay
 from session_manager import sessions
 
 from web.dependencies import (
-    current_client,
+    broker_client,
     current_user,
 )
 
@@ -79,7 +79,7 @@ def _schedule_to_dict(s: Schedule) -> dict:
 
 @router.get("/api/briefing/schedule")
 async def api_briefing_schedule_get(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -94,7 +94,7 @@ async def api_briefing_schedule_get(request: Request):
 
 @router.post("/api/briefing/schedule")
 async def api_briefing_schedule_save(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -140,7 +140,7 @@ async def api_briefing_schedule_save(request: Request):
 
 @router.delete("/api/briefing/schedule")
 async def api_briefing_schedule_delete(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -165,7 +165,10 @@ async def api_briefing_schedule_delete(request: Request):
 async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
     """Background task: full briefing pipeline without touching next_run."""
     import time as _time
+    from functools import partial as _partial
     from uuid import uuid4 as _uuid4
+
+    import anyio as _anyio
     from db import decrypt_value as _dec
     from services.schedular.daily_briefing import generate_daily_briefing as _brief
     from services.schedular.whatsapp import send as _wa
@@ -182,7 +185,10 @@ async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
             pw = _dec(user.angel_password_encrypted)
             totp = _dec(user.angel_totp_secret_encrypted)
 
-        sessions.create_session(sid, api_key, client_id, pw, totp)
+        # Off the event loop: the login blocks for seconds.
+        await _anyio.to_thread.run_sync(
+            _partial(sessions.create_session, sid, api_key, client_id, pw, totp)
+        )
         message = await _brief(sid)
         await _wa(phone, message)
         duration_ms = int((_time.perf_counter() - started) * 1000)
@@ -215,7 +221,7 @@ async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
 
 @router.post("/api/briefing/send-now")
 async def api_briefing_send_now(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -228,7 +234,7 @@ async def api_briefing_send_now(request: Request):
 
 @router.get("/api/briefing/logs")
 async def api_briefing_logs(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)

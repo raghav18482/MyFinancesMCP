@@ -12,7 +12,7 @@ from services.portfolio_service import build_portfolio_data
 
 
 from web.dependencies import (
-    require_login,
+    broker_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ router = APIRouter()
 
 @router.post("/api/ai/insights")
 async def ai_insights(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -54,7 +54,7 @@ async def ai_insights(request: Request):
 
 @router.post("/api/ai/ask")
 async def ai_ask(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

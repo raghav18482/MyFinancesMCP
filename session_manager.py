@@ -23,6 +23,11 @@ class SessionManager:
 
     Everything is per process. With several workers each keeps its own sessions
     (so one user can hold one broker login per worker) and its own locks.
+
+    Thread-safe: logins run in worker threads (see ``web.broker_sessions``).
+    Per-session resources that are *not* thread-safe (ADK runners, feeds,
+    caches) are released by the caller on the event loop, from the ids that
+    :meth:`cleanup_expired` returns.
     """
 
     def __init__(self):
@@ -30,6 +35,9 @@ class SessionManager:
         self._created_at: dict[str, float] = {}
         self._lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}
+        # Sessions gone without their resources released yet: expired on
+        # access, or replaced by a rebuild. Drained by cleanup_expired().
+        self._pending_release: set[str] = set()
 
     def create_session(
         self,
@@ -85,6 +93,8 @@ class SessionManager:
             created = self._created_at.get(session_id)
             if created and (time.time() - created) > SESSION_TTL_SECONDS:
                 self._remove_unlocked(session_id)
+                # Its runners, feed and caches still exist; release them later.
+                self._pending_release.add(session_id)
                 return None
             client = self._sessions.get(session_id)
         if client:
@@ -101,11 +111,19 @@ class SessionManager:
         self._key_locks.pop(session_id, None)
         logger.info("Session removed: %s", session_id[:8])
 
-    def cleanup_expired(self) -> list[str]:
-        """Drop expired sessions and return the ids removed.
+    def mark_for_release(self, session_id: str) -> None:
+        """Queue a session id whose resources must be released (e.g. after a rebuild)."""
+        if session_id:
+            with self._lock:
+                self._pending_release.add(session_id)
 
-        Callers use the return value to release per-session resources such as
-        the market data feed in ``services.realtime_feed``.
+    def cleanup_expired(self) -> list[str]:
+        """Drop expired sessions; return every id whose resources need releasing.
+
+        That is the sessions expired now plus those queued since the last call
+        (expired on access, or marked by :meth:`mark_for_release`). Callers
+        release per-session resources such as the market data feed in
+        ``services.realtime_feed`` for each id.
         """
         now = time.time()
         with self._lock:
@@ -115,9 +133,28 @@ class SessionManager:
             ]
             for sid in expired:
                 self._remove_unlocked(sid)
-        if expired:
-            logger.info("Cleaned up %d expired sessions", len(expired))
-        return expired
+            released = set(expired) | self._pending_release
+            self._pending_release.clear()
+        if released:
+            logger.info("Cleaned up %d expired or replaced sessions", len(released))
+        return sorted(released)
+
+    def remove_web_sessions_for(self, client_id: str) -> list[str]:
+        """Remove every web session for this broker account; return their ids.
+
+        MCP (``mcp-user-``) and scheduler sessions are left alone: they are
+        authorized separately. Used on logout (all devices) and account
+        deletion. The caller releases the returned ids' resources.
+        """
+        prefixes = ("mcp-user-", "sched-", "manual-")
+        with self._lock:
+            sids = [
+                sid for sid, client in self._sessions.items()
+                if getattr(client, "client_id", None) == client_id and not sid.startswith(prefixes)
+            ]
+            for sid in sids:
+                self._remove_unlocked(sid)
+        return sids
 
     @property
     def active_count(self) -> int:

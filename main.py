@@ -54,16 +54,36 @@ from services.trade_proposals import proposal_store  # noqa: E402
 from services.realtime_feed import feed_relay  # noqa: E402
 
 
+CLEANUP_INTERVAL_SEC = 120
+#: The slower housekeeping runs every this many cleanup ticks (10 minutes).
+SLOW_TICKS = 5
+
+
 async def _cleanup_loop():
-    """Periodically remove expired sessions, their per-session state, and stale proposals."""
+    """Release expired or replaced broker sessions every two minutes; slower
+    housekeeping (logging check, stale proposals, purges) every ten.
+
+    Session resources (ADK runners, feeds, caches) are not thread-safe, so they
+    are released here, on the event loop.
+    """
+    from web import broker_sessions
+
+    tick = 0
     while True:
-        await asyncio.sleep(600)
+        await asyncio.sleep(CLEANUP_INTERVAL_SEC)
+        tick += 1
+        for sid in sessions.cleanup_expired():
+            release_session_resources(sid)
+        try:
+            broker_sessions.get_runtime().purge_memo()
+        except Exception:
+            logger.exception("Broker memo purge failed; will retry")
+        if tick % SLOW_TICKS:
+            continue
         try:
             verify_logging()
         except Exception:
             logger.exception("Logging verification failed; will retry")
-        for sid in sessions.cleanup_expired():
-            release_session_resources(sid)
         proposal_store.cleanup_expired()
         try:
             from services.oauth_provider import purge_expired
@@ -133,6 +153,10 @@ async def _lifespan(_app: Starlette):
 
     from db import engine as db_engine
     from services.instance_registry import InstanceMonitor
+    from web import broker_sessions
+
+    # Bound to this loop; logins run in its worker threads (web/broker_sessions.py).
+    runtime = broker_sessions.get_runtime()
 
     monitor = InstanceMonitor(db_engine)
     logger.info("instance %s starting", monitor.instance_id)
@@ -144,6 +168,7 @@ async def _lifespan(_app: Starlette):
         async with mcp.session_manager.run():
             yield
     finally:
+        await runtime.stop()
         heartbeat.cancel()
         try:
             await asyncio.to_thread(monitor.stop)

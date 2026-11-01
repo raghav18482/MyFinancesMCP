@@ -27,7 +27,7 @@ from services.market_data import (
 
 
 from web.dependencies import (
-    require_login,
+    broker_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ async def api_research_fundamental(
     symbol: str = Query(...),
 ):
     """Fetch fundamental analysis for a single stock."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -108,7 +108,7 @@ async def api_research_fundamental_summary(request: Request):
     with the deployment's own ``OPENROUTER_API_KEY``; callers supply no key and
     cannot choose the model.
     """
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -164,7 +164,7 @@ async def api_research_technical(
     days: int = Query(365),
 ):
     """Fetch technical indicators for a single stock using Angel One candle data."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -214,7 +214,7 @@ async def api_research_peers(request: Request, symbol: str = Query(...)):
     bands: that says whether a P/E of 28 is high, this says whether it is high
     *for this industry*.
     """
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -229,7 +229,7 @@ async def api_research_peers(request: Request, symbol: str = Query(...)):
 @router.get("/api/research/estimates")
 async def api_research_estimates(request: Request, symbol: str = Query(...)):
     """Consensus estimates, revision momentum, surprise history and next result date."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -253,7 +253,7 @@ async def api_research_ownership(
     omitted: no free source supplies it for NSE tickers, and an absent section
     reads as "nothing to report" when it should read as "not known".
     """
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

@@ -253,6 +253,31 @@ def test_smartapi_and_logzero_are_imported_in_one_place():
     assert not offenders, offenders
 
 
+
+_SESSION_READERS = {"current_user", "premium_user", "template_context", "current_user_id"}
+
+
+def test_async_routes_resolve_the_session_off_the_event_loop():
+    """Every async handler awaits broker_client() before reading the session.
+
+    broker_client runs any Angel One login in a worker thread. The sync helpers
+    (current_user, template_context, ...) only read what it cached; called
+    without it, a session needing a rebuild reads as signed out. And nothing
+    async may call the old helpers that resolve the client themselves.
+    """
+    offenders = []
+    for path in sorted(ROUTERS_DIR.glob("*.py")):
+        for fn in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            called = {n.func.id for n in ast.walk(fn)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            if called & {"current_client", "require_login"}:
+                offenders.append(f"{path.name}:{fn.name} calls a blocking resolver")
+            if called & _SESSION_READERS and "broker_client" not in called:
+                offenders.append(f"{path.name}:{fn.name} reads the session without broker_client")
+    assert not offenders, offenders
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

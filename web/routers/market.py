@@ -18,7 +18,7 @@ from services.market_data import (
 
 
 from web.dependencies import (
-    require_login,
+    broker_client,
     session_id,
 )
 
@@ -80,7 +80,7 @@ async def api_market_stream(
     URL. Ticks come from the Angel WebSocket feed where available and from
     REST polling only for tokens the feed is not delivering.
     """
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

@@ -13,10 +13,10 @@ from services.portfolio_service import get_portfolio_cached
 
 
 from web.dependencies import (
+    broker_client,
     ADK_TRADING_CHAT_SESSION_KEY,
     ensure_adk_chat_session_id,
     current_user,
-    require_login,
     session_id,
     template_context,
 )
@@ -31,7 +31,7 @@ router = APIRouter()
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
 
@@ -104,7 +104,7 @@ async def dashboard(request: Request):
 
 @router.get("/positions", response_class=HTMLResponse)
 async def positions_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
 
@@ -123,7 +123,7 @@ async def positions_page(request: Request):
 
 @router.get("/orders", response_class=HTMLResponse)
 async def orders_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
 
@@ -148,7 +148,7 @@ async def orders_page(request: Request):
 
 @router.get("/analytics", response_class=HTMLResponse)
 async def analytics_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(request, "analytics.html", template_context(request, "analytics"))
@@ -157,7 +157,7 @@ async def analytics_page(request: Request):
 
 @router.get("/research", response_class=HTMLResponse)
 async def research_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     ctx = template_context(request, "research")
@@ -171,7 +171,7 @@ async def research_page(request: Request):
 @router.get("/learn", response_class=HTMLResponse)
 async def learn_page(request: Request):
     """Glossary of every fundamental metric, rendered from data/metric_glossary.json."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(request, "learn.html", template_context(request, "learn"))
@@ -180,7 +180,7 @@ async def learn_page(request: Request):
 
 @router.get("/sectors", response_class=HTMLResponse)
 async def sectors_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(request, "sectors.html", template_context(request, "sectors"))
@@ -189,7 +189,7 @@ async def sectors_page(request: Request):
 
 @router.get("/news", response_class=HTMLResponse)
 async def news_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(request, "news.html", template_context(request, "news"))
@@ -198,7 +198,7 @@ async def news_page(request: Request):
 
 @router.get("/agent", response_class=HTMLResponse)
 async def agent_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     ensure_adk_chat_session_id(request)
@@ -208,7 +208,7 @@ async def agent_page(request: Request):
 
 @router.get("/trading", response_class=HTMLResponse)
 async def trading_page(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return RedirectResponse("/login", status_code=302)
     sid = session_id(request)

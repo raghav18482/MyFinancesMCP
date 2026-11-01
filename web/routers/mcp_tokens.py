@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from db.passwords import verify_password
 from services import login_throttle, mcp_tokens
-from web.dependencies import client_ip, current_user, trusted_ip
+from web.dependencies import broker_client, client_ip, current_user, trusted_ip
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ _NO_STORE = {"Cache-Control": "no-store"}
 
 @router.get("/api/mcp/tokens")
 async def api_mcp_tokens_list(request: Request):
+    await broker_client(request)  # resolve the session off the event loop
     user = current_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
@@ -34,6 +35,7 @@ async def api_mcp_tokens_list(request: Request):
 @router.post("/api/mcp/tokens")
 async def api_mcp_tokens_create(request: Request):
     """Create a token. The raw value is in this response and nowhere else, ever."""
+    await broker_client(request)  # resolve the session off the event loop
     user = current_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
@@ -84,6 +86,7 @@ async def api_mcp_tokens_create(request: Request):
 
 @router.delete("/api/mcp/tokens/{token_id}")
 async def api_mcp_tokens_revoke(request: Request, token_id: int):
+    await broker_client(request)  # resolve the session off the event loop
     user = current_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)

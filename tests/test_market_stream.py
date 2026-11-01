@@ -38,7 +38,10 @@ class _FakeClient:
 
 
 def _authenticate_as(client):
-    market.require_login = lambda request: client
+    async def resolved(request):
+        return client
+
+    market.broker_client = resolved
     market.session_id = lambda request: "sess-test"
 
 
@@ -66,7 +69,10 @@ def _parse(frame):
 
 def test_requires_authentication():
     async def run():
-        market.require_login = lambda request: None
+        async def signed_out(request):
+            return None
+
+        market.broker_client = signed_out
         resp = await market.api_market_stream(
             request=object(), symbols="RELIANCE", tokens="", exchange="NSE"
         )

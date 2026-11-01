@@ -64,7 +64,7 @@ async def api_auth_login(request: Request):
         return JSONResponse(_INVALID_BODY, status_code=400)
 
     try:
-        client = auth_flow.login(
+        client = await auth_flow.login(
             request,
             _text(body, "country_code"),
             _text(body, "whatsapp_number"),
@@ -83,7 +83,7 @@ async def api_auth_enroll(request: Request):
         return JSONResponse(_INVALID_BODY, status_code=400)
 
     try:
-        view = auth_flow.enroll(
+        view = await auth_flow.enroll(
             request,
             api_key=_text(body, "api_key"),
             client_id=_text(body, "client_id"),

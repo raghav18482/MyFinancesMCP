@@ -32,6 +32,7 @@ os.chdir(_project_dir)
 sys.path.insert(0, _project_dir)
 
 import contextvars
+import functools
 import json
 import logging
 import re
@@ -55,7 +56,7 @@ from services.broker_service import (
 )
 from services.readonly_broker import ReadOnlyBroker
 from session_manager import sessions
-from web import security_config
+from web import broker_sessions, security_config
 from services.logging_config import configure_logging
 from web.client_ip import abuse_client_ip, scope_headers, scope_peer
 
@@ -510,8 +511,17 @@ def _read_tool(title: str):
     Every tool here only reads, so each one says so (``readOnlyHint``); clients
     such as claude.ai use these hints to decide what needs confirmation.
     ``_assert_tool_surface`` refuses to start if any tool lacks them.
+
+    The tools are plain functions making blocking broker calls (and, on first
+    use, an Angel One login). FastMCP would call them directly on the event
+    loop, stalling every other request, so each is registered behind an async
+    wrapper that runs it in a worker thread, bounded by the MCP limiter
+    (``web.broker_sessions``). ``functools.wraps`` keeps the signature, type
+    hints and docstring FastMCP builds the tool schema from, and anyio copies
+    the context into the thread, so ``get_access_token()`` still sees the
+    caller's verified token.
     """
-    return mcp.tool(
+    register = mcp.tool(
         title=title,
         annotations=ToolAnnotations(
             title=title,
@@ -521,6 +531,17 @@ def _read_tool(title: str):
             openWorldHint=False,
         ),
     )
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        async def in_worker_thread(*args, **kwargs):
+            return await anyio.to_thread.run_sync(
+                functools.partial(fn, *args, **kwargs), limiter=broker_sessions.mcp_limiter()
+            )
+
+        return register(in_worker_thread)
+
+    return decorate
 
 
 @_read_tool('Get account profile')

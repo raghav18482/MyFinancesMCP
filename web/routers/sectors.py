@@ -16,7 +16,7 @@ from services.portfolio_service import build_portfolio_data
 
 
 from web.dependencies import (
-    require_login,
+    broker_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ router = APIRouter()
 @router.get("/api/sectors/overview")
 async def api_sectors_overview(request: Request):
     """Get sector-level analysis for the user's portfolio."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -49,7 +49,7 @@ async def api_sectors_overview(request: Request):
 @router.get("/api/sectors/breadth")
 async def api_sectors_breadth(request: Request):
     """Get market breadth indicators."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

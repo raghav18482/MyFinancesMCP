@@ -6,9 +6,8 @@ live here so no router has to reach into another router for them.
 from __future__ import annotations
 
 import logging
-import threading
-import time
 import uuid
+from functools import partial
 
 from fastapi import Request
 from sqlmodel import select
@@ -33,30 +32,6 @@ def session_id(request: Request) -> str | None:
 
 
 
-def start_session(request: Request, creds) -> tuple[str, object]:
-    """Build a broker session from ``creds`` and attach it to the cookie.
-
-    Writes ``sid`` (points at the in-memory ``AngelOneClient``), and — when the
-    ``users`` row is known — ``uid`` and ``uv``, the row's current
-    ``session_version``. :func:`current_client` honours the cookie only while
-    ``uv`` still matches, which is what lets logout revoke saved copies of this
-    stateless cookie. Enrollment calls this before the row exists and sets
-    ``uid``/``uv`` itself afterwards (:func:`bind_user`).
-
-    Raises whatever ``AngelOneClient`` raises if the broker rejects the
-    credentials, so callers can show that to the user.
-    """
-    sid = uuid.uuid4().hex
-    client = sessions.create_session(
-        sid, creds.api_key, creds.client_id, creds.password, creds.totp_secret
-    )
-    request.session["sid"] = sid
-    if getattr(creds, "user_id", 0):
-        bind_user(request, creds.user_id)
-    return sid, client
-
-
-
 def bind_user(request: Request, user_id: int) -> None:
     """Record ``user_id`` and its current session version in the cookie."""
     state = admin_service.session_state(int(user_id))
@@ -74,15 +49,6 @@ def end_web_session(request: Request) -> None:
         release_session_resources(sid)
         sessions.remove_session(sid)
     request.session.clear()
-
-
-
-# Per-process memo of the session a user's cookie was just rebuilt into, so
-# several requests arriving together with the same expired cookie share one
-# broker login instead of each starting their own.
-_REBUILD_REUSE_SEC = 30.0
-_recent_rebuilds: dict[int, tuple[str, float]] = {}
-_recent_rebuilds_lock = threading.Lock()
 
 
 
@@ -108,29 +74,23 @@ def _verified_state(request: Request):
     return state
 
 
+_NEEDS_REBUILD = object()
+_CACHE = "_broker_client"
 
-def current_client(request: Request):
-    """The live broker client for this request, rebuilding it if it has expired.
 
-    Every call re-checks the cookie against the database (:func:`_verified_state`):
-    a logged-out (version bumped), deactivated or deleted user gets ``None``
-    here even if their in-memory broker session is still alive, and that
-    session is torn down. The live client must also belong to the user the
-    cookie names.
+def _resolve_without_login(request: Request):
+    """``(client | None | _NEEDS_REBUILD, state)``. Never logs in.
 
-    If the cookie is valid but the 8-hour broker session lapsed (or the server
-    restarted), the session is rebuilt from the stored credentials, once per
-    user however many requests arrive together. The security trade is explicit:
-    within the cookie's lifetime, the cookie alone is enough to read the
-    account. ``SESSION_COOKIE_MAX_AGE_SEC`` in :mod:`web.app` bounds that, and
-    logging out revokes every copy of the cookie.
+    Re-checks the cookie against the database on every call: a logged-out
+    (version bumped), deactivated or deleted user gets ``None`` even if their
+    in-memory broker session is still alive, and that session is torn down.
+    The live client must also belong to the user the cookie names.
     """
     state = _verified_state(request)
     if state is None:
         if request.session.get("sid") or request.session.get("uid"):
             end_web_session(request)
-        return None
-
+        return None, None
     sid = session_id(request)
     if sid:
         client = sessions.get_client(sid)
@@ -139,44 +99,114 @@ def current_client(request: Request):
                 logger.error("Session %s does not belong to user id=%s; ending it",
                              sid[:8], state.user_id)
                 end_web_session(request)
-                return None
-            return client
+                return None, state
+            return client, state
+    return _NEEDS_REBUILD, state
 
-    with sessions.key_lock(f"web-rebuild-{state.user_id}"):
-        with _recent_rebuilds_lock:
-            recent = _recent_rebuilds.get(state.user_id)
-        if recent and time.time() - recent[1] < _REBUILD_REUSE_SEC:
-            client = sessions.get_client(recent[0])
-            if client is not None and client.client_id == state.angel_client_id:
-                request.session["sid"] = recent[0]
-                return client
 
+async def broker_client(request: Request):
+    """The live broker client for this request, rebuilding it if it has expired.
+
+    Every async handler that needs the signed-in user calls this first; the
+    result is cached on ``request.state`` (one dict per request), so
+    :func:`current_user`, :func:`template_context` and the like reuse it.
+
+    If the cookie is valid but the 8-hour broker session lapsed (or the server
+    restarted), the session is rebuilt from the stored credentials in a worker
+    thread, once per user however many requests arrive together
+    (``web.broker_sessions``). The security trade is explicit: within the
+    cookie's lifetime, the cookie alone is enough to read the account.
+    ``SESSION_COOKIE_MAX_AGE_SEC`` in :mod:`web.app` bounds that, and logging out
+    revokes every copy of the cookie.
+    """
+    if hasattr(request.state, _CACHE):
+        return getattr(request.state, _CACHE)
+    client = await _resolve(request)
+    setattr(request.state, _CACHE, client)
+    return client
+
+
+async def _resolve(request: Request):
+    from web import broker_sessions
+
+    found, state = _resolve_without_login(request)
+    if found is not _NEEDS_REBUILD:
+        return found
+    try:
+        runtime = broker_sessions.get_runtime()
+    except broker_sessions.BrokerRuntimeUnavailable:
+        logger.error("Session rebuild: broker runtime unavailable for uid=%s", state.user_id)
+        return None
+
+    old_sid = session_id(request)
+    recalled = runtime.recall(state.user_id, state.angel_client_id, state.session_version)
+    if recalled is None:
         try:
-            creds = admin_service.credentials_for_user(state.user_id)
-        except Exception:
-            logger.exception("Session rebuild: could not read credentials for uid=%s", state.user_id)
-            creds = None
-
-        if creds is None:
-            end_web_session(request)
-            return None
-
-        try:
-            new_sid, client = start_session(request, creds)
+            result = await runtime.login(
+                f"user:{state.user_id}",
+                partial(admin_service.credentials_for_user, state.user_id),
+            )
         except Exception:
             # Angel One is down or the stored credentials have gone stale. Ending
-            # the session matters more than it looks: without it, every page load
-            # would retry a login that sleeps through 5 attempts before giving up.
+            # the session matters: without it every page load would retry.
             logger.exception("Session rebuild: Angel One login failed for uid=%s", state.user_id)
             end_web_session(request)
             return None
+        if result is None:  # no stored credentials
+            end_web_session(request)
+            return None
+        new_sid, client = result
+        runtime.remember(state.user_id, new_sid, client.client_id, state.session_version)
+        logger.info("Session rebuilt from cookie for user id=%s", state.user_id)
+    else:
+        new_sid, client = recalled
 
-        with _recent_rebuilds_lock:
-            _recent_rebuilds[state.user_id] = (new_sid, time.time())
-
-    logger.info("Session rebuilt from cookie for user id=%s", state.user_id)
+    request.session["sid"] = new_sid
+    if old_sid and old_sid != new_sid:
+        # The old session is gone; its runners, feed and caches are released
+        # by the next cleanup sweep, on the event loop.
+        sessions.mark_for_release(old_sid)
     return client
 
+
+def current_client(request: Request):
+    """The broker client this request resolved with :func:`broker_client`.
+
+    Never logs in and never blocks: an async handler must ``await
+    broker_client(request)`` first (``tests/test_app_wiring.py`` checks that).
+    Called without it, a session that needs rebuilding reads as signed out.
+    """
+    if hasattr(request.state, _CACHE):
+        return getattr(request.state, _CACHE)
+    found, _state = _resolve_without_login(request)
+    if found is _NEEDS_REBUILD:
+        logger.warning("current_client called before broker_client; not rebuilding")
+        return None
+    return found
+
+
+def sign_out_everywhere(request: Request, user_id: int) -> None:
+    """Drop every web broker session this user's account holds, on all devices.
+
+    Used by logout and account deletion. The session-version bump (done by the
+    caller) is what makes old cookies invalid; this releases the memory and
+    per-session resources now instead of at expiry. MCP sessions are separate.
+    """
+    from web import broker_sessions
+    from web.session_cleanup import release_session_resources
+
+    try:
+        state = admin_service.session_state(int(user_id))
+    except Exception:
+        logger.exception("Sign-out: could not read state for uid=%s", user_id)
+        state = None
+    if state is not None:
+        for sid in sessions.remove_web_sessions_for(state.angel_client_id):
+            release_session_resources(sid)
+    try:
+        broker_sessions.get_runtime().forget_user(int(user_id))
+    except broker_sessions.BrokerRuntimeUnavailable:
+        pass
 
 
 def current_user(request: Request) -> User | None:
@@ -264,11 +294,7 @@ def trusted_ip(request: Request) -> str | None:
 
 
 def require_login(request: Request):
-    """The broker client for a logged-in request, or ``None``.
-
-    Goes through :func:`current_client`, so a user whose 8-hour broker session
-    lapsed mid-visit is reconnected instead of being bounced to the login form.
-    """
+    """Deprecated alias of :func:`current_client`; async handlers await :func:`broker_client`."""
     return current_client(request)
 
 

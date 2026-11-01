@@ -12,7 +12,7 @@ from adminApi import service as admin_service
 
 from web import country_codes
 from web.dependencies import (
-    current_client,
+    broker_client,
     current_user,
 )
 
@@ -27,7 +27,7 @@ router = APIRouter()
 
 @router.get("/api/premium/status")
 async def api_premium_status(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -53,7 +53,7 @@ async def api_premium_register(request: Request):
     with ``Host: attacker.tld`` made the server send the user's plaintext PIN,
     TOTP secret and ``ADMIN_API_KEY`` to that host. Keep this call in-process.
     """
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

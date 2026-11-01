@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import logging
 import time
+from functools import partial
 from uuid import uuid4
+
+import anyio
 
 from db import decrypt_value, get_session
 from db.models import Log, User
@@ -82,7 +85,11 @@ async def run_one(claim: ClaimedSchedule) -> None:
             password = decrypt_value(user.angel_password_encrypted)
             totp_secret = decrypt_value(user.angel_totp_secret_encrypted)
 
-        sessions.create_session(sid, api_key, client_id, password, totp_secret)
+        # The Angel One login blocks for seconds; the scheduler shares the
+        # web server's event loop, so it runs in a worker thread.
+        await anyio.to_thread.run_sync(
+            partial(sessions.create_session, sid, api_key, client_id, password, totp_secret)
+        )
         session_created = True
 
         message = await generate_daily_briefing(sid)
