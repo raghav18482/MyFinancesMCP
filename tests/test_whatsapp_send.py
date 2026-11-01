@@ -33,7 +33,7 @@ def _run(responses, *, deadline=5.0, delay=0.0):
     wa._transport = httpx.MockTransport(handler)
     wa._SEND_DEADLINE_SEC, wa._RETRY_DELAY_SEC = deadline, delay
     try:
-        asyncio.run(wa.send("8107037133", "hi"))
+        asyncio.run(wa.send("0000000000", "hi"))
         return None, calls
     except RuntimeError as e:
         return e, calls
@@ -63,7 +63,7 @@ def test_gives_up_at_deadline():
 def test_payload_shape():
     err, calls = _run([200])
     assert err is None
-    assert calls[0].read() == b'{"phone":"918107037133","messages":["hi"]}'
+    assert calls[0].read() == b'{"phone":"910000000000","messages":["hi"]}'
 
 
 if __name__ == "__main__":

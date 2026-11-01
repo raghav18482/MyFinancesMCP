@@ -12,7 +12,9 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 from starlette.middleware.sessions import SessionMiddleware
@@ -138,6 +140,37 @@ def _session_cookie_max_age() -> int:
     return value
 
 
+#: Messages for request-validation errors. The validator's own message, the
+#: submitted ``input`` and ``ctx`` are never returned: FastAPI's default echoes
+#: them, and for a missing field ``input`` is the whole body, PIN and TOTP
+#: secret included. A custom validator could also put the value in its message.
+_VALIDATION_MESSAGES = {
+    "missing": "Field required.",
+    "string_type": "Must be a string.",
+    "int_type": "Must be an integer.",
+    "int_parsing": "Must be an integer.",
+    "float_type": "Must be a number.",
+    "float_parsing": "Must be a number.",
+    "bool_type": "Must be true or false.",
+    "bool_parsing": "Must be true or false.",
+    "json_invalid": "Invalid JSON.",
+    "model_attributes_type": "Invalid object.",
+    "dict_type": "Invalid object.",
+    "list_type": "Must be a list.",
+}
+
+
+async def _sanitized_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    from services.logging_config import redact
+
+    detail = []
+    for err in exc.errors():
+        kind = str(err.get("type") or "value_error")
+        loc = [part if isinstance(part, int) else redact(str(part)) for part in err.get("loc") or ()]
+        detail.append({"loc": loc, "type": kind, "msg": _VALIDATION_MESSAGES.get(kind, "Invalid value.")})
+    return JSONResponse({"detail": detail}, status_code=422)
+
+
 def create_app() -> FastAPI:
     """Construct the dashboard application.
 
@@ -154,6 +187,7 @@ def create_app() -> FastAPI:
         description="Internal admin and portfolio APIs. Docs are disabled in production.",
         version="1.0.0",
     )
+    app.add_exception_handler(RequestValidationError, _sanitized_validation_error)
 
     app.add_middleware(
         SessionMiddleware,
@@ -167,7 +201,10 @@ def create_app() -> FastAPI:
     app.mount("/static/data", RevalidatingStaticFiles(directory=os.path.join(_dir, "data")), name="data")
     app.mount("/static", RevalidatingStaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
 
-    app.include_router(admin_router)
+    # Mounted only when enabled: in production, ADMIN_API_ENABLED=1 is required.
+    if security_config.admin_api_enabled():
+        app.include_router(admin_router)
+    security_config.log_admin_status()
     for router in all_routers:
         app.include_router(router)
 

@@ -3,12 +3,12 @@
 API contract:
     POST https://whatsapp-webhook-service-fczs.onrender.com/send
     Content-Type: application/json
-    {"phone": "918107037133", "messages": ["<text>"]}
+    {"phone": "910000000000", "messages": ["<text>"]}
 
 Phone normalisation:
     - Strip everything but digits.
     - If the resulting string is 10 digits, prepend "91".
-    - Result must be 12 digits (e.g. 918107037133).
+    - Result must be 12 digits (e.g. 910000000000).
 
 Retries:
     The webhook service runs on Render's free tier, which sleeps when idle. The
@@ -47,7 +47,7 @@ _DIGITS_RE = re.compile(r"\D+")
 def _normalise_phone(phone: str | None) -> str:
     """Return a 12-digit number (91XXXXXXXXXX).
 
-    Accepts any of: "8107037133", "+918107037133", "91 8107 037133", etc.
+    Accepts any of: "0000000000", "+910000000000", "91 0000 000000", etc.
     Raises ValueError when the result isn't exactly 12 digits.
     """
     digits = _DIGITS_RE.sub("", phone or "")

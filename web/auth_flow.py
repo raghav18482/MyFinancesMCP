@@ -22,9 +22,12 @@ from db.passwords import MIN_PASSWORD_CHARS
 from services import login_throttle
 from session_manager import sessions
 from web import country_codes
-from web.dependencies import bind_user, client_ip, end_web_session, start_session
+from web.dependencies import bind_user, end_web_session, start_session, trusted_ip
 
 logger = logging.getLogger(__name__)
+
+#: Enrollments (each a real Angel One login) allowed across all callers per window.
+ENROLL_GLOBAL_CAP = 30
 
 
 class AuthFlowError(Exception):
@@ -63,7 +66,7 @@ def login(request: Request, country_code: str, whatsapp_number: str, app_passwor
     Returns the live broker client. Raises :class:`AuthFlowError` otherwise.
     """
     number = _normalized_number(country_code, whatsapp_number)
-    ip = client_ip(request)
+    ip = trusted_ip(request)
 
     try:
         login_throttle.check(number, ip)
@@ -140,6 +143,18 @@ def enroll(
     client_id = client_id.strip()
     totp_secret = totp_secret.strip()
 
+    # Every enrollment makes a real Angel One login with whatever client id was
+    # typed, so without a limit this form would let anyone drive failed logins
+    # (and Angel's lockout) against someone else's account. Capped per client
+    # id, per verified IP when one is known, and across all callers.
+    enroll_key = f"enroll:{client_id.upper()}"
+    ip = trusted_ip(request)
+    try:
+        login_throttle.check(enroll_key, ip)
+        login_throttle.check_global("enroll", ENROLL_GLOBAL_CAP)
+    except login_throttle.TooManyAttempts as e:
+        raise AuthFlowError(str(e), 429, retry_after_sec=e.retry_after_sec) from None
+
     # Step 1: prove the broker credentials by actually logging in with them.
     try:
         sid, _client = start_session(
@@ -202,6 +217,7 @@ def enroll(
         raise AuthFlowError(str(e), 500) from None
 
     bind_user(request, view["id"])
+    login_throttle.clear(enroll_key, ip)
     logger.info("enrollment complete for user id=%s", view["id"])
     return view
 

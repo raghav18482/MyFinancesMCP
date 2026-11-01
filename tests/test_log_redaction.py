@@ -321,7 +321,7 @@ def test_angel_client_logs_its_own_sanitized_failure():
             text = output()
         finally:
             client.release_secrets()
-    assert "Angel One login attempt 1/5 failed for AB1234: errorcode=AB1050" in text, text
+    assert "Angel One login rejected for AB1234: errorcode=AB1050" in text, text
     _assert_clean(text, "angel_client failure log")
 
 

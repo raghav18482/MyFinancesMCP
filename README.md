@@ -346,7 +346,7 @@ curl -X POST http://localhost:8000/api/admin/users \
   -H "X-Admin-Key: $ADMIN_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "whatsapp_number": "918107037133",
+    "whatsapp_number": "910000000000",
     "angel_api_key": "",
     "angel_client_id": "",
     "angel_password": "",

@@ -26,34 +26,71 @@ _connect_args: dict = {"sslmode": "require"} if "sslmode=require" in _url_lower 
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=_connect_args)
 
 
-# Lightweight per-column migrations applied on every startup. Each entry is
-# idempotent (``ADD COLUMN IF NOT EXISTS``) so it is safe to run repeatedly
-# until Alembic is introduced.
-_COLUMN_MIGRATIONS: tuple[str, ...] = (
-    "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'pending'",
+# Lightweight per-column migrations applied on startup until Alembic is
+# introduced. ``create_all`` only creates missing *tables*; it never adds a
+# column to a table that already exists, so every new column on an existing
+# table must be listed here. Keep new columns nullable with no default, which
+# makes the ALTER a metadata-only change.
+#
+# (table, column, statement). The statement runs only when the column is
+# missing, so a normal startup takes no lock on these tables at all.
+_COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("schedules", "status",
+     "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'pending'"),
     # No default: NULL means "this user has not set an app password yet", which
     # the login path treats as "cannot log in, re-enroll to set one".
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS app_password_hash VARCHAR",
+    ("users", "app_password_hash",
+     "ALTER TABLE users ADD COLUMN IF NOT EXISTS app_password_hash VARCHAR"),
     # Logout bumps this; cookies issued with an older value stop working.
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
+    ("users", "session_version",
+     "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0"),
 )
 
+#: How long startup DDL may wait for a lock before giving up. An ALTER queued
+#: behind a long transaction would block every later query on that table.
+LOCK_TIMEOUT = "5s"
+STATEMENT_TIMEOUT = "30s"
 
-def init_db() -> None:
-    """Create all SQLModel tables and apply additive column migrations.
+
+def init_db(*, bind=None, lock_timeout: str = LOCK_TIMEOUT) -> None:
+    """Create missing tables, then add missing columns, in one transaction.
+
+    All or nothing: if any statement fails, including a lock wait longer than
+    ``lock_timeout``, nothing is applied and the error propagates. The caller
+    decides whether that stops startup (it does in production; see ``main``).
 
     Idempotent; replace with Alembic when schema evolves beyond simple adds.
     """
     from . import models  # noqa: F401  -- ensure models register with SQLModel.metadata
 
-    SQLModel.metadata.create_all(engine)
+    target = bind if bind is not None else engine
+    with target.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            conn.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+            conn.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'"))
+        SQLModel.metadata.create_all(conn)
+        if conn.dialect.name == "postgresql":
+            applied = _add_missing_columns(conn)
+            if applied:
+                logger.info("init_db: added columns %s", ", ".join(applied))
 
-    if engine.dialect.name == "postgresql":
-        with engine.begin() as conn:
-            for stmt in _COLUMN_MIGRATIONS:
-                conn.execute(text(stmt))
+    logger.info("init_db: tables ensured on %s", _safe_url(str(target.url)))
 
-    logger.info("init_db: tables ensured on %s", _safe_url(DATABASE_URL))
+
+def _add_missing_columns(conn) -> list[str]:
+    existing = {
+        (row.table_name, row.column_name)
+        for row in conn.execute(text(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema()"
+        ))
+    }
+    applied = []
+    for table, column, stmt in _COLUMN_MIGRATIONS:
+        if (table, column) not in existing:
+            conn.execute(text(stmt))
+            applied.append(f"{table}.{column}")
+    return applied
 
 
 def get_session() -> Session:

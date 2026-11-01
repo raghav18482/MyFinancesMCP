@@ -175,14 +175,32 @@ def consume_feedback_token(token: str) -> None:
     _used_nonces[nonce] = now
 
 
+#: The IP comes from a forgeable header, so a caller can mint new keys at will.
+_MAX_RATE_KEYS = 10_000
+
+
 def check_rate_limit(client_ip: str) -> None:
-    """Enforce a per-IP submission cap. Raises :class:`FeedbackError` (429)."""
+    """Enforce a per-IP submission cap. Raises :class:`FeedbackError` (429).
+
+    An abuse limit, keyed on the best-effort address; the map is bounded.
+    """
     now = time.time()
     hits = [t for t in _rate_hits.get(client_ip, []) if now - t < _RATE_LIMIT_WINDOW_SEC]
     if len(hits) >= _RATE_LIMIT_MAX:
         raise FeedbackError("Too many submissions. Please try again later.", 429)
     hits.append(now)
     _rate_hits[client_ip] = hits
+    if len(_rate_hits) > _MAX_RATE_KEYS:
+        _prune_rate_hits(now)
+
+
+def _prune_rate_hits(now: float) -> None:
+    for ip in [k for k, v in _rate_hits.items() if not v or now - v[-1] >= _RATE_LIMIT_WINDOW_SEC]:
+        del _rate_hits[ip]
+    # Still over: all keys are recent (a flood). Drop the oldest-inserted ones.
+    overflow = len(_rate_hits) - _MAX_RATE_KEYS
+    for ip in list(_rate_hits)[:max(0, overflow)]:
+        del _rate_hits[ip]
 
 
 def _static_reply(name: str | None) -> str:
@@ -274,3 +292,100 @@ async def generate_reply(feedback: str, name: str | None = None) -> str:
         logger.warning("[feedback] OPENROUTER_API_KEY missing, using static reply")
 
     return f"{body}\n\n{_CLOSING_LINE}"
+
+
+# ── Reply switch and storage ───────────────────────────────────────────────
+#
+# The WhatsApp reply sends an LLM-written message to whatever number a visitor
+# types, through a webhook that cannot yet be trusted, and is guarded only by
+# limits keyed on a forgeable IP. It is therefore off unless explicitly turned
+# on. While it is off, feedback is stored instead: the text, the form it came
+# from and the time, nothing that identifies the sender.
+
+_CHANNELS = ("react", "jinja", "api")
+DEFAULT_DAILY_CAP = 200
+
+
+def reply_enabled() -> bool:
+    """True only for ``FEEDBACK_WHATSAPP_REPLY=1``, in every environment."""
+    return os.environ.get("FEEDBACK_WHATSAPP_REPLY") == "1"
+
+
+def normalize_channel(raw) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in _CHANNELS else "api"
+
+
+def _daily_cap() -> int:
+    try:
+        return max(1, int(os.environ.get("FEEDBACK_DAILY_CAP", DEFAULT_DAILY_CAP)))
+    except ValueError:
+        return DEFAULT_DAILY_CAP
+
+
+def check_global_cap() -> None:
+    """Refuse once ``FEEDBACK_DAILY_CAP`` submissions arrived in the last 24 hours.
+
+    Raises :class:`FeedbackError` (429). A soft cap: concurrent requests can
+    each see the count just under it, so it may be exceeded by a few.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func
+    from sqlmodel import select
+
+    from db import get_session
+    from db.models import FeedbackSubmission, utcnow
+
+    since = utcnow() - timedelta(hours=24)
+    with get_session() as db:
+        count = db.exec(
+            select(func.count()).select_from(FeedbackSubmission)
+            .where(FeedbackSubmission.created_at > since)
+        ).one()
+    if count >= _daily_cap():
+        logger.warning("feedback daily cap reached (%d in 24h)", count)
+        raise FeedbackError("We're receiving a lot of feedback. Please try again tomorrow.", 429)
+
+
+def store_submission(feedback: str, channel: str) -> None:
+    from db import get_session
+    from db.models import FeedbackSubmission
+
+    with get_session() as db:
+        db.add(FeedbackSubmission(feedback=feedback, channel=normalize_channel(channel)))
+        db.commit()
+
+
+def purge_old_submissions() -> int:
+    """Delete submissions older than ``FEEDBACK_RETENTION_DAYS``. Off while unset."""
+    raw = (os.environ.get("FEEDBACK_RETENTION_DAYS") or "").strip()
+    if not raw:
+        return 0
+    try:
+        days = int(raw)
+    except ValueError:
+        logger.error("FEEDBACK_RETENTION_DAYS=%r is not a whole number; nothing purged", raw)
+        return 0
+    if days < 1:
+        logger.error("FEEDBACK_RETENTION_DAYS must be at least 1; nothing purged")
+        return 0
+
+    from datetime import timedelta
+
+    from sqlmodel import delete
+
+    from db import get_session
+    from db.models import FeedbackSubmission, utcnow
+
+    with get_session() as db:
+        result = db.exec(
+            delete(FeedbackSubmission).where(
+                FeedbackSubmission.created_at < utcnow() - timedelta(days=days)
+            )
+        )
+        db.commit()
+        removed = result.rowcount or 0
+    if removed:
+        logger.info("feedback retention: removed %d submission(s) older than %d days", removed, days)
+    return removed

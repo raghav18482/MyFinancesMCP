@@ -230,6 +230,7 @@ def harness(*, app_factory=None):
     FakeBroker.logins.clear()
     FakeBroker.login_delay = 0.0
     login_throttle._by_identifier.clear()
+    login_throttle._by_global.clear()
     login_throttle._by_ip.clear()
     mcp_tokens.reset_rate_limits()
     oauth_provider.reset_rate_limits()

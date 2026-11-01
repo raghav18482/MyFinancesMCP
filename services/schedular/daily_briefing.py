@@ -335,7 +335,7 @@ if __name__ == "__main__":
 
     # Optional: pass a phone number as the first CLI argument to also send via WhatsApp.
     # Usage:  python -m services.schedular.daily_briefing [phone]
-    # e.g.:   python -m services.schedular.daily_briefing 8107037133
+    # e.g.:   python -m services.schedular.daily_briefing 0000000000
     _phone: str | None = _sys.argv[1] if len(_sys.argv) > 1 else None
 
     async def _run() -> None:

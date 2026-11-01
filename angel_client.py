@@ -4,11 +4,33 @@ import uuid
 from typing import Optional
 
 import pyotp
+import requests
 
 from integrations.smartapi import new_smart_connect
 from services import secret_registry
 
 logger = logging.getLogger(__name__)
+
+#: Total login attempts. Only network errors are retried.
+LOGIN_ATTEMPTS = 3
+#: Waits between network-error retries.
+LOGIN_BACKOFF_SEC = (0.5, 1.0)
+#: Per-request timeout for SmartAPI calls (SmartConnect's own default is 7 s).
+LOGIN_TIMEOUT_SEC = 5
+
+
+class AngelAuthError(RuntimeError):
+    """An Angel One login that did not produce a session.
+
+    ``kind`` is ``"credentials"`` when Angel One answered and refused (wrong PIN,
+    TOTP or key), and ``"unavailable"`` when it could not be reached. A
+    ``RuntimeError`` so existing callers that catch that keep working.
+    """
+
+    def __init__(self, kind: str, message: str, *, errorcode: Optional[str] = None) -> None:
+        super().__init__(f"Angel One login failed ({kind}): {message}")
+        self.kind = kind
+        self.errorcode = errorcode
 
 
 class AngelOneClient:
@@ -29,7 +51,7 @@ class AngelOneClient:
         self._secret_owner = f"angel:{uuid.uuid4().hex}"
         secret_registry.register(self._secret_owner, api_key, password, totp_secret)
 
-        self._smart_api = new_smart_connect(api_key=self.api_key)
+        self._smart_api = new_smart_connect(api_key=self.api_key, timeout=LOGIN_TIMEOUT_SEC)
         self._session_data: Optional[dict] = None
         self._login_time: Optional[float] = None
         self._feed_token: Optional[str] = None
@@ -72,40 +94,59 @@ class AngelOneClient:
         self._authenticate()
 
     def _authenticate(self):
+        """Log in once; retry only when the request may never have reached Angel One.
+
+        A rejection (``status: false``, or an API error such as a bad PIN or
+        TOTP) is never retried: repeating a wrong PIN counts toward Angel One's
+        account lockout. Network failures are retried up to
+        ``LOGIN_ATTEMPTS - 1`` more times with a short backoff, which bounds a
+        failing login to roughly ``LOGIN_ATTEMPTS * LOGIN_TIMEOUT_SEC`` plus the
+        backoff.
+        """
         totp = pyotp.TOTP(self.totp_secret)
 
-        last_error = None
-        for attempt in range(5):
+        for attempt in range(1, LOGIN_ATTEMPTS + 1):
             try:
-                totp_code = totp.now()
                 data = self._smart_api.generateSession(
-                    self.client_id, self.password, totp_code
+                    self.client_id, self.password, totp.now()
                 )
-                if data.get("status"):
-                    self._session_data = data
-                    self._login_time = time.time()
-                    self._feed_token = (data.get("data") or {}).get("feedToken")
-                    self._register_tokens()
-                    logger.info("Angel One session established for %s", self.client_id)
-                    return
-                last_error = data.get("message", "Unknown login error")
-                # SmartAPI's own log of this failure is silenced (it included
-                # the PIN and TOTP); this is the record of it instead.
+            except (requests.exceptions.RequestException, OSError) as e:
+                # Never reached Angel One, or the answer was lost: safe to retry.
                 logger.warning(
-                    "Angel One login attempt %d/5 failed for %s: errorcode=%s message=%s",
-                    attempt + 1, self.client_id, data.get("errorcode"), last_error,
+                    "Angel One login attempt %d/%d failed for %s: %s",
+                    attempt, LOGIN_ATTEMPTS, self.client_id, type(e).__name__,
                 )
+                if attempt < LOGIN_ATTEMPTS:
+                    time.sleep(LOGIN_BACKOFF_SEC[attempt - 1])
+                    continue
+                raise AngelAuthError("unavailable", "Could not reach Angel One.") from None
             except Exception as e:
-                last_error = str(e)
+                # SmartAPI raises its own exceptions for API errors (bad input,
+                # token or data errors): a real answer, so not retried.
                 logger.warning(
-                    "Angel One login attempt %d/5 failed for %s: %s: %s",
-                    attempt + 1, self.client_id, type(e).__name__, e,
+                    "Angel One login rejected for %s: %s: %s",
+                    self.client_id, type(e).__name__, e,
                 )
+                raise AngelAuthError("credentials", str(e) or type(e).__name__) from None
 
-            if attempt < 4:
-                time.sleep(2)
+            if data.get("status"):
+                self._session_data = data
+                self._login_time = time.time()
+                self._feed_token = (data.get("data") or {}).get("feedToken")
+                self._register_tokens()
+                logger.info("Angel One session established for %s", self.client_id)
+                return
 
-        raise RuntimeError(f"Failed to authenticate after 5 attempts: {last_error}")
+            message = data.get("message") or "Unknown login error"
+            # SmartAPI's own log of this failure is silenced (it included the
+            # PIN and TOTP); this is the record of it instead.
+            logger.warning(
+                "Angel One login rejected for %s: errorcode=%s message=%s",
+                self.client_id, data.get("errorcode"), message,
+            )
+            raise AngelAuthError("credentials", message, errorcode=data.get("errorcode"))
+
+        raise AngelAuthError("unavailable", "Could not reach Angel One.")  # pragma: no cover
 
     @property
     def feed_token(self) -> Optional[str]:

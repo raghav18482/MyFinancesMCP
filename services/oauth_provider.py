@@ -132,6 +132,7 @@ _REGISTER_WINDOW_SEC = 60 * 60
 _MAX_REGISTER_PER_IP = 300
 _register_lock = threading.Lock()
 _register_by_ip: dict[str, list[float]] = {}
+_MAX_REGISTER_KEYS = 10_000
 
 
 # ── Configuration ──────────────────────────────────────────────────────────
@@ -260,6 +261,13 @@ def check_registration_rate(client_ip: str) -> Optional[int]:
             return int(_REGISTER_WINDOW_SEC - (now - hits[0])) + 1
         hits.append(now)
         _register_by_ip[client_ip] = hits
+        # Keyed on a forgeable address, so bound it: drop idle keys, then the oldest.
+        if len(_register_by_ip) > _MAX_REGISTER_KEYS:
+            for ip in [k for k, v in _register_by_ip.items()
+                       if not v or now - v[-1] >= _REGISTER_WINDOW_SEC]:
+                del _register_by_ip[ip]
+            for ip in list(_register_by_ip)[:max(0, len(_register_by_ip) - _MAX_REGISTER_KEYS)]:
+                del _register_by_ip[ip]
         return None
 
 

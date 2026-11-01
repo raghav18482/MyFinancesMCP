@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from db.passwords import verify_password
 from services import login_throttle, mcp_tokens
-from web.dependencies import client_ip, current_user
+from web.dependencies import client_ip, current_user, trusted_ip
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def api_mcp_tokens_create(request: Request):
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400, headers=_NO_STORE)
 
     identifier = f"mcp-token:{user.id}"
-    ip = client_ip(request)
+    ip = trusted_ip(request)
     try:
         login_throttle.check(identifier, ip)
     except login_throttle.TooManyAttempts as e:
@@ -63,7 +63,7 @@ async def api_mcp_tokens_create(request: Request):
             user.id,
             str(body.get("name") or "MCP client"),
             ttl_days=body.get("ttl_days", mcp_tokens.DEFAULT_TTL_DAYS),
-            client_ip=ip,
+            client_ip=client_ip(request),
         )
     except mcp_tokens.TooManyRequests as e:
         return JSONResponse({"error": str(e)}, status_code=429,

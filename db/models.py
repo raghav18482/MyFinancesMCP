@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import CheckConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -255,3 +256,36 @@ class ChatThread(SQLModel, table=True):
     archived: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class AppInstance(SQLModel, table=True):
+    """One running server process, refreshed every minute.
+
+    The app keeps broker sessions, throttles and caches in process memory, so it
+    must run as a single instance. ``services.instance_registry`` reports when
+    more than one is alive for longer than a deploy overlap.
+    """
+
+    __tablename__ = "app_instances"
+
+    instance_id: str = Field(primary_key=True)  # "<hostname>:<pid>:<random>"
+    started_at: datetime = Field(default_factory=utcnow)
+    last_seen_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class FeedbackSubmission(SQLModel, table=True):
+    """Feedback from the public form, stored while WhatsApp replies are off.
+
+    Deliberately minimal: no name, phone number or IP address.
+    """
+
+    __tablename__ = "feedback_submissions"
+    __table_args__ = (
+        CheckConstraint("length(feedback) BETWEEN 1 AND 1000", name="ck_feedback_length"),
+        CheckConstraint("channel IN ('react', 'jinja', 'api')", name="ck_feedback_channel"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    feedback: str
+    channel: str
+    created_at: datetime = Field(default_factory=utcnow, index=True)

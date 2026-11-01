@@ -71,6 +71,33 @@ async def _cleanup_loop():
             await asyncio.to_thread(purge_expired)
         except Exception:
             logger.exception("OAuth purge failed; will retry")
+        try:
+            from services.feedback import purge_old_submissions
+
+            # A no-op until FEEDBACK_RETENTION_DAYS is set.
+            await asyncio.to_thread(purge_old_submissions)
+        except Exception:
+            logger.exception("Feedback retention purge failed; will retry")
+
+
+async def _instance_heartbeat(monitor):
+    """Report this process every minute so a second instance is noticed."""
+    from services.instance_registry import BEAT_SECONDS
+
+    failures = 0
+    while True:
+        try:
+            await asyncio.to_thread(monitor.beat)
+            failures = 0
+        except Exception as e:
+            failures += 1
+            # Full detail once; after that a line a minute is enough.
+            if failures == 1:
+                logger.exception("Instance heartbeat failed; will retry")
+            else:
+                logger.warning("Instance heartbeat still failing (%s, %d times)",
+                               type(e).__name__, failures)
+        await asyncio.sleep(BEAT_SECONDS)
 
 
 @asynccontextmanager
@@ -86,6 +113,12 @@ async def _lifespan(_app: Starlette):
 
         init_db()
     except Exception as e:
+        # Code now depends on the tables and columns init_db adds, so serving
+        # on a stale schema would fail at the first request instead. In
+        # production, refuse to start; Render keeps the previous instance up.
+        if security_config.is_production():
+            logger.exception("init_db failed; refusing to start")
+            raise
         logger.warning("init_db skipped: %s", e)
 
     scheduler_enabled = os.environ.get("SCHEDULER_ENABLED") == "1"
@@ -98,12 +131,24 @@ async def _lifespan(_app: Starlette):
             logger.exception("scheduler failed to start; continuing without it")
             scheduler_enabled = False
 
+    from db import engine as db_engine
+    from services.instance_registry import InstanceMonitor
+
+    monitor = InstanceMonitor(db_engine)
+    logger.info("instance %s starting", monitor.instance_id)
+    heartbeat = asyncio.create_task(_instance_heartbeat(monitor))
+
     task = asyncio.create_task(_cleanup_loop())
     try:
         # The Streamable HTTP transport's task group must run for the app's lifetime.
         async with mcp.session_manager.run():
             yield
     finally:
+        heartbeat.cancel()
+        try:
+            await asyncio.to_thread(monitor.stop)
+        except Exception:
+            logger.warning("Could not remove instance row %s", monitor.instance_id)
         if scheduler_enabled:
             try:
                 from services.schedular.runner import stop as stop_scheduler

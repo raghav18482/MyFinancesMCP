@@ -353,14 +353,21 @@ def test_admin_key_check_is_constant_time():
 
     src = inspect.getsource(admin_router.check_admin_key)
     assert "compare_digest" in src and "!=" not in src
+    from fastapi.testclient import TestClient
+
+    from adminApi.guard import guard
+
+    key = "the-real-admin-key-0123456789abcdef"  # admin keys need 32+ characters
     prior = os.environ.get("ADMIN_API_KEY")
-    os.environ["ADMIN_API_KEY"] = "the-real-admin-key-123456"
+    os.environ["ADMIN_API_KEY"] = key
+    guard.reset()
     try:
         with harness() as h:
-            c = h.client()
+            # The admin API only answers from inside the instance (loopback).
+            c = TestClient(h.app, base_url="https://testserver", client=("127.0.0.1", 50000))
             assert c.get("/api/admin/users", headers={"X-Admin-Key": "wrong"}).status_code == 401
             assert c.get("/api/admin/users").status_code == 422
-            ok = c.get("/api/admin/users", headers={"X-Admin-Key": "the-real-admin-key-123456"})
+            ok = c.get("/api/admin/users", headers={"X-Admin-Key": key})
             assert ok.status_code == 200
             assert "angel_password" not in ok.text and USERS["A"]["pin"] not in ok.text
     finally:

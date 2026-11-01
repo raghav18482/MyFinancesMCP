@@ -31,6 +31,8 @@ EXPECTED = {
     ("GET", "/delete-account"),
     ("POST", "/delete-account"),
     ("GET", "/"),
+    # Temporary proxy-chain measurement (web/routers/ip_diag.py)
+    ("GET", "/__diag/ip"),
     ("GET", "/setup"),
     ("GET", "/connect"),
     ("GET", "/login"),

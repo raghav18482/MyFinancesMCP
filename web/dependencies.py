@@ -243,11 +243,20 @@ def registered_user_for_session(client) -> User | None:
 
 
 def client_ip(request: Request) -> str:
-    """Best-effort client IP, honouring a single proxy hop (Render/X-Forwarded-For)."""
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Best-effort, forgeable client IP, for abuse limits only. See :mod:`web.client_ip`."""
+    from web.client_ip import abuse_client_ip
+
+    return abuse_client_ip(request.headers, request.client.host if request.client else None)
+
+
+def trusted_ip(request: Request) -> str | None:
+    """The client IP our proxies vouch for, or ``None`` until that is verified.
+
+    For security decisions. ``None`` means "skip the per-IP check", never "deny".
+    """
+    from web.client_ip import trusted_client_ip
+
+    return trusted_client_ip(request.headers, request.client.host if request.client else None)
 
 
 

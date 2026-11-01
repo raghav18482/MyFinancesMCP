@@ -48,6 +48,7 @@ async def landing(request: Request):
         # ENCRYPTION_KEY missing/misconfigured: render page without the form token.
         logger.exception("Could not issue feedback token")
         ctx["feedback_token"] = ""
+    ctx["feedback_reply"] = feedback_service.reply_enabled()
     return templates.TemplateResponse(request, "landing.html", ctx)
 
 
@@ -123,9 +124,10 @@ async def enroll_submit(
         ctx = template_context(request, "enroll")
         ctx["min_password_chars"] = MIN_PASSWORD_CHARS
         ctx["error"] = e.message
-        # Echo back only the non-secret fields so the user retypes less.
+        # Echo back only the client id. The API key is a credential and is
+        # never written back into a page.
         ctx["form"] = {
-            "api_key": api_key.strip(),
+            "api_key": "",
             "client_id": client_id.strip(),
         }
         return templates.TemplateResponse(

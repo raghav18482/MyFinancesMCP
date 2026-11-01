@@ -50,21 +50,29 @@ class TooManyAttempts(Exception):
         self.retry_after_sec = retry_after_sec
 
 
-def check(identifier: str, client_ip: str) -> None:
+def check(identifier: str, client_ip: str | None) -> None:
     """Raise :class:`TooManyAttempts` if this login should not even be tried.
 
     Call before verifying the password. Attempts are recorded here rather than
     in :func:`record_failure` so that a flood of requests counts even if each
     one dies somewhere else in the handler.
+
+    ``client_ip`` must come from :func:`web.dependencies.trusted_ip`. When it is
+    ``None`` (the address cannot be verified yet) only the per-identifier cap
+    applies: a forgeable address must never key a security limit.
     """
     now = time.time()
     key = (identifier or "").strip().lower()
 
     with _lock:
         ident_hits = _fresh(_by_identifier, key, now)
-        ip_hits = _fresh(_by_ip, client_ip, now)
+        caps = [(ident_hits, _MAX_PER_IDENTIFIER)]
+        ip_hits: list[float] = []
+        if client_ip is not None:
+            ip_hits = _fresh(_by_ip, client_ip, now)
+            caps.append((ip_hits, _MAX_PER_IP))
 
-        for hits, cap in ((ident_hits, _MAX_PER_IDENTIFIER), (ip_hits, _MAX_PER_IP)):
+        for hits, cap in caps:
             if len(hits) >= cap:
                 # Oldest attempt in the window decides when the caller is free.
                 retry_after = int(_WINDOW_SEC - (now - hits[0])) + 1
@@ -77,12 +85,13 @@ def check(identifier: str, client_ip: str) -> None:
                 raise TooManyAttempts(retry_after)
 
         ident_hits.append(now)
-        ip_hits.append(now)
         _by_identifier[key] = ident_hits
-        _by_ip[client_ip] = ip_hits
+        if client_ip is not None:
+            ip_hits.append(now)
+            _by_ip[client_ip] = ip_hits
 
 
-def clear(identifier: str, client_ip: str) -> None:
+def clear(identifier: str, client_ip: str | None) -> None:
     """Forget the attempt history after a successful login.
 
     Without this, five legitimate fumbled passwords would lock someone out for
@@ -91,7 +100,29 @@ def clear(identifier: str, client_ip: str) -> None:
     key = (identifier or "").strip().lower()
     with _lock:
         _by_identifier.pop(key, None)
-        _by_ip.pop(client_ip, None)
+        if client_ip is not None:
+            _by_ip.pop(client_ip, None)
+
+
+_by_global: dict[str, list[float]] = {}
+
+
+def check_global(name: str, cap: int) -> None:
+    """Raise :class:`TooManyAttempts` once ``cap`` attempts named ``name`` happened
+    in the window, across all callers.
+
+    For actions where per-identifier caps are not enough because the attacker
+    picks the identifier, such as enrollment with someone else's client id.
+    """
+    now = time.time()
+    with _lock:
+        hits = _fresh(_by_global, name, now)
+        if len(hits) >= cap:
+            retry_after = int(_WINDOW_SEC - (now - hits[0])) + 1
+            logger.warning("global throttle %s reached (%d attempts)", name, len(hits))
+            raise TooManyAttempts(retry_after)
+        hits.append(now)
+        _by_global[name] = hits
 
 
 def _fresh(store: dict[str, list[float]], key: str, now: float) -> list[float]:
