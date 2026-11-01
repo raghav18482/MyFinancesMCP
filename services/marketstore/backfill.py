@@ -102,8 +102,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="print what is on disk and exit")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    from services.logging_config import configure_logging
+
+    configure_logging(fmt="%(asctime)s [%(levelname)s] %(message)s")
 
     if args.status:
         summary = store_summary(args.root)

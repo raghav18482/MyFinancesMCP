@@ -40,10 +40,19 @@ class SessionManager:
         totp_secret: str,
     ) -> AngelOneClient:
         client = AngelOneClient(api_key, client_id, password, totp_secret)
-        client.ensure_session()
+        try:
+            client.ensure_session()
+        except BaseException:
+            # A rejected login keeps nothing registered for redaction, so failed
+            # attempts cannot fill the secret registry and evict live secrets.
+            _release_secrets(client)
+            raise
         with self._lock:
+            replaced = self._sessions.get(session_id)
             self._sessions[session_id] = client
             self._created_at[session_id] = time.time()
+        if replaced is not None and replaced is not client:
+            _release_secrets(replaced)
         logger.info("Session created for client %s (session %s)", client_id, session_id[:8])
         return client
 
@@ -87,7 +96,7 @@ class SessionManager:
             self._remove_unlocked(session_id)
 
     def _remove_unlocked(self, session_id: str):
-        self._sessions.pop(session_id, None)
+        _release_secrets(self._sessions.pop(session_id, None))
         self._created_at.pop(session_id, None)
         self._key_locks.pop(session_id, None)
         logger.info("Session removed: %s", session_id[:8])
@@ -114,6 +123,16 @@ class SessionManager:
     def active_count(self) -> int:
         with self._lock:
             return len(self._sessions)
+
+
+def _release_secrets(client) -> None:
+    """Drop a client's values from the log-redaction registry, if it registered any."""
+    release = getattr(client, "release_secrets", None)
+    if release is not None:
+        try:
+            release()
+        except Exception:
+            logger.exception("Releasing redaction secrets failed")
 
 
 sessions = SessionManager()

@@ -56,8 +56,9 @@ from services.broker_service import (
 from services.readonly_broker import ReadOnlyBroker
 from session_manager import sessions
 from web import security_config
+from services.logging_config import configure_logging
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 

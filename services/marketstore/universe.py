@@ -148,7 +148,9 @@ def _norm(symbol: str) -> str:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    from services.logging_config import configure_logging
+
+    configure_logging(fmt="%(asctime)s [%(levelname)s] %(message)s")
     u = build_universe()
     save_universe(u)
     print(u["cap_band"].value_counts().to_string())

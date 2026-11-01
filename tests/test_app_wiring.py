@@ -200,6 +200,57 @@ def test_services_do_not_import_the_web_layer():
     assert not offenders, offenders
 
 
+_REPO = ROUTERS_DIR.parent.parent
+_SKIP_DIRS = {".venv", ".git", ".claude", "node_modules", "tests", "__pycache__"}
+_LOG_CONFIG_CALLS = {"basicConfig", "dictConfig", "fileConfig", "setLogRecordFactory", "addHandler"}
+
+
+def _app_sources():
+    for path in sorted(_REPO.rglob("*.py")):
+        if not _SKIP_DIRS.intersection(path.relative_to(_REPO).parts):
+            yield path
+
+
+def test_logging_is_configured_in_one_place():
+    """Only services/logging_config.py configures logging or adds handlers.
+
+    Every handler must carry the redaction filter; a handler added anywhere
+    else would not (see services/logging_config.py).
+    """
+    allowed = {"services/logging_config.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        if rel in allowed:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in _LOG_CONFIG_CALLS):
+                offenders.append(f"{rel}:{node.lineno} calls {node.func.attr}")
+    assert not offenders, offenders
+
+
+def test_smartapi_and_logzero_are_imported_in_one_place():
+    """SmartAPI logs credentials through logzero; integrations/smartapi.py
+    silences it, so nothing may reach the SDK any other way."""
+    allowed = {"integrations/smartapi.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        if rel in allowed:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            mods = []
+            if isinstance(node, ast.ImportFrom):
+                mods = [node.module or ""]
+            elif isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            for mod in mods:
+                if mod.split(".")[0] in {"SmartApi", "logzero"}:
+                    offenders.append(f"{rel}:{node.lineno} imports {mod}")
+    assert not offenders, offenders
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

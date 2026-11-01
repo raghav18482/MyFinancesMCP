@@ -58,7 +58,9 @@ async def _chat_loop(runner: InMemoryRunner, user_id: str, chat_session_id: str)
 
 
 async def async_main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    from services.logging_config import configure_logging
+
+    configure_logging()
     load_dotenv()
 
     angel_sid = (os.environ.get("ADK_ANGEL_SESSION_ID") or "").strip() or str(uuid.uuid4())

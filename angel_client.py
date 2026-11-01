@@ -1,15 +1,24 @@
 import time
 import logging
+import uuid
 from typing import Optional
 
 import pyotp
-from SmartApi.smartConnect import SmartConnect
+
+from integrations.smartapi import new_smart_connect
+from services import secret_registry
 
 logger = logging.getLogger(__name__)
 
 
 class AngelOneClient:
-    """Read-only Angel One SmartAPI client: portfolio, orders/trades history, market data."""
+    """Read-only Angel One SmartAPI client: portfolio, orders/trades history, market data.
+
+    Every credential and token this client holds is registered with
+    :mod:`services.secret_registry`, so the log filter redacts it even where it
+    appears without a key name. :meth:`release_secrets` drops them again; the
+    session manager calls it when the session ends or the login fails.
+    """
 
     def __init__(self, api_key: str, client_id: str, password: str, totp_secret: str):
         self.api_key = api_key
@@ -17,10 +26,34 @@ class AngelOneClient:
         self.password = password
         self.totp_secret = totp_secret
 
-        self._smart_api = SmartConnect(api_key=self.api_key)
+        self._secret_owner = f"angel:{uuid.uuid4().hex}"
+        secret_registry.register(self._secret_owner, api_key, password, totp_secret)
+
+        self._smart_api = new_smart_connect(api_key=self.api_key)
         self._session_data: Optional[dict] = None
         self._login_time: Optional[float] = None
         self._feed_token: Optional[str] = None
+
+    def __repr__(self) -> str:
+        # Never the API key, PIN, TOTP secret or tokens.
+        return f"AngelOneClient(client_id={self.client_id!r})"
+
+    def release_secrets(self) -> None:
+        secret_registry.release(self._secret_owner)
+
+    def _register_tokens(self) -> None:
+        data = (self._session_data or {}).get("data") or {}
+        values = [
+            data.get("jwtToken"),
+            data.get("refreshToken"),
+            data.get("feedToken"),
+            getattr(self._smart_api, "access_token", None),
+            getattr(self._smart_api, "refresh_token", None),
+            getattr(self._smart_api, "feed_token", None),
+        ]
+        # SmartAPI prefixes the JWT it returns with "Bearer ".
+        values = [v.removeprefix("Bearer ") if isinstance(v, str) else v for v in values]
+        secret_registry.register(self._secret_owner, *values)
 
     def ensure_session(self):
         if self._session_data and self._login_time:
@@ -30,9 +63,11 @@ class AngelOneClient:
             try:
                 self._smart_api.generateToken(self._smart_api.refresh_token)
                 self._login_time = time.time()
+                self._register_tokens()
                 return
-            except Exception:
-                logger.warning("Token refresh failed, re-authenticating")
+            except Exception as e:
+                logger.warning("Angel One token refresh failed (%s), re-authenticating",
+                               type(e).__name__)
 
         self._authenticate()
 
@@ -50,11 +85,22 @@ class AngelOneClient:
                     self._session_data = data
                     self._login_time = time.time()
                     self._feed_token = (data.get("data") or {}).get("feedToken")
+                    self._register_tokens()
                     logger.info("Angel One session established for %s", self.client_id)
                     return
                 last_error = data.get("message", "Unknown login error")
+                # SmartAPI's own log of this failure is silenced (it included
+                # the PIN and TOTP); this is the record of it instead.
+                logger.warning(
+                    "Angel One login attempt %d/5 failed for %s: errorcode=%s message=%s",
+                    attempt + 1, self.client_id, data.get("errorcode"), last_error,
+                )
             except Exception as e:
                 last_error = str(e)
+                logger.warning(
+                    "Angel One login attempt %d/5 failed for %s: %s: %s",
+                    attempt + 1, self.client_id, type(e).__name__, e,
+                )
 
             if attempt < 4:
                 time.sleep(2)

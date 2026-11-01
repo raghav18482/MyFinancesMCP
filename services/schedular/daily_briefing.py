@@ -329,7 +329,9 @@ def _bootstrap_angel_session_from_env(session_id: str) -> None:
 if __name__ == "__main__":
     import sys as _sys
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
+    from services.logging_config import configure_logging
+
+    configure_logging(fmt="%(asctime)s %(levelname)s %(name)s | %(message)s")
 
     # Optional: pass a phone number as the first CLI argument to also send via WhatsApp.
     # Usage:  python -m services.schedular.daily_briefing [phone]

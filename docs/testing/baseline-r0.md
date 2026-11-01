@@ -1,6 +1,6 @@
 # R0 test baseline
 
-Recorded 2026-11-01, before any Phase 0 change. Branch `claude/user-angleone-credential-split-478e62` (based on `main` at `e5a8832`). Run locally with `DATABASE_URL` and `ENCRYPTION_KEY` unset.
+Recorded 2026-11-01, before any Phase 0 change. Branch `claude/user-angleone-credential-split-478e62` (based on `main` at `0a6dfe2`). Run locally with `DATABASE_URL` and `ENCRYPTION_KEY` unset.
 
 ## Backend (`MyFinancesMCP`)
 

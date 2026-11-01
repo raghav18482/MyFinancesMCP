@@ -34,7 +34,15 @@ try:
 except ImportError:
     pass
 
-logging.basicConfig(level=logging.INFO)
+# Before anything else is imported, so every handler carries the redaction filter.
+from services.logging_config import (  # noqa: E402
+    after_uvicorn_configured,
+    configure_logging,
+    uvicorn_log_config,
+    verify_logging,
+)
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 from mcp_server import ClientIPMiddleware, auth_settings, mcp  # noqa: E402  — MCP FastMCP instance
@@ -50,6 +58,10 @@ async def _cleanup_loop():
     """Periodically remove expired sessions, their per-session state, and stale proposals."""
     while True:
         await asyncio.sleep(600)
+        try:
+            verify_logging()
+        except Exception:
+            logger.exception("Logging verification failed; will retry")
         for sid in sessions.cleanup_expired():
             release_session_resources(sid)
         proposal_store.cleanup_expired()
@@ -64,6 +76,11 @@ async def _cleanup_loop():
 @asynccontextmanager
 async def _lifespan(_app: Starlette):
     """Starlette 0.37+ removed on_event; use lifespan for startup/shutdown."""
+    # uvicorn has applied its log_config by now, and dictConfig re-enables every
+    # logger, SmartAPI's included. Re-establish redaction before the first
+    # request is served.
+    after_uvicorn_configured()
+
     try:
         from db import init_db
 
@@ -127,4 +144,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port,
         log_level="info",
+        # Our handlers, with the redaction filter, instead of uvicorn's own.
+        log_config=uvicorn_log_config(),
     )
