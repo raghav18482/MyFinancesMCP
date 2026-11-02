@@ -27,11 +27,12 @@ APP_TABLES: tuple[str, ...] = (
     "feedback_submissions",
     "db_identity",
     "briefing_deliveries",
+    "broker_connections",
 )
 
 #: App tables created by revisions after the baseline. Production never gets
 #: them from ``create_all``, so baseline comparisons leave them out.
-POST_BASELINE_TABLES: tuple[str, ...] = ("db_identity", "briefing_deliveries")
+POST_BASELINE_TABLES: tuple[str, ...] = ("db_identity", "briefing_deliveries", "broker_connections")
 
 #: Created and migrated by google-adk in the same database. Never touched here.
 ADK_TABLES: tuple[str, ...] = ("adk_internal_metadata", "sessions", "events", "app_states", "user_states")

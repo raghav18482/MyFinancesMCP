@@ -2,8 +2,8 @@
 
 Needs TEST_POSTGRES_URL; run through ``scripts/test_pg.sh``. Skips otherwise.
 Every test starts from a schema built by the real migrations (``alembic
-upgrade 0002_delivery_ledger``), so the constraints and the trigger are the
-production ones.
+upgrade`` to this release's target revision), so the constraints and the
+trigger are the production ones.
 
 The guarantees under test: one row per schedule slot; nothing is sent without
 a ``sending`` row committed first; ``unknown`` is never retried; only certain
@@ -48,8 +48,11 @@ def _reset():
     engine = _engine()
     with engine.begin() as c:
         c.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
+    from db import schema_version
+
     with engine.connect() as c:
-        command.upgrade(st.alembic_config(c, label="test"), "0002_delivery_ledger")
+        # This release's revision: the models select every column it adds.
+        command.upgrade(st.alembic_config(c, label="test"), schema_version.TARGET_REVISION)
         c.commit()
     with engine.begin() as c:
         for uid in (1, 2):

@@ -6,9 +6,24 @@ schema first changes after this commit.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, SmallInteger, String, Text, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlmodel import Field, SQLModel
 
 
@@ -26,6 +41,17 @@ def utcnow() -> datetime:
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("firebase_uid IS NULL OR length(firebase_uid) BETWEEN 1 AND 128",
+                        name="ck_users_firebase_uid"),
+        CheckConstraint("auth_phone_e164 IS NULL OR auth_phone_e164 ~ '^\\+[1-9][0-9]{7,14}$'",
+                        name="ck_users_auth_phone").ddl_if(dialect="postgresql"),
+        Index("uq_users_firebase_uid", "firebase_uid", unique=True,
+              postgresql_where=text("firebase_uid IS NOT NULL"), sqlite_where=text("firebase_uid IS NOT NULL")),
+        Index("uq_users_auth_phone", "auth_phone_e164", unique=True,
+              postgresql_where=text("auth_phone_e164 IS NOT NULL"),
+              sqlite_where=text("auth_phone_e164 IS NOT NULL")),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     whatsapp_number: str | None = Field(default=None, index=True, unique=True)
@@ -52,6 +78,14 @@ class User(SQLModel, table=True):
 
     # Last manual "send briefing now"; the cooldown is checked and set atomically.
     last_manual_briefing_at: datetime | None = None
+
+    # For the sign-in that will not depend on Angel One (revision 0003; not
+    # used yet). auth_phone_e164 is the number signed in with, kept apart from
+    # whatsapp_number, which is where briefings go.
+    firebase_uid: str | None = Field(default=None, sa_column=Column(Text))
+    auth_phone_e164: str | None = Field(default=None, sa_column=Column(Text))
+    email: str | None = Field(default=None, sa_column=Column(Text))
+    last_login_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -365,6 +399,61 @@ class BriefingDelivery(SQLModel, table=True):
     outcome_reason: str | None = Field(default=None, sa_column=Column(Text))
     http_status: int | None = Field(default=None, sa_column=Column(SmallInteger))
     accepted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False, server_default="1"))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
+class BrokerConnection(SQLModel, table=True):
+    """A user's link to their broker: account id and encrypted secrets.
+
+    Revision ``0003_broker_connections``; mirrored here. Not read or written
+    by the app yet (the backfill and dual-write come next). Secrets are Fernet
+    ciphertext under data key ``key_version`` (``db.crypto``).
+    """
+
+    __tablename__ = "broker_connections"
+    __table_args__ = (
+        CheckConstraint("broker IN ('angelone')", name="ck_bc_broker"),
+        CheckConstraint(
+            "broker_account_id = upper(btrim(broker_account_id)) AND broker_account_id ~ '^[A-Z0-9]{4,16}$'",
+            name="ck_bc_account_id",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "api_key_encrypted ~ '^gAAAAA[A-Za-z0-9_-]+={0,2}$' AND length(api_key_encrypted) BETWEEN 100 AND 4096",
+            name="ck_bc_api_key",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "password_encrypted ~ '^gAAAAA[A-Za-z0-9_-]+={0,2}$' AND length(password_encrypted) BETWEEN 100 AND 4096",
+            name="ck_bc_password",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "totp_secret_encrypted ~ '^gAAAAA[A-Za-z0-9_-]+={0,2}$' "
+            "AND length(totp_secret_encrypted) BETWEEN 100 AND 4096",
+            name="ck_bc_totp",
+        ).ddl_if(dialect="postgresql"),
+        CheckConstraint("key_version >= 1", name="ck_bc_key_version"),
+        CheckConstraint("status IN ('active', 'needs_reauth', 'disconnected')", name="ck_bc_status"),
+        CheckConstraint("created_by IN ('app', 'backfill')", name="ck_bc_created_by"),
+        CheckConstraint("(created_by = 'backfill') = (backfill_run_id IS NOT NULL)", name="ck_bc_backfill_run"),
+        UniqueConstraint("user_id", "broker", name="uq_bc_user_broker"),
+        UniqueConstraint("broker", "broker_account_id", name="uq_bc_account"),
+    )
+
+    id: int | None = Field(default=None, sa_column=Column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True))
+    user_id: int = Field(sa_column=Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False))
+    broker: str = Field(sa_column=Column(Text, nullable=False))
+    broker_account_id: str = Field(sa_column=Column(Text, nullable=False))
+    api_key_encrypted: str = Field(sa_column=Column(Text, nullable=False))
+    password_encrypted: str = Field(sa_column=Column(Text, nullable=False))
+    totp_secret_encrypted: str = Field(sa_column=Column(Text, nullable=False))
+    key_version: int = Field(sa_column=Column(Integer, nullable=False))
+    status: str = Field(default="active", sa_column=Column(Text, nullable=False, server_default="active"))
+    created_by: str = Field(default="app", sa_column=Column(Text, nullable=False, server_default="app"))
+    backfill_run_id: uuid.UUID | None = Field(default=None, sa_column=Column(Uuid))
+    last_verified_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    last_error_code: str | None = Field(default=None, sa_column=Column(Text))
     row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False, server_default="1"))
     created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))

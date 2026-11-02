@@ -11,7 +11,7 @@ release lists in `db/schema_version.py`, and refuses to start otherwise.
 | `0001_baseline` | R7 | The app's tables as production has them before Alembic. Production is *stamped* at it, never upgraded through it. | yes |
 | `0001a_db_identity` | R7 | `db_identity`: one guarded row labelling the database `production`, `rehearsal`, `development` or `test`. | yes |
 | `0002_delivery_ledger` | R10 | `briefing_deliveries`: one row per briefing send, its states and lease (`services/schedular/ledger.py`) | yes |
-| `0003_broker_connections` | R11 (reserved) | `broker_connections`, new `users` columns | yes |
+| `0003_broker_connections` | R11 | `broker_connections` (not used by the app yet), and `users.firebase_uid`, `auth_phone_e164`, `email`, `last_login_at` | yes |
 | `0004_users_angel_nullable` | next phase (reserved) | Angel columns on `users` become nullable | no |
 
 A revision can appear in an earlier release's `COMPATIBLE_REVISIONS` only if
@@ -120,6 +120,28 @@ Schedules the R5 scheduler left `running` during the overlap are reclaimed as
 **Rollback:** redeploy R9. R7–R9 list `0002_delivery_ledger` as reserved and
 compatible, so they start on it and leave the table alone. R10 likewise lists
 `0003_broker_connections` for R11. Production is never downgraded.
+
+## R11 rollout: broker tables
+
+1. **Gate (read-only):**
+   ```bash
+   MIGRATION_DATABASE_URL="$DIRECT_URL" python scripts/check_broker_ids.py
+   ```
+   It must print `PASS`: every client code fits `^[A-Z0-9]{4,16}$` after
+   trimming and upper-casing, and none collide. It prints counts and shapes
+   only. On `FAIL`, revise the pattern in `0003` before going on.
+2. **Take a backup or Neon branch.**
+3. **Pre-deploy:**
+   ```bash
+   ALEMBIC_PRODUCTION_RELEASE=R11 MIGRATION_DATABASE_URL="$DIRECT_URL" alembic upgrade 0003_broker_connections
+   ```
+   The new `users` columns are nullable with no default (metadata only). The
+   checks and unique indexes on `users` lock it briefly; `lock_timeout` is 5 s,
+   so a busy table makes the upgrade fail rather than queue.
+4. **Deploy R11.** Its startup requires `0003_broker_connections`.
+
+**Rollback:** redeploy R10, which lists `0003` as compatible. Nothing writes
+to `broker_connections` until the next phase, so the table stays empty.
 
 ## Optional hardening
 

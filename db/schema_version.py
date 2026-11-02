@@ -16,14 +16,15 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
-RELEASE_ID = "R10"
-REQUIRED_REVISION = "0002_delivery_ledger"
-TARGET_REVISION = "0002_delivery_ledger"
+RELEASE_ID = "R11"
+REQUIRED_REVISION = "0003_broker_connections"
+TARGET_REVISION = "0003_broker_connections"
 #: Revisions reserved in docs/db/revision-plan.md, expand-only, that a later
 #: release applies. Listing them here lets this release start again after that
 #: (a code rollback). Their files do not exist yet in this release.
-RESERVED_REVISIONS: tuple[str, ...] = ("0003_broker_connections",)
-COMPATIBLE_REVISIONS: tuple[str, ...] = ("0002_delivery_ledger",) + RESERVED_REVISIONS
+#: None for R11: the next one, 0004, is not expand-only.
+RESERVED_REVISIONS: tuple[str, ...] = ()
+COMPATIBLE_REVISIONS: tuple[str, ...] = ("0003_broker_connections",) + RESERVED_REVISIONS
 
 
 class IncompatibleSchema(RuntimeError):
