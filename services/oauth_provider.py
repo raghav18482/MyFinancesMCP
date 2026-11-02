@@ -648,10 +648,7 @@ def load_pending(blob: str) -> Optional[PendingAuthorization]:
     redirect URI is no longer registered.
     """
     try:
-        data = open_token(
-            blob or "", audience=PENDING_AUDIENCE, max_age=PENDING_TTL_SEC,
-            legacy=lambda p: p.get("v") == 1,
-        )
+        data = open_token(blob or "", audience=PENDING_AUDIENCE, max_age=PENDING_TTL_SEC)
     except Exception:
         return None
     if data.get("v") != 1:

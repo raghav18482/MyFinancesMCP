@@ -17,25 +17,19 @@ Generate a key:
 python -m db.crypto generate
 ```
 
-## Deploying R8 (needs approval: an environment change)
+## History: R8 and R9 (needs approval: an environment change)
 
-1. Generate a new key. Set `TOKEN_KEYS=t1:<key>` on the Render backend
-   service. Never reuse `ENCRYPTION_KEY`.
-2. Deploy R8. New tokens look like `t1.gAAAA…`.
-3. Forms and consent pages opened before the deploy still carry old-format
-   tokens. R8 accepts them under their original checks and logs
-   `LEGACY_TOKEN_OPENED audience=<feedback|oauth_pending>` for each one.
+- **R8** introduced `TOKEN_KEYS`. Before deploying it, generate a key and set
+  `TOKEN_KEYS=t1:<key>` on the Render backend service (never `ENCRYPTION_KEY`).
+  For one release it still accepted pre-R8 tokens (no kid, sealed with
+  `ENCRYPTION_KEY`), logging `LEGACY_TOKEN_OPENED audience=…` for each.
+- **R9** removes that path. Deploy it only when **both** hold:
+  - R8 has been live for at least 1 hour (tokens live 10 minutes);
+  - Render logs show no `LEGACY_TOKEN_OPENED` in the last 30 minutes.
 
-## Deploying R9 (removes the old format)
-
-Deploy only when **both** hold:
-
-- R8 has been live for at least 1 hour (tokens live 10 minutes).
-- Render logs show no `LEGACY_TOKEN_OPENED` in the last 30 minutes.
-
-Restarts don't matter; there is no time constant in the code. A legacy token
-that still turns up after R9 is refused: the visitor reloads the form or
-restarts the connector's sign-in.
+  There is no time constant in the code, so restarts don't matter. A pre-R8
+  token that turns up after R9 is refused: the visitor reloads the form, or
+  restarts the connector's sign-in.
 
 ## Rotating the token key
 
@@ -57,6 +51,6 @@ Today's credential columns are all version 1.
 
 ## Rollback
 
+- **From R9 to R8:** safe; R8 opens everything R9 issues.
 - **From R8 to R7:** tokens issued by R8 stop opening. At most 10 minutes of
   open forms and consent pages are affected.
-- **From R9 to R8:** safe.

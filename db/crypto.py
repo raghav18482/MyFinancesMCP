@@ -24,11 +24,8 @@ request, and nothing else (a test enforces it).
 - Outside production with ``TOKEN_KEYS`` unset, a random key is made per
   process (tokens then last until a restart, at most ten minutes anyway).
 
-**Legacy tokens** (R8 only): unprefixed tokens sealed with ``ENCRYPTION_KEY``
-by the previous release still open, under each caller's original check, so
-forms and consent pages open during the deploy keep working. Each one logs
-``LEGACY_TOKEN_OPENED``. R9 deletes this path once that line has stopped
-appearing (docs/runbooks/token-keys.md).
+Tokens without a kid (the format before R8, sealed with ``ENCRYPTION_KEY``)
+are refused since R9.
 
 Decrypted values must never be logged. Generate a key with::
 
@@ -41,14 +38,11 @@ import logging
 import os
 import re
 import threading
-from typing import Callable, Optional
+from typing import Optional
 
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
-
-#: R8 accepts tokens in the previous release's format; R9 sets this False.
-LEGACY_TOKENS_ACCEPTED = True
 
 _KID = re.compile(r"[a-z0-9]{1,16}")
 
@@ -213,25 +207,17 @@ def _load_object(raw: bytes) -> dict:
     return payload
 
 
-def open_token(
-    token: str,
-    *,
-    audience: str,
-    max_age: int,
-    legacy: Optional[Callable[[dict], bool]] = None,
-) -> dict:
+def open_token(token: str, *, audience: str, max_age: int) -> dict:
     """Open a token sealed for ``audience`` no more than ``max_age`` seconds ago.
 
-    ``legacy`` is the original consumer's check for a previous-release token
-    (no kid, sealed with ``ENCRYPTION_KEY``); such a token opens only while
-    :data:`LEGACY_TOKENS_ACCEPTED` and only if the check passes. Raises
-    :class:`TokenError` for anything else.
+    Raises :class:`TokenError` for anything else, including a token without a
+    kid (the format before R8).
     """
     if not token or not isinstance(token, str):
         raise TokenError("bad token")
     kid, sep, body = token.partition(".")
     if not sep:
-        return _open_legacy(token, audience=audience, max_age=max_age, check=legacy)
+        raise TokenError("bad token")
     fernet = token_keyring().get(kid)
     if fernet is None:
         raise TokenError("bad token")
@@ -242,27 +228,6 @@ def open_token(
     payload = _load_object(raw)
     if payload.get("aud") != audience:
         raise TokenError("bad token")
-    return payload
-
-
-_legacy_lock = threading.Lock()
-legacy_tokens_opened = 0
-
-
-def _open_legacy(token: str, *, audience: str, max_age: int, check) -> dict:
-    global legacy_tokens_opened
-    if not LEGACY_TOKENS_ACCEPTED or check is None:
-        raise TokenError("bad token")
-    try:
-        raw = _fernet().decrypt(token.encode("ascii"), ttl=max_age)
-    except (InvalidToken, UnicodeEncodeError, ValueError, RuntimeError):
-        raise TokenError("bad token") from None
-    payload = _load_object(raw)
-    if "aud" in payload or not check(payload):
-        raise TokenError("bad token")
-    with _legacy_lock:
-        legacy_tokens_opened += 1
-    logger.info("LEGACY_TOKEN_OPENED audience=%s", audience)
     return payload
 
 
@@ -279,26 +244,6 @@ def validate_key_config(production: bool) -> None:
         raise KeyConfigError("a token key must not also be a data key")
     if len(set(tokens.values())) != len(tokens):
         raise KeyConfigError("TOKEN_KEYS lists the same key twice")
-
-
-# ── Deprecated (R8): the previous release's token format ─────────────────
-
-
-def sign_token(payload: dict) -> str:
-    """Deprecated, removed in R9: use :func:`seal_token`. No code calls it."""
-    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    return _fernet().encrypt(raw).decode("ascii")
-
-
-def unsign_token(token: str, max_age: int) -> dict:
-    """Deprecated, removed in R9: use :func:`open_token`. No code calls it."""
-    if not token:
-        raise ValueError("unsign_token: token is empty")
-    raw = _fernet().decrypt(token.encode("ascii"), ttl=max_age)
-    payload = json.loads(raw.decode("utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("unsign_token: payload is not an object")
-    return payload
 
 
 if __name__ == "__main__":

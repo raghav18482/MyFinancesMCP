@@ -2,14 +2,15 @@
 
 Covers: kid lookup, audiences both ways, TTL per key, rotation (t1 works
 after t2 is added, fails after t1 is removed), exact-version data decryption,
-production key checks, the R8 legacy path and its R9 removal (simulated with
-``LEGACY_TOKENS_ACCEPTED = False``), and the feedback (React and Jinja) and
-OAuth consent flows end to end.
+production key checks, the refusal of pre-R8 tokens (no kid, sealed with
+``ENCRYPTION_KEY``) since R9, and the feedback (React and Jinja) and OAuth
+consent flows end to end.
 
 Run directly: ``python tests/test_token_keys.py``.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -43,10 +44,10 @@ def keys(**env):
         yield
 
 
-@contextmanager
-def r9():
-    with mock.patch.object(crypto, "LEGACY_TOKENS_ACCEPTED", False):
-        yield
+def old_format(payload: dict) -> str:
+    """A token as releases before R8 sealed it: no kid, ENCRYPTION_KEY."""
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    return Fernet(os.environ["ENCRYPTION_KEY"].encode()).encrypt(raw).decode()
 
 
 def _bad(fn):
@@ -182,21 +183,15 @@ def test_data_decryption_uses_exactly_the_stored_version():
                 raise AssertionError(f"decrypted with the wrong version: {wrong[1]}")
 
 
-# ── legacy tokens: accepted in R8, gone in R9 ─────────────────────────────
+# ── pre-R8 tokens: refused since R9 ──────────────────────────────────────
 
 
-def test_legacy_tokens_open_only_under_the_original_check():
+def test_old_format_tokens_are_refused():
     with keys():
-        before = crypto.legacy_tokens_opened
-        fb = crypto.sign_token({"purpose": "feedback", "nonce": "n1"})
-        check = lambda p: p.get("purpose") == "feedback"  # noqa: E731
-        assert crypto.open_token(fb, audience="feedback", max_age=60, legacy=check)["nonce"] == "n1"
-        assert crypto.legacy_tokens_opened == before + 1
-        _bad(lambda: crypto.open_token(fb, audience="feedback", max_age=60))  # no check: no legacy
-        oauth_blob = crypto.sign_token({"v": 1})
-        _bad(lambda: crypto.open_token(oauth_blob, audience="feedback", max_age=60, legacy=check))
-        with r9():
-            _bad(lambda: crypto.open_token(fb, audience="feedback", max_age=60, legacy=check))
+        for payload, audience in (({"purpose": "feedback", "nonce": "n1"}, "feedback"),
+                                  ({"v": 1}, "oauth_pending")):
+            _bad(lambda: crypto.open_token(old_format(payload), audience=audience, max_age=60))
+        assert not hasattr(crypto, "sign_token") and not hasattr(crypto, "unsign_token")
 
 
 # ── HTTP: feedback ────────────────────────────────────────────────────────
@@ -230,18 +225,12 @@ def test_feedback_jinja_flow():
         assert _post_feedback(client, token).status_code == 200
 
 
-def test_feedback_rejects_an_oauth_token_and_accepts_legacy_only_in_r8():
-    from services import feedback
-
+def test_feedback_rejects_an_oauth_token_and_an_old_format_token():
     with feedback_app() as client:
         oauth_tok = crypto.seal_token({"v": 1, "nonce": "x"}, audience="oauth_pending")
         assert _post_feedback(client, oauth_tok).status_code == 403
-        legacy = crypto.sign_token({"purpose": "feedback", "nonce": "legacy-1"})
-        assert _post_feedback(client, legacy).status_code == 200
-        feedback._rate_hits.clear()
-        legacy2 = crypto.sign_token({"purpose": "feedback", "nonce": "legacy-2"})
-        with r9():
-            assert _post_feedback(client, legacy2).status_code == 403
+        old = old_format({"purpose": "feedback", "nonce": "old-1"})
+        assert _post_feedback(client, old).status_code == 403
 
 
 # ── HTTP: OAuth consent ───────────────────────────────────────────────────
@@ -263,16 +252,10 @@ def test_oauth_consent_flow_and_cross_audience():
         fb = crypto.seal_token({"nonce": "n"}, audience="feedback")
         assert h.http.get("/oauth/consent", params={"request": fb}).status_code == 400
 
-        # A consent page opened before the deploy: its blob is in the old format.
-        from services import oauth_provider
-
+        # A consent page opened before R8: its blob is in the old format.
         request = crypto.open_token(blob, audience="oauth_pending", max_age=600)
         request.pop("aud")
-        legacy = crypto.sign_token(request)
-        assert oauth_provider.load_pending(legacy) is not None
-        assert h.http.get("/oauth/consent", params={"request": legacy}).status_code == 200
-        with r9():
-            assert h.http.get("/oauth/consent", params={"request": legacy}).status_code == 400
+        assert h.http.get("/oauth/consent", params={"request": old_format(request)}).status_code == 400
 
 
 if __name__ == "__main__":

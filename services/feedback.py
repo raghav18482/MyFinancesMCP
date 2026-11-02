@@ -38,8 +38,6 @@ PROJECT_URL = "agentfolio.in"
 _CLOSING_LINE = f"Manage your portfolio smartly → {PROJECT_URL}"
 
 _TOKEN_AUDIENCE = "feedback"
-#: The previous release's tokens carried this instead of an audience (R8 only).
-_LEGACY_PURPOSE = "feedback"
 _TOKEN_TTL_SEC = 600  # 10 minutes
 _RATE_LIMIT_MAX = 3  # max accepted submissions per IP per window
 _RATE_LIMIT_WINDOW_SEC = 600  # 10 minutes
@@ -160,10 +158,7 @@ def issue_feedback_token() -> str:
 def consume_feedback_token(token: str) -> None:
     """Validate and consume a feedback token. Raises :class:`FeedbackError`."""
     try:
-        payload = open_token(
-            token, audience=_TOKEN_AUDIENCE, max_age=_TOKEN_TTL_SEC,
-            legacy=lambda p: p.get("purpose") == _LEGACY_PURPOSE,
-        )
+        payload = open_token(token, audience=_TOKEN_AUDIENCE, max_age=_TOKEN_TTL_SEC)
     except Exception:
         raise FeedbackError("This form expired. Please refresh and try again.", 403)
 

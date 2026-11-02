@@ -254,18 +254,17 @@ def test_smartapi_and_logzero_are_imported_in_one_place():
 
 
 _TOKEN_FUNCS = {"seal_token", "open_token"}
-_DEPRECATED_TOKEN_FUNCS = {"sign_token", "unsign_token"}
+_REMOVED_TOKEN_FUNCS = {"sign_token", "unsign_token"}
 
 
 def test_tokens_are_sealed_in_two_places_only():
     """Token keys seal the feedback token and the pending OAuth request, nothing
-    else; the previous release's sign/unsign are called by no app code (R8)."""
+    else; the pre-R8 sign/unsign functions are gone (R9) and stay gone."""
     allowed = {"services/feedback.py", "services/oauth_provider.py"}
     offenders = []
     for path in _app_sources():
         rel = path.relative_to(_REPO).as_posix()
-        if rel == "db/crypto.py":
-            continue
+        crypto_module = rel == "db/crypto.py"
         for node in ast.walk(ast.parse(path.read_text())):
             names = []
             if isinstance(node, ast.ImportFrom):
@@ -274,10 +273,12 @@ def test_tokens_are_sealed_in_two_places_only():
                 names = [node.attr]
             elif isinstance(node, ast.Name):
                 names = [node.id]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = [node.name]
             for name in names:
-                if name in _DEPRECATED_TOKEN_FUNCS and rel != "db/__init__.py":
-                    offenders.append(f"{rel}:{node.lineno} uses deprecated {name}")
-                if name in _TOKEN_FUNCS and rel not in allowed:
+                if name in _REMOVED_TOKEN_FUNCS:
+                    offenders.append(f"{rel}:{node.lineno} uses removed {name}")
+                if name in _TOKEN_FUNCS and rel not in allowed and not crypto_module:
                     offenders.append(f"{rel}:{node.lineno} uses {name}")
     assert not offenders, offenders
 

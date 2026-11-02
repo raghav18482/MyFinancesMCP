@@ -4,13 +4,12 @@ Public surface kept tiny on purpose:
 - ``engine`` / ``get_session`` / ``init_db``
 - model classes (``User``, ``Schedule``, ``Log``)
 - ``encrypt_value`` / ``decrypt_value`` — reversible, for broker credentials
-- ``sign_token`` / ``unsign_token`` — deprecated (R8), removed in R9; tokens
-  are ``db.crypto.seal_token`` / ``open_token``
+- tokens: ``db.crypto.seal_token`` / ``open_token`` (their own key ring)
 - ``hash_password`` / ``verify_password`` — one-way, for the app's own login
 """
 from __future__ import annotations
 
-from .crypto import decrypt_value, encrypt_value, sign_token, unsign_token
+from .crypto import decrypt_value, encrypt_value
 from .engine import DATABASE_URL, engine, get_session, init_db
 from .models import ChatThread, Log, McpToken, RiskProfile, Schedule, User
 from .passwords import (
@@ -33,8 +32,6 @@ __all__ = [
     "McpToken",
     "encrypt_value",
     "decrypt_value",
-    "sign_token",
-    "unsign_token",
     "hash_password",
     "verify_password",
     "needs_rehash",
