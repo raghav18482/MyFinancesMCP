@@ -1,111 +1,80 @@
-"""DB helpers for the scheduler — the only place that uses ``FOR UPDATE SKIP LOCKED``.
+"""Schedule-level helpers left after the delivery ledger (R10) took over claims.
 
-Two short transactions:
+Claiming, sending and retrying now go through :mod:`services.schedular.ledger`.
+What remains here:
 
-- ``claim_due_schedules`` atomically picks rows that are due and flips their
-  ``status`` to ``running``. Postgres' ``SKIP LOCKED`` ensures no two workers
-  ever see the same row, so the rest of the pipeline can run lock-free.
-- ``finish_schedule`` records ``last_run`` / ``next_run`` and resets ``status``.
+- :func:`reclaim_expired`: schedules the R5 scheduler marked ``running`` and
+  never finished (a crash, or the deploy that replaced it). They are marked
+  ``unknown`` and moved to their next slot; the stuck slot is never resent.
+  R10 itself never sets ``running``.
+- :func:`next_slot`: the Python twin of the slot anchoring the claim SQL uses.
 
-The module talks raw SQL (via the shared SQLModel ``engine``) on purpose:
-SQLModel's ORM does not expose ``FOR UPDATE SKIP LOCKED`` cleanly, and keeping
-the lock window to a single short statement is the whole point.
+PostgreSQL only (``clock_timestamp()``).
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import math
 from datetime import datetime, timedelta
 
 from sqlalchemy import text
 
 from db import engine
-from db.models import utcnow
 
 logger = logging.getLogger(__name__)
 
+#: Rows claimed by code that set no lease are reclaimed this long after their slot.
+LEGACY_RECLAIM_AFTER_HOURS = 6
 
-@dataclass(frozen=True)
-class ClaimedSchedule:
-    """A schedule row already flipped to ``status='running'``."""
-
-    id: int
-    user_id: int
-    kind: str
-    interval_minutes: int
-    next_run: datetime
-
-
-_CLAIM_SQL = text(
-    """
-    SELECT id, user_id, kind, interval_minutes, next_run
-      FROM schedules
-     WHERE enabled = true
-       AND status IN ('pending', 'done', 'failed')
-       AND next_run <= now()
-     ORDER BY next_run
-     FOR UPDATE SKIP LOCKED
-     LIMIT :batch
-    """
+# The next slot after the current time, anchored on the schedule's own slot
+# time (not on when the run finished), so a briefing set for 08:30 stays at 08:30.
+_ANCHORED_NEXT_RUN = (
+    "next_run + GREATEST(1, FLOOR(EXTRACT(EPOCH FROM (clock_timestamp() - next_run)) "
+    "/ (interval_minutes * 60))::int + 1) * make_interval(mins => interval_minutes)"
 )
 
-_MARK_RUNNING_SQL = text(
-    "UPDATE schedules SET status = 'running' WHERE id = ANY(:ids)"
-)
-
-_FINISH_SQL = text(
-    """
+_RECLAIM_SQL = text(
+    f"""
     UPDATE schedules
-       SET status = :st,
-           last_run = now(),
-           next_run = :nr
-     WHERE id = :id
+       SET status = 'unknown',
+           next_run = {_ANCHORED_NEXT_RUN},
+           claim_token = NULL,
+           lease_expires_at = NULL
+     WHERE status = 'running'
+       AND (lease_expires_at <= clock_timestamp()
+            OR (lease_expires_at IS NULL
+                AND next_run < clock_timestamp() - make_interval(hours => :legacy_hours)))
+    RETURNING id, user_id
     """
 )
 
+_RECLAIM_LOG_SQL = text(
+    "INSERT INTO logs (user_id, schedule_id, status, message, created_at) "
+    "VALUES (:uid, :sid, 'unknown', :msg, clock_timestamp())"
+)
 
-def claim_due_schedules(batch: int = 25) -> list[ClaimedSchedule]:
-    """Atomically claim up to ``batch`` due schedules under a row-level lock.
 
-    Returns the rows that this caller now owns (their ``status`` has been
-    flipped to ``running`` in the same transaction). An empty list means
-    nothing is due, or another worker already has the only due rows locked.
+def reclaim_expired(*, bind=None) -> list[tuple[int, int]]:
+    """Give up on schedule runs left ``running`` by older code: ``unknown``, never resent.
+
+    Each moves to its next slot and gets a log row. Covers rows whose R5 lease
+    lapsed, and rows from before R5 (no lease) once well past their slot.
     """
-    with engine.begin() as conn:
-        rows = conn.execute(_CLAIM_SQL, {"batch": batch}).all()
-        if not rows:
-            return []
-        ids = [int(r.id) for r in rows]
-        conn.execute(_MARK_RUNNING_SQL, {"ids": ids})
-        return [
-            ClaimedSchedule(
-                id=int(r.id),
-                user_id=int(r.user_id),
-                kind=str(r.kind),
-                interval_minutes=int(r.interval_minutes),
-                next_run=r.next_run,
-            )
-            for r in rows
-        ]
+    target = bind if bind is not None else engine
+    with target.begin() as conn:
+        rows = conn.execute(_RECLAIM_SQL, {"legacy_hours": LEGACY_RECLAIM_AFTER_HOURS}).all()
+        for row in rows:
+            conn.execute(_RECLAIM_LOG_SQL, {
+                "uid": row.user_id, "sid": row.id,
+                "msg": "reclaimed: the run did not finish; outcome unknown, not resent",
+            })
+    for row in rows:
+        logger.warning("schedule %s reclaimed as unknown (user_id=%s)", row.id, row.user_id)
+    return [(int(r.id), int(r.user_id)) for r in rows]
 
 
-def finish_schedule(
-    schedule_id: int,
-    *,
-    success: bool,
-    interval_minutes: int,
-) -> None:
-    """Record the result of a run and arm the schedule for its next tick."""
-    new_status = "done" if success else "failed"
-    next_run = utcnow() + timedelta(minutes=interval_minutes)
-    with engine.begin() as conn:
-        conn.execute(
-            _FINISH_SQL,
-            {"st": new_status, "nr": next_run, "id": schedule_id},
-        )
-    logger.info(
-        "schedule %s -> %s, next_run=%s",
-        schedule_id,
-        new_status,
-        next_run.isoformat(timespec="seconds"),
-    )
+def next_slot(scheduled: datetime, interval_minutes: int, now: datetime) -> datetime:
+    """Python twin of the SQL anchoring: the first ``scheduled + k*interval`` after ``now``."""
+    step = timedelta(minutes=interval_minutes)
+    k = max(1, math.floor((now - scheduled) / step) + 1)
+    return scheduled + k * step

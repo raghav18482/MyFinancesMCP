@@ -18,6 +18,8 @@ import os
 import sys
 import threading
 
+from cryptography.fernet import Fernet
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _security_harness import PASSWORD, USERS, FakeBroker, harness, run_all  # noqa: E402
@@ -108,6 +110,25 @@ def test_briefing_schedules_and_logs_are_private():
         assert b.get("/api/briefing/schedule").json()["exists"] is False
     print("ok  briefing schedules and logs are per user")
 
+
+def test_manual_send_is_rate_limited_per_user():
+    from unittest import mock
+
+    import web.routers.briefing as briefing
+
+    started = []
+
+    async def fake_run(claim):
+        started.append((claim.user_id, claim.kind))
+
+    with harness() as h, mock.patch.object(briefing, "_run_briefing_now_bg", fake_run):
+        a, b = h.login("A"), h.login("B")
+        assert a.post("/api/briefing/send-now").status_code == 200
+        second = a.post("/api/briefing/send-now")
+        assert second.status_code == 429, second.text
+        assert b.post("/api/briefing/send-now").status_code == 200, "cooldowns are per user"
+    assert started == [(h.ids["A"], "manual"), (h.ids["B"], "manual")], started
+    print("ok  manual send-now: one per cooldown per user, a second gets 429")
 
 def test_holdings_positions_and_analytics_are_per_user():
     import services.portfolio_service as portfolio_service
@@ -282,8 +303,9 @@ def test_production_refuses_insecure_configuration():
     from web.app import create_app
 
     keys = ("APP_ENV", "SESSION_SECRET", "ALLOWED_HOSTS", "PUBLIC_BASE_URL", "ENCRYPTION_KEY",
-            "SESSION_COOKIE_SECURE", "RENDER")
+            "SESSION_COOKIE_SECURE", "RENDER", "TOKEN_KEYS")
     saved = {k: os.environ.get(k) for k in keys}
+    token_keys = "t1:" + Fernet.generate_key().decode()
 
     def setenv(**kv):
         for k in keys:
@@ -291,6 +313,7 @@ def test_production_refuses_insecure_configuration():
         for k, v in saved.items():
             if k == "ENCRYPTION_KEY" and v:
                 os.environ[k] = v
+        os.environ["TOKEN_KEYS"] = token_keys
         os.environ.update({k: v for k, v in kv.items() if v is not None})
 
     try:
@@ -353,14 +376,21 @@ def test_admin_key_check_is_constant_time():
 
     src = inspect.getsource(admin_router.check_admin_key)
     assert "compare_digest" in src and "!=" not in src
+    from fastapi.testclient import TestClient
+
+    from adminApi.guard import guard
+
+    key = "the-real-admin-key-0123456789abcdef"  # admin keys need 32+ characters
     prior = os.environ.get("ADMIN_API_KEY")
-    os.environ["ADMIN_API_KEY"] = "the-real-admin-key-123456"
+    os.environ["ADMIN_API_KEY"] = key
+    guard.reset()
     try:
         with harness() as h:
-            c = h.client()
+            # The admin API only answers from inside the instance (loopback).
+            c = TestClient(h.app, base_url="https://testserver", client=("127.0.0.1", 50000))
             assert c.get("/api/admin/users", headers={"X-Admin-Key": "wrong"}).status_code == 401
             assert c.get("/api/admin/users").status_code == 422
-            ok = c.get("/api/admin/users", headers={"X-Admin-Key": "the-real-admin-key-123456"})
+            ok = c.get("/api/admin/users", headers={"X-Admin-Key": key})
             assert ok.status_code == 200
             assert "angel_password" not in ok.text and USERS["A"]["pin"] not in ok.text
     finally:

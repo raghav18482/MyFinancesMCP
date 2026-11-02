@@ -241,7 +241,7 @@ async def generate_daily_briefing(
             "Call sessions.create_session(...) first."
         )
 
-    records = _holdings_records(client)
+    records = await asyncio.to_thread(_holdings_records, client)  # a blocking broker call
     if not records:
         logger.info("briefing: no holdings for session %s", session_id[:8])
         return "Daily portfolio brief — no holdings found. Not financial advice."
@@ -329,11 +329,13 @@ def _bootstrap_angel_session_from_env(session_id: str) -> None:
 if __name__ == "__main__":
     import sys as _sys
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
+    from services.logging_config import configure_logging
+
+    configure_logging(fmt="%(asctime)s %(levelname)s %(name)s | %(message)s")
 
     # Optional: pass a phone number as the first CLI argument to also send via WhatsApp.
     # Usage:  python -m services.schedular.daily_briefing [phone]
-    # e.g.:   python -m services.schedular.daily_briefing 8107037133
+    # e.g.:   python -m services.schedular.daily_briefing 0000000000
     _phone: str | None = _sys.argv[1] if len(_sys.argv) > 1 else None
 
     async def _run() -> None:
@@ -344,9 +346,11 @@ if __name__ == "__main__":
         print(message)
         print("=" * 60)
         if _phone:
-            from services.schedular.whatsapp import send as _wa_send
-            print(f"\nSending to {_phone} via WhatsApp...")
-            await _wa_send(_phone, message)
-            print("WhatsApp message sent.")
+            from services.schedular.briefing_delivery import cli_claim, send_briefing
+
+            claim = cli_claim()  # refused in production
+            print("\nSending via WhatsApp...")
+            result = await send_briefing(claim, _phone, message)
+            print(f"WhatsApp: {result.outcome} ({result.reason})")
 
     asyncio.run(_run())

@@ -247,9 +247,9 @@ class _FeedConnection:
                 backoff = min(backoff * 2, 60.0)
 
     def _connect_and_listen(self) -> None:
-        from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+        from integrations.smartapi import new_websocket
 
-        ws = SmartWebSocketV2(
+        ws = new_websocket(
             self._auth_token,
             self._api_key,
             self._client_code,

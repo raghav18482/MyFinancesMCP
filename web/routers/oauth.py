@@ -38,7 +38,7 @@ from services import login_throttle
 from services import oauth_provider as oauth
 from services.account_deletion import password_matches, user_by_number
 from web import country_codes, security_config
-from web.dependencies import client_ip, current_user
+from web.dependencies import broker_client, client_ip, current_user, trusted_ip
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ async def oauth_consent_submit(
     except ValueError as e:
         return again(str(e), 400)
 
-    ip = client_ip(request)
+    ip = trusted_ip(request)
     try:
         login_throttle.check(number, ip)
     except login_throttle.TooManyAttempts as e:
@@ -205,6 +205,7 @@ async def oauth_consent_submit(
 
 @router.get("/api/oauth/connections")
 async def api_oauth_connections(request: Request):
+    await broker_client(request)  # resolve the session off the event loop
     user = current_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
@@ -213,6 +214,7 @@ async def api_oauth_connections(request: Request):
 
 @router.delete("/api/oauth/connections/{grant_id}")
 async def api_oauth_connection_revoke(request: Request, grant_id: int):
+    await broker_client(request)  # resolve the session off the event loop
     user = current_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)

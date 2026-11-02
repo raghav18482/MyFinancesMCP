@@ -10,14 +10,9 @@ from fastapi.responses import JSONResponse
 from sqlmodel import select
 
 from db import get_session
-from db.models import Log, Schedule, User
-
-from services.realtime_feed import feed_relay
-
-from session_manager import sessions
-
+from db.models import Log, Schedule
 from web.dependencies import (
-    current_client,
+    broker_client,
     current_user,
 )
 
@@ -42,7 +37,7 @@ def _next_run_utc_from_ist(time_ist: str) -> datetime:
     Timezone-aware on purpose. The ``schedules.next_run`` column rejects naive
     values ("Datetime values must have timezone information"), so returning a
     naive one made every schedule save fail with a 500. The scheduler's own
-    writer, ``repository.finish_schedule``, already stores aware UTC.
+    writer, the delivery ledger's claim, already stores aware UTC.
     """
     hour, minute = map(int, time_ist.split(":"))
     now_utc = datetime.now(timezone.utc)
@@ -79,7 +74,7 @@ def _schedule_to_dict(s: Schedule) -> dict:
 
 @router.get("/api/briefing/schedule")
 async def api_briefing_schedule_get(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -94,7 +89,7 @@ async def api_briefing_schedule_get(request: Request):
 
 @router.post("/api/briefing/schedule")
 async def api_briefing_schedule_save(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -140,7 +135,7 @@ async def api_briefing_schedule_save(request: Request):
 
 @router.delete("/api/briefing/schedule")
 async def api_briefing_schedule_delete(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
@@ -162,73 +157,48 @@ async def api_briefing_schedule_delete(request: Request):
 
 
 
-async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
-    """Background task: full briefing pipeline without touching next_run."""
-    import time as _time
-    from uuid import uuid4 as _uuid4
-    from db import decrypt_value as _dec
-    from services.schedular.daily_briefing import generate_daily_briefing as _brief
-    from services.schedular.whatsapp import send as _wa
+def _start_manual_send(user_id: int):
+    from services.schedular.briefing_delivery import start_manual_send
 
-    started = _time.perf_counter()
-    sid = f"manual-{user_id}-{_uuid4().hex[:8]}"
-    try:
-        with get_session() as db:
-            user = db.get(User, user_id)
-            if not user or not user.is_active:
-                return
-            api_key = user.angel_api_key
-            client_id = user.angel_client_id
-            pw = _dec(user.angel_password_encrypted)
-            totp = _dec(user.angel_totp_secret_encrypted)
+    with get_session() as db:
+        return start_manual_send(user_id, bind=db.get_bind())
 
-        sessions.create_session(sid, api_key, client_id, pw, totp)
-        message = await _brief(sid)
-        await _wa(phone, message)
-        duration_ms = int((_time.perf_counter() - started) * 1000)
-        with get_session() as db:
-            db.add(Log(
-                user_id=user_id,
-                status="success",
-                message=f"manual send · {len(message)} chars to {phone or '<unset>'}",
-                duration_ms=duration_ms,
-            ))
-            db.commit()
-    except Exception:
-        duration_ms = int((_time.perf_counter() - started) * 1000)
-        logger.exception("manual briefing send failed for user %s", user_id)
-        try:
-            with get_session() as db:
-                db.add(Log(user_id=user_id, status="failed",
-                           message="manual send error", duration_ms=duration_ms))
-                db.commit()
-        except Exception:
-            pass
-    finally:
-        try:
-            feed_relay.stop_feed(sid)
-            sessions.remove_session(sid)
-        except Exception:
-            pass
+
+async def _run_briefing_now_bg(claim) -> None:
+    """Background task: the same pipeline as a scheduled slot, for a manual claim.
+
+    ``claim`` is a ``pending`` ledger row created with the atomic cooldown
+    (:func:`_start_manual_send`); it allows one send attempt, and neither an
+    unknown nor a not-sent outcome is retried.
+    """
+    from services.schedular import job_executor
+
+    await job_executor.run_one(claim)
 
 
 
 @router.post("/api/briefing/send-now")
 async def api_briefing_send_now(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered for premium"}, status_code=403)
-    asyncio.create_task(_run_briefing_now_bg(user.id, user.whatsapp_number))
+    claim = await asyncio.to_thread(_start_manual_send, user.id)
+    if claim is None:
+        return JSONResponse(
+            {"error": "A briefing was sent recently. Please wait a few minutes before sending another."},
+            status_code=429,
+        )
+    asyncio.create_task(_run_briefing_now_bg(claim))
     return JSONResponse({"ok": True, "message": "Briefing started — check WhatsApp in ~30s"})
 
 
 
 @router.get("/api/briefing/logs")
 async def api_briefing_logs(request: Request):
-    client = current_client(request)
+    client = await broker_client(request)
     if not client:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)

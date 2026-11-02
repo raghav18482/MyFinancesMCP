@@ -53,9 +53,8 @@ class UserAlreadyExists(UserServiceError):
     """An active row already exists for this ``angel_client_id``."""
 
     def __init__(self, angel_client_id: str, user_id: int) -> None:
-        super().__init__(
-            f"User with angel_client_id '{angel_client_id}' already exists (id={user_id})."
-        )
+        # Neutral text: this message reaches HTTP clients (the admin API's 409).
+        super().__init__("A user with that Angel One client id already exists.")
         self.angel_client_id = angel_client_id
         self.user_id = user_id
 
@@ -71,14 +70,18 @@ class UserNotFound(UserServiceError):
 def public_view(user: User) -> dict[str, Any]:
     """Secret-free projection of a ``users`` row.
 
-    Never add ``angel_password_encrypted``, ``angel_totp_secret_encrypted`` or
-    ``angel_access_token`` here — every caller returns this straight to a client.
+    Never add ``angel_api_key``, ``angel_password_encrypted``,
+    ``angel_totp_secret_encrypted`` or ``angel_access_token`` here: every caller
+    returns this straight to a client. (The API key is stored in plain text, so
+    it must never leave the server.)
     """
     return {
         "id": user.id,
         "whatsapp_number": user.whatsapp_number,
-        "angel_api_key": user.angel_api_key,
         "angel_client_id": user.angel_client_id,
+        "has_broker_credentials": bool(
+            user.angel_api_key and user.angel_password_encrypted and user.angel_totp_secret_encrypted
+        ),
         "is_active": user.is_active,
         "created_at": user.created_at,
         "updated_at": user.updated_at,

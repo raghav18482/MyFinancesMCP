@@ -227,14 +227,17 @@ def harness(*, app_factory=None):
     sessions._sessions.clear()
     sessions._created_at.clear()
     sessions._key_locks.clear()
+    sessions._pending_release.clear()
     FakeBroker.logins.clear()
     FakeBroker.login_delay = 0.0
     login_throttle._by_identifier.clear()
+    login_throttle._by_global.clear()
     login_throttle._by_ip.clear()
     mcp_tokens.reset_rate_limits()
     oauth_provider.reset_rate_limits()
     import web.dependencies as deps
-    deps._recent_rebuilds.clear()
+    from web import broker_sessions
+    broker_sessions.reset_for_tests()
 
     try:
         for key, u in USERS.items():

@@ -355,8 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--notes", default="")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    from services.logging_config import configure_logging
+
+    configure_logging(fmt="%(asctime)s [%(levelname)s] %(message)s")
 
     universe = load_universe()
     symbols = args.symbols or universe["symbol"].tolist()

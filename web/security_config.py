@@ -106,5 +106,118 @@ def validate_production_config() -> None:
     public_base_url()
     if not os.environ.get("ENCRYPTION_KEY", "").strip():
         raise InsecureConfiguration("ENCRYPTION_KEY must be set in production")
+    from db.crypto import KeyConfigError, validate_key_config
+
+    try:
+        validate_key_config(production=True)
+    except KeyConfigError as e:
+        raise InsecureConfiguration(str(e)) from None
+    from web import client_ip
+
+    try:
+        client_ip.validate_config(production=True)
+    except ValueError as e:
+        raise InsecureConfiguration(str(e)) from None
     if not os.environ.get("ADMIN_API_KEY", "").strip():
         logger.warning("ADMIN_API_KEY is not set; the admin API refuses every request")
+
+
+# ── Admin API ─────────────────────────────────────────────────────────────
+
+MIN_ADMIN_KEY_CHARS = 32
+_LOOPBACK = ("127.0.0.1", "::1")
+_FORWARDING_HEADERS = ("x-forwarded-for", "forwarded", "x-real-ip")
+
+
+def admin_api_enabled() -> bool:
+    """Whether ``/api/admin/*`` is mounted: always locally, opt-in in production."""
+    if not is_production():
+        return True
+    return os.environ.get("ADMIN_API_ENABLED", "").strip() == "1"
+
+
+def admin_key_status() -> str:
+    """``ok``, ``missing`` or ``too_short``. Never the key or its length."""
+    key = os.environ.get("ADMIN_API_KEY", "").strip()
+    if not key:
+        return "missing"
+    if len(key) < MIN_ADMIN_KEY_CHARS:
+        return "too_short"
+    return "ok"
+
+
+def admin_key_usable() -> bool:
+    return admin_key_status() == "ok"
+
+
+def admin_allowed_networks() -> list:
+    """``ADMIN_ALLOWED_SOURCES`` as networks; invalid entries are dropped and logged."""
+    import ipaddress
+
+    networks = []
+    for raw in (os.environ.get("ADMIN_ALLOWED_SOURCES") or "").split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            logger.error("ADMIN_ALLOWED_SOURCES entry %r is not a network; ignored", raw)
+    return networks
+
+
+def admin_remote_status() -> str:
+    """``off``, ``on``, or ``misconfigured`` (remote asked for without what it needs)."""
+    from web.client_ip import current_mode
+
+    if os.environ.get("ADMIN_ALLOW_REMOTE", "").strip() != "1":
+        return "off"
+    if not admin_allowed_networks() or current_mode() == "shadow":
+        return "misconfigured"
+    return "on"
+
+
+def admin_request_source(request) -> str | None:
+    """Where an admin request came from, or ``None`` if that source is not allowed.
+
+    Allowed by default only from inside the instance (Render Shell: a loopback
+    peer with no forwarding headers, which public traffic through Render's
+    proxy can never have). Remote access additionally needs
+    ``ADMIN_ALLOW_REMOTE=1``, an ``ADMIN_ALLOWED_SOURCES`` allowlist, and a
+    *verified* client IP (``web.client_ip``) inside it. A forgeable header
+    never decides.
+    """
+    import ipaddress
+
+    from web.client_ip import trusted_client_ip
+
+    peer = request.client.host if request.client else None
+    forwarded = any(request.headers.get(h) for h in _FORWARDING_HEADERS)
+    if peer in _LOOPBACK and not forwarded:
+        return "loopback"
+    if admin_remote_status() != "on":
+        return None
+    ip = trusted_client_ip(request.headers, peer)
+    if ip is None:
+        return None
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if any(addr in net for net in admin_allowed_networks()):
+        return ip
+    return None
+
+
+def log_admin_status() -> None:
+    """One startup line. Says nothing about the key except whether it is usable."""
+    remote = admin_remote_status()
+    logger.info(
+        "ADMIN_API status=%s key=%s remote=%s",
+        "enabled" if admin_api_enabled() else "disabled", admin_key_status(), remote,
+    )
+    if remote == "misconfigured":
+        logger.error(
+            "ADMIN_REMOTE_MISCONFIGURED: ADMIN_ALLOW_REMOTE=1 needs ADMIN_ALLOWED_SOURCES and a "
+            "verified CLIENT_IP_MODE; remote admin access stays off"
+        )

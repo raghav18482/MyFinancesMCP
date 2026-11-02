@@ -22,7 +22,7 @@ from services.portfolio_service import build_portfolio_data, compute_beta, get_p
 
 
 from web.dependencies import (
-    require_login,
+    broker_client,
     session_id,
 )
 from web.view_models import order_rows, position_rows, trade_rows
@@ -38,7 +38,7 @@ router = APIRouter()
 
 @router.get("/api/portfolio/analytics")
 async def api_portfolio_analytics(request: Request):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     sid = session_id(request)
@@ -56,7 +56,7 @@ async def api_portfolio_analytics(request: Request):
 
 async def _broker_rows(request: Request, fetch, to_rows, label: str):
     """Rows from one broker call, or the error response to send instead."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
@@ -102,7 +102,7 @@ async def api_portfolio_candles(
     interval: str = Query("ONE_DAY"),
     days: int = Query(90),
 ):
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -140,7 +140,7 @@ async def api_portfolio_predict(
     days: int = Query(365),
 ):
     """Predict price direction for a stock across multiple timeframes (up to 1 year)."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
@@ -181,7 +181,7 @@ async def api_portfolio_predict(
 @router.get("/api/portfolio/beta")
 async def api_portfolio_beta(request: Request, days: int = Query(90)):
     """Compute portfolio beta vs NIFTY 50 using daily returns."""
-    client = require_login(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 

@@ -158,6 +158,7 @@ def harness():
     patch(sessions, "get_client", live.get)
     patch(sessions, "remove_session", lambda sid: live.pop(sid, None))
     login_throttle._by_identifier.clear()
+    login_throttle._by_global.clear()
     login_throttle._by_ip.clear()
 
     try:
@@ -370,7 +371,8 @@ def test_form_enroll_still_redirects_and_re_renders_on_failure():
                                follow_redirects=False)
         assert mismatch.status_code == 200
         assert "The two passwords do not match." in mismatch.text
-        assert "APIKEY123" in mismatch.text, "non-secret fields should be echoed back"
+        assert "AB1234" in mismatch.text, "the client id is echoed back"
+        assert "APIKEY123" not in mismatch.text, "the API key is a credential and is never echoed"
 
         ok = h.http.post("/enroll", data=ENROLL, follow_redirects=False)
         assert ok.status_code == 302 and ok.headers["location"] == "/dashboard"

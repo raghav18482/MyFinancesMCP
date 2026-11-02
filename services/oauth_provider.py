@@ -15,8 +15,9 @@ The flow:
    ``OAUTH_EXTRA_REDIRECT_URIS``.
 2. ``/oauth/authorize`` validates the request (client, exact redirect URI,
    scope, PKCE S256, resource) and hands the browser to ``/oauth/consent`` with
-   the request sealed in a Fernet token, so nothing is stored for abandoned
-   attempts and nothing in it can be altered.
+   the request sealed in a token (``db.crypto.seal_token``, audience
+   ``oauth_pending``), so nothing is stored for abandoned attempts and nothing
+   in it can be altered.
 3. The user signs in there with their WhatsApp number and app password (the
    same check, and the same throttle, as the web login) and approves
    read-only access. That issues a single-use code that lives five minutes.
@@ -87,7 +88,8 @@ from mcp.shared.auth import (
     ProtectedResourceMetadata,
 )
 
-from db import get_session, sign_token, unsign_token
+from db import get_session
+from db.crypto import open_token, seal_token
 from db.models import OAuthAuthCode, OAuthClient, OAuthGrant, User, utcnow
 from db.models import OAuthToken as OAuthTokenRow
 from services import mcp_tokens
@@ -114,6 +116,7 @@ CODE_TTL_SEC = 5 * 60
 ACCESS_TTL_SEC = 60 * 60
 REFRESH_TTL_SEC = 30 * 24 * 3600
 PENDING_TTL_SEC = 10 * 60
+PENDING_AUDIENCE = "oauth_pending"
 REFRESH_REUSE_GRACE_SEC = 30
 MAX_ACTIVE_GRANTS_PER_USER = 20
 
@@ -132,6 +135,7 @@ _REGISTER_WINDOW_SEC = 60 * 60
 _MAX_REGISTER_PER_IP = 300
 _register_lock = threading.Lock()
 _register_by_ip: dict[str, list[float]] = {}
+_MAX_REGISTER_KEYS = 10_000
 
 
 # ── Configuration ──────────────────────────────────────────────────────────
@@ -260,6 +264,13 @@ def check_registration_rate(client_ip: str) -> Optional[int]:
             return int(_REGISTER_WINDOW_SEC - (now - hits[0])) + 1
         hits.append(now)
         _register_by_ip[client_ip] = hits
+        # Keyed on a forgeable address, so bound it: drop idle keys, then the oldest.
+        if len(_register_by_ip) > _MAX_REGISTER_KEYS:
+            for ip in [k for k, v in _register_by_ip.items()
+                       if not v or now - v[-1] >= _REGISTER_WINDOW_SEC]:
+                del _register_by_ip[ip]
+            for ip in list(_register_by_ip)[:max(0, len(_register_by_ip) - _MAX_REGISTER_KEYS)]:
+                del _register_by_ip[ip]
         return None
 
 
@@ -637,7 +648,7 @@ def load_pending(blob: str) -> Optional[PendingAuthorization]:
     redirect URI is no longer registered.
     """
     try:
-        data = unsign_token(blob or "", PENDING_TTL_SEC)
+        data = open_token(blob or "", audience=PENDING_AUDIENCE, max_age=PENDING_TTL_SEC)
     except Exception:
         return None
     if data.get("v") != 1:
@@ -779,7 +790,7 @@ class McpOAuthProvider:
         scopes = params.scopes or [SCOPE]
         if any(s not in SUPPORTED_SCOPES for s in scopes):
             raise AuthorizeError("invalid_scope", f"Only {SCOPE} is available")
-        blob = sign_token({
+        blob = seal_token({
             "v": 1,
             "cid": client.client_id,
             "ru": str(params.redirect_uri),
@@ -788,7 +799,7 @@ class McpOAuthProvider:
             "st": params.state,
             "sc": sorted(set(scopes)),
             "rs": urls.resource,
-        })
+        }, audience=PENDING_AUDIENCE)
         return urls.endpoint(CONSENT_PATH) + "?" + urlencode({"request": blob})
 
     async def load_authorization_code(

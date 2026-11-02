@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from services import account_deletion, login_throttle
 from web import auth_flow, country_codes
-from web.dependencies import client_ip, current_client, current_user
+from web.dependencies import broker_client, current_user, sign_out_everywhere, trusted_ip
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ async def api_account_delete(request: Request):
     A wrong password is a 400 naming the field, not a 401: the session is
     still valid, and a 401 would sign the app out.
     """
-    client = current_client(request)
+    client = await broker_client(request)
     if client is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
@@ -55,7 +55,7 @@ async def api_account_delete(request: Request):
         )
 
     identifier = f"delete:{user.id}"
-    ip = client_ip(request)
+    ip = trusted_ip(request)
     try:
         login_throttle.check(identifier, ip)
     except login_throttle.TooManyAttempts as e:
@@ -70,6 +70,9 @@ async def api_account_delete(request: Request):
         return JSONResponse({"error": _WRONG_PASSWORD, "field": "app_password"}, status_code=400)
 
     login_throttle.clear(identifier, ip)
+    # While the row still exists: drop this account's broker sessions on every
+    # device. After deletion there is nothing left to look them up by.
+    sign_out_everywhere(request, user.id)
     report = account_deletion.delete_user(user.id)
     await account_deletion.delete_conversations(report)
     auth_flow.logout(request)
@@ -139,7 +142,7 @@ async def delete_account_form(
     except ValueError as e:
         return answer(error=str(e), status=400)
 
-    ip = client_ip(request)
+    ip = trusted_ip(request)
     try:
         login_throttle.check(number, ip)
     except login_throttle.TooManyAttempts as e:
@@ -151,6 +154,7 @@ async def delete_account_form(
         return answer(error="That WhatsApp number and password don't match.", status=400)
 
     login_throttle.clear(number, ip)
+    sign_out_everywhere(request, user.id)
     report = account_deletion.delete_user(user.id)
     await account_deletion.delete_conversations(report)
     return answer(done=True)

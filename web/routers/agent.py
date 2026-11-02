@@ -20,9 +20,9 @@ from services.adk_runner_registry import app_name_for, registry
 
 from db.models import utcnow
 from web.dependencies import (
+    broker_client,
     ADK_CHAT_SESSION_KEY,
     ADK_TRADING_CHAT_SESSION_KEY,
-    current_client,
     ensure_adk_chat_session_id,
     premium_user,
     session_id,
@@ -85,7 +85,7 @@ def _touch_thread(thread_id: int, first_message: str) -> None:
 @router.get("/api/agent/threads")
 async def api_agent_threads_list(request: Request, agent_type: str = Query("")):
     """List the current premium user's conversations for the sidebar."""
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = premium_user(request)
     if not user:
@@ -106,7 +106,7 @@ async def api_agent_threads_list(request: Request, agent_type: str = Query("")):
 @router.post("/api/agent/threads")
 async def api_agent_threads_create(request: Request):
     """Create a fresh conversation thread for a premium user."""
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = premium_user(request)
     if not user:
@@ -136,7 +136,7 @@ async def api_agent_threads_create(request: Request):
 @router.get("/api/agent/threads/{thread_id}/messages")
 async def api_agent_thread_messages(request: Request, thread_id: int):
     """Return the persisted {role, text} messages for one conversation."""
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = premium_user(request)
     if not user:
@@ -163,7 +163,7 @@ async def api_agent_thread_messages(request: Request, thread_id: int):
 @router.patch("/api/agent/threads/{thread_id}")
 async def api_agent_thread_rename(request: Request, thread_id: int):
     """Rename a conversation thread."""
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = premium_user(request)
     if not user:
@@ -191,7 +191,7 @@ async def api_agent_thread_rename(request: Request, thread_id: int):
 @router.delete("/api/agent/threads/{thread_id}")
 async def api_agent_thread_delete(request: Request, thread_id: int):
     """Delete a conversation thread and its persisted ADK session."""
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = premium_user(request)
     if not user:
@@ -223,7 +223,7 @@ async def api_agent_chat(request: Request):
     Premium users that pass a ``thread_id`` get a DB-persisted conversation;
     everyone else falls back to the cookie-scoped ephemeral session.
     """
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     sid = session_id(request)
     if not sid:
@@ -293,7 +293,7 @@ async def api_agent_chat(request: Request):
 @router.post("/api/agent/new-chat")
 async def api_agent_new_chat(request: Request):
     """Start a fresh ADK thread (new id in the signed session cookie)."""
-    if current_client(request) is None:
+    if await broker_client(request) is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:

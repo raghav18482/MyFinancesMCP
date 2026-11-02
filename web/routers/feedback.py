@@ -39,16 +39,24 @@ async def api_feedback_token():
         return JSONResponse(
             {"error": "Feedback is unavailable right now."}, status_code=503
         )
-    return JSONResponse({"token": token}, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        {"token": token, "whatsapp_reply": feedback_service.reply_enabled()},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 
 @router.post("/api/feedback")
 async def api_feedback(request: Request):
-    """Public landing-page feedback → AI reply → WhatsApp.
+    """Public landing-page feedback.
 
     Guarded by an ENCRYPTION_KEY-signed, single-use, short-lived token issued at
     landing render time, plus per-IP rate limiting.
+
+    With ``FEEDBACK_WHATSAPP_REPLY=1`` the feedback gets an AI reply on the
+    sender's WhatsApp. Otherwise (the default, everywhere) it is stored and
+    nothing else happens: no phone number is read, no LLM is called, and no
+    message is sent. See ``services.feedback.reply_enabled``.
     """
     try:
         body = await request.json()
@@ -60,9 +68,7 @@ async def api_feedback(request: Request):
         return JSONResponse({"ok": True, "message": "Thanks for your feedback!"})
 
     token = (body.get("token") or "").strip()
-    phone = (body.get("phone") or "").strip()
     feedback = (body.get("feedback") or "").strip()
-    name = (body.get("name") or "").strip() or None
 
     try:
         feedback_service.consume_feedback_token(token)
@@ -75,6 +81,24 @@ async def api_feedback(request: Request):
     if len(feedback) > feedback_service._MAX_FEEDBACK_CHARS:
         return JSONResponse({"error": "Feedback is too long."}, status_code=400)
 
+    if not feedback_service.reply_enabled():
+        try:
+            feedback_service.check_global_cap()
+            feedback_service.store_submission(feedback, body.get("channel"))
+        except feedback_service.FeedbackError as e:
+            return JSONResponse({"error": e.message}, status_code=e.status_code)
+        except Exception:
+            logger.exception("Storing feedback failed")
+            return JSONResponse(
+                {"error": "Could not save your feedback right now. Please try again later."},
+                status_code=503,
+            )
+        return JSONResponse({"ok": True, "message": "Thanks — we've received your feedback."})
+
+    # Reply mode (explicitly enabled). The phone number and name are read only here.
+    phone = (body.get("phone") or "").strip()
+    name = (body.get("name") or "").strip() or None
+
     try:
         normalised_phone = whatsapp._normalise_phone(phone)
     except ValueError:
@@ -84,7 +108,9 @@ async def api_feedback(request: Request):
 
     try:
         reply = await feedback_service.generate_reply(feedback, name)
-        await whatsapp.send(normalised_phone, reply)
+        # Not a briefing, so not through briefing_delivery; one attempt per
+        # submission, and an unknown outcome is never retried.
+        await whatsapp._post(normalised_phone, reply)
     except Exception:
         logger.exception("Feedback WhatsApp send failed")
         return JSONResponse(

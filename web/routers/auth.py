@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from db.passwords import MIN_PASSWORD_CHARS
 from services import feedback as feedback_service
 from web import auth_flow, country_codes
-from web.dependencies import current_client, template_context
+from web.dependencies import broker_client, template_context
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 async def landing(request: Request):
-    if current_client(request):
+    if await broker_client(request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = template_context(request)
     try:
@@ -48,18 +48,21 @@ async def landing(request: Request):
         # ENCRYPTION_KEY missing/misconfigured: render page without the form token.
         logger.exception("Could not issue feedback token")
         ctx["feedback_token"] = ""
+    ctx["feedback_reply"] = feedback_service.reply_enabled()
     return templates.TemplateResponse(request, "landing.html", ctx)
 
 
 
 @router.get("/setup", response_class=HTMLResponse)
 async def setup_page(request: Request):
+    await broker_client(request)  # resolve the session off the event loop
     return templates.TemplateResponse(request, "setup.html", template_context(request, "setup"))
 
 
 
 @router.get("/connect", response_class=HTMLResponse)
 async def connect_page(request: Request):
+    await broker_client(request)  # resolve the session off the event loop
     server_url = str(request.base_url).rstrip("/")
     ctx = template_context(request, "connect")
     ctx["server_url"] = server_url
@@ -83,7 +86,7 @@ def _phone_context(ctx: dict, dial_code: str = "", national_number: str = "") ->
 
 @router.get("/enroll", response_class=HTMLResponse)
 async def enroll_page(request: Request):
-    if current_client(request):
+    if await broker_client(request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = template_context(request, "enroll")
     ctx["min_password_chars"] = MIN_PASSWORD_CHARS
@@ -107,8 +110,9 @@ async def enroll_submit(
 
     See :func:`web.auth_flow.enroll` for the order of operations and why.
     """
+    await broker_client(request)  # resolve the session off the event loop
     try:
-        auth_flow.enroll(
+        await auth_flow.enroll(
             request,
             api_key=api_key,
             client_id=client_id,
@@ -123,9 +127,10 @@ async def enroll_submit(
         ctx = template_context(request, "enroll")
         ctx["min_password_chars"] = MIN_PASSWORD_CHARS
         ctx["error"] = e.message
-        # Echo back only the non-secret fields so the user retypes less.
+        # Echo back only the client id. The API key is a credential and is
+        # never written back into a page.
         ctx["form"] = {
-            "api_key": api_key.strip(),
+            "api_key": "",
             "client_id": client_id.strip(),
         }
         return templates.TemplateResponse(
@@ -141,7 +146,7 @@ async def enroll_submit(
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    if current_client(request):
+    if await broker_client(request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = _phone_context(template_context(request))
     return templates.TemplateResponse(request, "login.html", ctx)
@@ -155,8 +160,9 @@ async def login_submit(
     whatsapp_number: str = Form(...),
     app_password: str = Form(...),
 ):
+    await broker_client(request)  # resolve the session off the event loop
     try:
-        auth_flow.login(request, country_code, whatsapp_number, app_password)
+        await auth_flow.login(request, country_code, whatsapp_number, app_password)
     except auth_flow.AuthFlowError as e:
         ctx = template_context(request)
         ctx["error"] = e.message

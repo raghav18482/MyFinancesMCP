@@ -1,0 +1,252 @@
+{
+  "03f0357b80fa826ea1fb6deb3cac4a297b3a009a966c00179631106d867fe435": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "DROP FUNCTION broker_connections_touch()"
+  },
+  "09de3aa3ca3c05cf9591a40078b94da1a2a3afb03c13fc2d35e2e22b35a967c7": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "CREATE FUNCTION briefing_deliveries_touch() RETURNS trigger LANGUAGE p"
+  },
+  "1a531bba39b8607aa4548622bdc09db63bd1668148fe053bc3a64d6918e9f90e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "http_status IS NULL OR http_status BETWEEN 100 AND 599"
+  },
+  "237b50f779632e4facbcba33e957dab2ed1f25c25fbaae2a6cfd58c0b3532f73": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "kind IN ('scheduled', 'manual')"
+  },
+  "2d1ad72f637e6797ae3943b809c02dee83409763d0a3453c8b3fbba30ac36895": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "kind = 'scheduled'"
+  },
+  "3dd59ea8686de8530e42ce7174c39c6b912be5239b56956231b1acb29e772fdb": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "status <> 'not_sent_retryable' OR (kind = 'scheduled' AND next_attempt"
+  },
+  "3e04b9a003fac83c388e4fe4f43acbce2fcafb71dc8c407a45c3eccf88dfa921": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "CREATE TRIGGER db_identity_guard_row BEFORE INSERT OR UPDATE OR DELETE"
+  },
+  "408eae9772f831e3174bca5a403d6e1652b899345333946aeeca23318f251168": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "status <> 'sending' OR attempts >= 1"
+  },
+  "41cce82cb92ab49c75ed7d3acb811400749a2feb968ba26f7dc66db0cbc3c286": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "created_by IN ('app', 'backfill')"
+  },
+  "4554a9b04ca5377a8e5875d7314effe7a8fddae5de6256248df5b68e92844c6a": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "SET LOCAL lock_timeout = '5s'"
+  },
+  "4994c4e29616007d022d618c2fe03c93928a115172c26c56b24845af2314b473": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "channel IN ('react', 'jinja', 'api')"
+  },
+  "4b0c4f0ede5031e30c226ae7bf916d90d576d984a15bb0c5f5f98d386e849084": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "outcome_reason IS NULL OR outcome_reason IN ('not_ready', 'connect', '"
+  },
+  "4b1d66350efe3913ebc4851cda50bbd44dd30a5f59bafb1c24c2edec4301816e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "clock_timestamp()"
+  },
+  "4ba781e366392c27f5e72cde763b856203924203ea9f59475a3f15a6a1a5e2a4": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "password_encrypted ~ '^gAAAAA[A-Za-z0-9_-]+={0,2}$' AND length(passwor"
+  },
+  "4d35f56cf7776a1ef454ddbd917e9c9e9ba46ef9b69a7f920d73cfd072eb3363": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "attempts BETWEEN 0 AND 3"
+  },
+  "4f4040c22c95db8368f78ebe836e06a5e24cd98895997350eb4532c7ad34f2d6": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "INSERT INTO db_identity (id, label) VALUES (CAST(:id AS uuid), :label)"
+  },
+  "506665cad1c4859585233fd35b23ec1782915bca57f80c8dc3f781c54f8c57d5": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "broker IN ('angelone')"
+  },
+  "535664ca3679df9d5cea67dd8dc771aecf52398e6d948103c4c7a3f8df4e833e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "'app'"
+  },
+  "59177fa3873c650a62e7d40ea49653024d4971787d4f5cc61664443e718f0da6": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "CREATE TRIGGER broker_connections_touch BEFORE UPDATE ON broker_connec"
+  },
+  "5b9194f4e2b4c54a755cfc6e679f26fc8789d15ad2141eec8734aaf4edce0aeb": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "CREATE FUNCTION broker_connections_touch() RETURNS trigger LANGUAGE pl"
+  },
+  "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "0"
+  },
+  "643cdb13f02a0379ab4c0f8009b7e82ff72a845cfd7a027bd0e7b7d714edc43f": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "CREATE FUNCTION db_identity_guard() RETURNS trigger LANGUAGE plpgsql A"
+  },
+  "64ad08d183334b4e7610221613e6e81bac990df4e39eb9f6b6cd9e0a4d4834e1": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "status IN ('active', 'needs_reauth', 'disconnected')"
+  },
+  "68c3c6e2ac3c798813374000463ff9d0f0c7312bd50a251aaad29e1c1d08d98e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "CREATE TABLE db_identity ( singleton boolean PRIMARY KEY DEFAULT true "
+  },
+  "6b5437848a400efc08ef36891cec69041ccbd28795c894ded0f7d8fe937b0b3d": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "idempotency_key ~ '^(sched:[0-9]+:[0-9]{8}T[0-9]{6}Z|manual:[0-9]+:[0-"
+  },
+  "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "1"
+  },
+  "6bd8dc113a88854b233fd11ad2945b52fa1b523d69dcb1219b6a53efcecc139f": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "(status IN ('pending', 'sending')) = (claim_token IS NOT NULL AND leas"
+  },
+  "718e4718c748aea43ef9a24dddb860302dbb625e4910177f6a6dfbff7e2fdf0e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "(created_by = 'backfill') = (backfill_run_id IS NOT NULL)"
+  },
+  "77078cb508083cc4a01fafc4dced1c7e8000bbf6239b52e900990fd3bf7b8c40": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "CREATE TRIGGER db_identity_guard_truncate BEFORE TRUNCATE ON db_identi"
+  },
+  "79274e09b1ddf0114530b7378d5c21f6d8e2270da75718df4bea30be6fd44225": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "auth_phone_e164 IS NOT NULL"
+  },
+  "7a1dda81ccb159892a0fe70dc8c23fa6be8f12c745f9ba2ffa5527495532254a": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "DROP FUNCTION briefing_deliveries_touch()"
+  },
+  "880684c199f7f20d14b8d1c1300fd60114d8049634f8d423bf3dfc5de839f2e1": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "'active'"
+  },
+  "8ada6cfa0157565a22e51d7f745d9698227cc690b439d8e9636ee2f17431c6b4": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "firebase_uid IS NULL OR length(firebase_uid) BETWEEN 1 AND 128"
+  },
+  "992e9dafb6749d2e0f852d7e1d38b0ca8e736b8cf4ed86c0a793005bd93bf77e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "CREATE TRIGGER briefing_deliveries_touch BEFORE UPDATE ON briefing_del"
+  },
+  "abd7fa52a48aa62e0f0b768d3d89cd97edb416cdaf50dc3d504fc4c99c3d227c": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "length(feedback) BETWEEN 1 AND 1000"
+  },
+  "ad8297d148ca0f3c2c35fa9c878e47281f8bfd3ea635437a9836bb90b632bf28": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "DROP FUNCTION db_identity_guard()"
+  },
+  "aee29c7c36eede1c9e40442cc90d3b1039d93e021dc57c10a211a5c82d08dcfd": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "'pending'::character varying"
+  },
+  "b60f68c6c64d39fb9a4681400d8a8a64795de2827bf3d846e86d0d5e9755d4e1": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "SELECT set_config('app.db_identity_init', '', true)"
+  },
+  "b6cf31a144f323fb31e6b314c292cba9050a1ed4d6d775be29889f4b04226da9": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "status IN ('pending', 'sending', 'accepted', 'not_sent_retryable', 'fa"
+  },
+  "be2bc830125fc0785ba97011ed3e3d010122c1657a93337015cb329318044e0b": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "SELECT set_config('app.db_identity_init', :id, true)"
+  },
+  "c16f62cc2bb81896dfb39e16b28ee3d101e5a3e21c2bdaf558d6a7bfdfbf4af4": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "broker_account_id = upper(btrim(broker_account_id)) AND broker_account"
+  },
+  "c4e2c9c96fbe439a1f27bbcbce44005614476778d2a48ce7a7184ba9e5bbac0c": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "auth_phone_e164 IS NULL OR auth_phone_e164 ~ '^\\+[1-9][0-9]{7,14}$'"
+  },
+  "c88011a082f009b384f435cbd149cd1a736623dba927d1bb0220383e355fe165": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "(status = 'accepted') = (accepted_at IS NOT NULL)"
+  },
+  "d1597b514e22b8f83f414ce1c7e3d724bb26e14661af033086889bd3ca79946e": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R7 author); owner review pending",
+    "summary": "DROP TABLE db_identity"
+  },
+  "d69eaa431fae1f22a461485fcd91d0afcf4da65fc2ad8869d9cd3f6e849c5aa2": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "key_version >= 1"
+  },
+  "d6abcf814bd542f1858aad88be81dfbeb31dfb590cea121572ff505f0df3c98c": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "(kind = 'scheduled') = (schedule_id IS NOT NULL)"
+  },
+  "d7d39663956d5ea4a34b481dfe33124e0d12868f59a21b7ef86a1305e8c95400": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "totp_secret_encrypted ~ '^gAAAAA[A-Za-z0-9_-]+={0,2}$' AND length(totp"
+  },
+  "e8a221945b5bc1ce24ab19a79e3ead9a7bc1c9a4f773fc48161a3b289cbf2766": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "firebase_uid IS NOT NULL"
+  },
+  "e941ed0c32be8474cf0acde18e7c21d08cfc93300c14293dbe05f82ca96b1b5c": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R11 author); owner review pending",
+    "summary": "api_key_encrypted ~ '^gAAAAA[A-Za-z0-9_-]+={0,2}$' AND length(api_key_"
+  },
+  "eff0eb02ab9c704b57b6b362b21578e67a7312b45638ba82a7a88b638834b6cb": {
+    "date": "2026-11-02",
+    "reviewer": "Claude (R10 author); owner review pending",
+    "summary": "kind = 'manual' AND status IN ('pending', 'sending')"
+  }
+}

@@ -200,6 +200,164 @@ def test_services_do_not_import_the_web_layer():
     assert not offenders, offenders
 
 
+_REPO = ROUTERS_DIR.parent.parent
+_SKIP_DIRS = {".venv", ".git", ".claude", "node_modules", "tests", "__pycache__"}
+_LOG_CONFIG_CALLS = {"basicConfig", "dictConfig", "fileConfig", "setLogRecordFactory", "addHandler"}
+
+
+def _app_sources():
+    for path in sorted(_REPO.rglob("*.py")):
+        if not _SKIP_DIRS.intersection(path.relative_to(_REPO).parts):
+            yield path
+
+
+def test_logging_is_configured_in_one_place():
+    """Only services/logging_config.py configures logging or adds handlers.
+
+    Every handler must carry the redaction filter; a handler added anywhere
+    else would not (see services/logging_config.py).
+    """
+    allowed = {"services/logging_config.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        if rel in allowed:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in _LOG_CONFIG_CALLS):
+                offenders.append(f"{rel}:{node.lineno} calls {node.func.attr}")
+    assert not offenders, offenders
+
+
+def test_smartapi_and_logzero_are_imported_in_one_place():
+    """SmartAPI logs credentials through logzero; integrations/smartapi.py
+    silences it, so nothing may reach the SDK any other way."""
+    allowed = {"integrations/smartapi.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        if rel in allowed:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            mods = []
+            if isinstance(node, ast.ImportFrom):
+                mods = [node.module or ""]
+            elif isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            for mod in mods:
+                if mod.split(".")[0] in {"SmartApi", "logzero"}:
+                    offenders.append(f"{rel}:{node.lineno} imports {mod}")
+    assert not offenders, offenders
+
+
+
+
+_TOKEN_FUNCS = {"seal_token", "open_token"}
+_REMOVED_TOKEN_FUNCS = {"sign_token", "unsign_token"}
+
+
+def test_tokens_are_sealed_in_two_places_only():
+    """Token keys seal the feedback token and the pending OAuth request, nothing
+    else; the pre-R8 sign/unsign functions are gone (R9) and stay gone."""
+    allowed = {"services/feedback.py", "services/oauth_provider.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        crypto_module = rel == "db/crypto.py"
+        for node in ast.walk(ast.parse(path.read_text())):
+            names = []
+            if isinstance(node, ast.ImportFrom):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.Attribute):
+                names = [node.attr]
+            elif isinstance(node, ast.Name):
+                names = [node.id]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = [node.name]
+            for name in names:
+                if name in _REMOVED_TOKEN_FUNCS:
+                    offenders.append(f"{rel}:{node.lineno} uses removed {name}")
+                if name in _TOKEN_FUNCS and rel not in allowed and not crypto_module:
+                    offenders.append(f"{rel}:{node.lineno} uses {name}")
+    assert not offenders, offenders
+
+
+_SESSION_READERS = {"current_user", "premium_user", "template_context", "current_user_id"}
+
+
+def test_async_routes_resolve_the_session_off_the_event_loop():
+    """Every async handler awaits broker_client() before reading the session.
+
+    broker_client runs any Angel One login in a worker thread. The sync helpers
+    (current_user, template_context, ...) only read what it cached; called
+    without it, a session needing a rebuild reads as signed out. And nothing
+    async may call the old helpers that resolve the client themselves.
+    """
+    offenders = []
+    for path in sorted(ROUTERS_DIR.glob("*.py")):
+        for fn in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(fn, ast.AsyncFunctionDef):
+                continue
+            called = {n.func.id for n in ast.walk(fn)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            if called & {"current_client", "require_login"}:
+                offenders.append(f"{path.name}:{fn.name} calls a blocking resolver")
+            if called & _SESSION_READERS and "broker_client" not in called:
+                offenders.append(f"{path.name}:{fn.name} reads the session without broker_client")
+    assert not offenders, offenders
+
+
+def test_whatsapp_is_sent_through_one_path():
+    """Only briefing_delivery (claim-checked) and the feedback reply may reach
+    the raw WhatsApp sender, so every briefing goes through a lease or the
+    manual cooldown; and nothing may import the old ``send``."""
+    allowed = {"services/schedular/briefing_delivery.py", "web/routers/feedback.py",
+               "services/schedular/whatsapp.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("whatsapp"):
+                for a in node.names:
+                    if a.name in {"_post", "send"}:
+                        offenders.append(f"{rel}:{node.lineno} imports whatsapp.{a.name}")
+            if (isinstance(node, ast.Attribute) and node.attr == "_post"
+                    and isinstance(node.value, ast.Name) and node.value.id == "whatsapp"
+                    and rel not in allowed):
+                offenders.append(f"{rel}:{node.lineno} uses whatsapp._post")
+    assert not offenders, offenders
+
+    import inspect
+
+    from services.schedular import briefing_delivery, whatsapp
+
+    assert not hasattr(whatsapp, "send")
+    params = list(inspect.signature(briefing_delivery.send_briefing).parameters)
+    assert params[0] == "claim", params
+    import asyncio
+
+    try:
+        asyncio.run(briefing_delivery.send_briefing(object(), "0", "x"))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("send_briefing accepted a non-claim")
+
+
+
+def test_no_code_claims_delivery():
+    """WhatsApp gives no delivery receipts here: the ledger's best outcome is
+    ``accepted``. No code may write or compare a ``delivered`` state."""
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and (node.value == "delivered" or "'delivered'" in node.value):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, offenders
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):
