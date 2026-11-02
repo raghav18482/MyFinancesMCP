@@ -1,7 +1,7 @@
 """WhatsApp delivery via the internal webhook service.
 
 API contract:
-    POST https://whatsapp-webhook-service-fczs.onrender.com/send
+    POST <WHATSAPP_WEBHOOK_URL, default the production service>/send
     Content-Type: application/json
     Authorization: Bearer <WHATSAPP_WEBHOOK_TOKEN>   (sent when configured)
     {"phone": "910000000000", "messages": ["<text>"]}
@@ -50,7 +50,24 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_SEND_URL = "https://whatsapp-webhook-service-fczs.onrender.com/send"
+_DEFAULT_SEND_URL = "https://whatsapp-webhook-service-fczs.onrender.com/send"
+
+
+def _send_url() -> str:
+    """``WHATSAPP_WEBHOOK_URL`` (a staging service, say), else production's.
+
+    Must be https, except for a loopback address in local development.
+    """
+    url = (os.environ.get("WHATSAPP_WEBHOOK_URL") or "").strip()
+    if not url:
+        return _DEFAULT_SEND_URL
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    loopback = parts.hostname in ("localhost", "127.0.0.1", "::1")
+    if parts.scheme != "https" and not (parts.scheme == "http" and loopback):
+        raise ValueError("WHATSAPP_WEBHOOK_URL must be an https URL")
+    return url
 _CONNECT_TIMEOUT_SEC = 10.0
 # Long enough for a cold start (~30s observed) to finish within one attempt.
 _ATTEMPT_TIMEOUT_SEC = 45.0
@@ -160,6 +177,10 @@ async def _post(phone: str | None, message: str) -> int:
     except ValueError as e:
         raise DeliveryNotSent("bad_phone", str(e)) from None
 
+    try:
+        send_url = _send_url()
+    except ValueError as e:
+        raise DeliveryNotSent("http_4xx", str(e)) from None
     payload = {"phone": to, "messages": [message]}
     headers = {"Content-Type": "application/json"}
     token = (os.environ.get("WHATSAPP_WEBHOOK_TOKEN") or "").strip()
@@ -178,7 +199,7 @@ async def _post(phone: str | None, message: str) -> int:
             read_timeout = min(_ATTEMPT_TIMEOUT_SEC, remaining)
             timeout = httpx.Timeout(read_timeout, connect=min(_CONNECT_TIMEOUT_SEC, read_timeout))
             try:
-                resp = await client.post(_SEND_URL, json=payload, headers=headers, timeout=timeout)
+                resp = await client.post(send_url, json=payload, headers=headers, timeout=timeout)
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 # No connection, so no request reached the webhook: safe to retry.
                 last = DeliveryNotSent("connect", type(exc).__name__)

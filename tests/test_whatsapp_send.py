@@ -44,7 +44,7 @@ def _run(responses, *, deadline=5.0, delay=0.0, env=None):
     saved = (wa._transport, wa._SEND_DEADLINE_SEC, wa._RETRY_DELAY_SEC)
     wa._transport = httpx.MockTransport(handler)
     wa._SEND_DEADLINE_SEC, wa._RETRY_DELAY_SEC = deadline, delay
-    base = {k: v for k, v in os.environ.items() if k != "WHATSAPP_WEBHOOK_TOKEN"}
+    base = {k: v for k, v in os.environ.items() if k not in ("WHATSAPP_WEBHOOK_TOKEN", "WHATSAPP_WEBHOOK_URL")}
     try:
         with mock.patch.dict(os.environ, {**base, **(env or {})}, clear=True):
             asyncio.run(wa._post("0000000000", "hi"))
@@ -141,6 +141,17 @@ def test_payload_shape_and_token():
     err, calls = _run([200], env={"WHATSAPP_WEBHOOK_TOKEN": "t" * 40})
     assert calls[0].headers["authorization"] == "Bearer " + "t" * 40
 
+
+
+def test_the_webhook_url_can_be_pointed_at_staging():
+    err, calls = _run([200])
+    assert str(calls[0].url) == wa._DEFAULT_SEND_URL
+    err, calls = _run([200], env={"WHATSAPP_WEBHOOK_URL": "https://wws-staging.example.com/send"})
+    assert err is None and str(calls[0].url) == "https://wws-staging.example.com/send"
+    err, calls = _run([200], env={"WHATSAPP_WEBHOOK_URL": "http://127.0.0.1:3000/send"})
+    assert err is None and calls[0].url.host == "127.0.0.1"
+    err, calls = _run([200], env={"WHATSAPP_WEBHOOK_URL": "http://wws.example.com/send"})
+    assert isinstance(err, wa.DeliveryNotSent) and calls == [], "plain http refused, nothing sent"
 
 if __name__ == "__main__":
     passed = 0
