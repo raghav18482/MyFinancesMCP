@@ -131,7 +131,7 @@ async def _lifespan(_app: Starlette):
     try:
         from db import init_db
 
-        init_db()
+        init_db(production=security_config.is_production())
     except Exception as e:
         # Code now depends on the tables and columns init_db adds, so serving
         # on a stale schema would fail at the first request instead. In

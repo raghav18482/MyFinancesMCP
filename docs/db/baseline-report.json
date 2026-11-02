@@ -1,0 +1,40 @@
+{
+  "adk_snapshot_identical": true,
+  "adk_tables_present": [
+    "adk_internal_metadata",
+    "app_states",
+    "events",
+    "sessions",
+    "user_states"
+  ],
+  "allowed_model_drift": [
+    "add_index schedules.ix_schedules_status",
+    "modify_nullable schedules.status: database=True models=False"
+  ],
+  "baseline_diff": [],
+  "baseline_tables_fingerprint": "c80fc122331cbe9678d7790880759ad4a226bbcec00ada31369c814f63bef6a1",
+  "dump_sha256": null,
+  "fingerprint": "619422f6e42acf07a6e01e841527341685f323b62339fec49e957ef62ff9809f",
+  "generated_at": "2026-11-02T10:16:32+00:00",
+  "postgres_version": "16.15 (Debian 16.15-1.pgdg13+2)",
+  "rehearsal_steps": {
+    "app_rows_kept": true,
+    "downgrade_and_upgrade_again": "ok",
+    "stamp": "ok"
+  },
+  "replayed_commits": [
+    "75ce1cfcd8b0",
+    "614864794605",
+    "ff64c535d1ca",
+    "13009b35831c",
+    "d8a3d38ad06e",
+    "40e6315d80d5",
+    "fefe6bd01ddf",
+    "b6e1676b96ba",
+    "e14b6b726eca",
+    "e0b33e00c9c4",
+    "20b99fd2b1ae"
+  ],
+  "source": "proxy",
+  "status": "PASS"
+}

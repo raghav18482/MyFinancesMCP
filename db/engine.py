@@ -1,8 +1,13 @@
 """Shared SQLModel engine + session factory + bootstrap.
 
 One process-wide ``engine`` reads ``DATABASE_URL`` from env (Postgres by
-default). ``init_db()`` is idempotent and safe to run on every startup until
-Alembic is introduced.
+default).
+
+From R7 Alembic owns the schema of any database it has stamped, production
+first. ``init_db()`` then only checks the revision (refusing to start in
+production on one this release does not list, see :mod:`db.schema_version`).
+A local database Alembic has never touched still gets ``create_all`` plus the
+column additions below, as before.
 """
 from __future__ import annotations
 
@@ -26,11 +31,10 @@ _connect_args: dict = {"sslmode": "require"} if "sslmode=require" in _url_lower 
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True, connect_args=_connect_args)
 
 
-# Lightweight per-column migrations applied on startup until Alembic is
-# introduced. ``create_all`` only creates missing *tables*; it never adds a
-# column to a table that already exists, so every new column on an existing
-# table must be listed here. Keep new columns nullable with no default, which
-# makes the ALTER a metadata-only change.
+# Per-column additions for local databases Alembic does not manage. Frozen
+# from R7: new schema changes are Alembic revisions (migrations/versions/).
+# ``create_all`` only creates missing *tables*; it never adds a column to a
+# table that already exists, which is why these were listed here.
 #
 # (table, column, statement). The statement runs only when the column is
 # missing, so a normal startup takes no lock on these tables at all.
@@ -63,18 +67,38 @@ LOCK_TIMEOUT = "5s"
 STATEMENT_TIMEOUT = "30s"
 
 
-def init_db(*, bind=None, lock_timeout: str = LOCK_TIMEOUT) -> None:
-    """Create missing tables, then add missing columns, in one transaction.
+def init_db(*, bind=None, lock_timeout: str = LOCK_TIMEOUT, production: bool = False) -> None:
+    """Check the schema revision, or (unmanaged local databases) create the schema.
 
-    All or nothing: if any statement fails, including a lock wait longer than
-    ``lock_timeout``, nothing is applied and the error propagates. The caller
-    decides whether that stops startup (it does in production; see ``main``).
+    ``production``: run no DDL at all. The database must be at a revision in
+    ``schema_version.COMPATIBLE_REVISIONS``, otherwise
+    :class:`db.schema_version.IncompatibleSchema` is raised and startup stops.
 
-    Idempotent; replace with Alembic when schema evolves beyond simple adds.
+    Otherwise, a database Alembic manages is left alone (a warning if its
+    revision is not one this release lists). A database it does not manage
+    gets missing tables, then missing columns, in one transaction: all or
+    nothing, including a lock wait longer than ``lock_timeout``.
     """
     from . import models  # noqa: F401  -- ensure models register with SQLModel.metadata
+    from . import schema_version
 
     target = bind if bind is not None else engine
+    if production:
+        with target.connect() as conn:
+            rev = schema_version.check_revision(conn)
+        logger.info("init_db: schema at %s (managed by Alembic); no DDL run", rev)
+        return
+
+    with target.connect() as conn:
+        rev = schema_version.current_revision(conn) if conn.dialect.name == "postgresql" else None
+    if rev is not None:
+        if rev not in schema_version.COMPATIBLE_REVISIONS:
+            logger.warning("init_db: schema at %s, which this release does not list; "
+                           "run alembic upgrade %s", rev, schema_version.TARGET_REVISION)
+        else:
+            logger.info("init_db: schema at %s (managed by Alembic)", rev)
+        return
+
     with target.begin() as conn:
         if conn.dialect.name == "postgresql":
             conn.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
