@@ -1,0 +1,35 @@
+# Staging only: the backend plus the React app (AgentfolioUI's staging
+# branch), served by FastAPI at /app on the same origin as the API.
+# Production keeps using ./Dockerfile; see docs/runbooks/staging.md.
+
+# ── The React app ────────────────────────────────────────────────────────────
+FROM node:24-bookworm AS ui
+ARG UI_REPO=https://github.com/raghav18482/AgentfolioUI.git
+ARG UI_BRANCH=staging
+# This file changes whenever the branch moves, so Docker never reuses a stale
+# clone from its cache.
+ADD https://api.github.com/repos/raghav18482/AgentfolioUI/git/refs/heads/${UI_BRANCH} /tmp/ui-ref.json
+RUN git clone --depth 1 --branch "${UI_BRANCH}" "${UI_REPO}" /ui
+WORKDIR /ui
+# Without VERCEL set, the build targets FastAPI's /app/ mount and skips the
+# Vercel-only prerender.
+RUN npm ci && npm run build
+
+# ── The backend (as ./Dockerfile) ────────────────────────────────────────────
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+COPY --from=ui /ui/dist /app/spa_dist
+ENV SPA_DIST_DIR=/app/spa_dist
+
+EXPOSE 8000
+
+# The staging database is labelled "rehearsal", so it migrates itself on every
+# start. Production never does this (it needs ALEMBIC_PRODUCTION_RELEASE and an
+# exact revision, run as a separate step).
+CMD ["sh", "-c", "alembic upgrade head && exec python main.py"]
