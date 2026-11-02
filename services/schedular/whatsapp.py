@@ -76,9 +76,10 @@ class DeliveryError(RuntimeError):
 
     outcome = UNKNOWN
 
-    def __init__(self, reason: str, detail: str = "") -> None:
+    def __init__(self, reason: str, detail: str = "", http_status: int | None = None) -> None:
         super().__init__(f"whatsapp {self.outcome} ({reason}){': ' + detail if detail else ''}")
         self.reason = reason
+        self.http_status = http_status
 
 
 class DeliveryNotSent(DeliveryError):
@@ -147,8 +148,8 @@ def classify(resp: httpx.Response) -> tuple[str, str]:
     return UNKNOWN, f"http_{status // 100}xx"
 
 
-async def _post(phone: str | None, message: str) -> None:
-    """Send ``message`` to ``phone``. Returns on ``accepted``; raises otherwise.
+async def _post(phone: str | None, message: str) -> int:
+    """Send ``message`` to ``phone``. Returns the HTTP status on ``accepted``; raises otherwise.
 
     Raises :class:`DeliveryNotSent` (certainly not sent) or
     :class:`DeliveryUnknown` (may have been sent; never retry it). A phone that
@@ -189,12 +190,12 @@ async def _post(phone: str | None, message: str) -> None:
                 outcome, reason = classify(resp)
                 if outcome == ACCEPTED:
                     logger.info("[whatsapp] accepted for %s (attempt %d)", _mask(to), attempt)
-                    return
+                    return resp.status_code
                 if outcome == UNKNOWN:
-                    raise DeliveryUnknown(reason, f"HTTP {resp.status_code}")
+                    raise DeliveryUnknown(reason, f"HTTP {resp.status_code}", resp.status_code)
                 if reason != "not_ready":
-                    raise DeliveryNotSent(reason, f"HTTP {resp.status_code}")
-                last = DeliveryNotSent(reason, "webhook not ready")
+                    raise DeliveryNotSent(reason, f"HTTP {resp.status_code}", resp.status_code)
+                last = DeliveryNotSent(reason, "webhook not ready", resp.status_code)
 
             logger.warning("[whatsapp] attempt %d not sent: %s", attempt, last.reason)
             if deadline - time.monotonic() <= _RETRY_DELAY_SEC:

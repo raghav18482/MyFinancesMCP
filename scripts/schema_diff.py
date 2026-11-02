@@ -6,7 +6,7 @@
     python scripts/schema_diff.py --models A_URL       # schema A vs db/models.py
 
 Prints one line per difference and exits 1 if there are any. Only the app
-tables (``migrations.helpers.APP_TABLES``, without ``db_identity``) are
+tables that predate Alembic (``migrations.compare.BASELINE_TABLES``) are
 compared; ADK's and Alembic's tables are ignored. Read-only.
 """
 from __future__ import annotations

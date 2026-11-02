@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint
+from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, SmallInteger, String, Text, text
 from sqlmodel import Field, SQLModel
 
 
@@ -163,7 +163,8 @@ class Schedule(SQLModel, table=True):
     # pending | running | done | failed (known not sent) | unknown (outcome lost)
     status: str = Field(default="pending", index=True)
     created_at: datetime = Field(default_factory=utcnow)
-    # Lease on the current run (services/schedular/repository.py).
+    # The R5 scheduler's lease on a run. Unused from R10 (the delivery ledger
+    # holds the lease); kept for rows R5 left running, see repository.reclaim_expired.
     claimed_at: datetime | None = None
     lease_expires_at: datetime | None = None
     claim_token: str | None = Field(default=None, max_length=32)
@@ -297,3 +298,73 @@ class FeedbackSubmission(SQLModel, table=True):
     feedback: str
     channel: str
     created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class BriefingDelivery(SQLModel, table=True):
+    """One briefing send: a scheduled slot or a manual request, and its outcome.
+
+    The schema is Alembic revision ``0002_delivery_ledger``; this model mirrors
+    it for queries and for local databases built with ``create_all``. The
+    states and their transitions live in ``services/schedular/ledger.py``.
+    """
+
+    __tablename__ = "briefing_deliveries"
+    __table_args__ = (
+        CheckConstraint("kind IN ('scheduled', 'manual')", name="ck_bd_kind"),
+        CheckConstraint(
+            "status IN ('pending', 'sending', 'accepted', 'not_sent_retryable', 'failed_final', "
+            "'unknown', 'skipped_stale')",
+            name="ck_bd_status",
+        ),
+        CheckConstraint("attempts BETWEEN 0 AND 3", name="ck_bd_attempts"),
+        CheckConstraint(
+            "outcome_reason IS NULL OR outcome_reason IN ('not_ready', 'connect', 'deadline', 'http_4xx', "
+            "'auth', 'bad_phone', 'generation', 'http_5xx', 'http_503', 'http_other', 'transport', "
+            "'inconsistent', 'stale', 'disabled', 'lease_expired')",
+            name="ck_bd_reason",
+        ),
+        CheckConstraint("http_status IS NULL OR http_status BETWEEN 100 AND 599", name="ck_bd_http_status"),
+        CheckConstraint("(kind = 'scheduled') = (schedule_id IS NOT NULL)", name="ck_bd_schedule"),
+        CheckConstraint(
+            "(status IN ('pending', 'sending')) = (claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_bd_lease",
+        ),
+        CheckConstraint("(status = 'accepted') = (accepted_at IS NOT NULL)", name="ck_bd_accepted"),
+        CheckConstraint(
+            "status <> 'not_sent_retryable' OR (kind = 'scheduled' AND next_attempt_at IS NOT NULL)",
+            name="ck_bd_retry",
+        ),
+        CheckConstraint("status <> 'sending' OR attempts >= 1", name="ck_bd_sending"),
+        CheckConstraint(
+            "idempotency_key ~ '^(sched:[0-9]+:[0-9]{8}T[0-9]{6}Z|manual:[0-9]+:[0-9a-f]{32})$'",
+            name="ck_bd_key",
+        ).ddl_if(dialect="postgresql"),
+        Index("uq_bd_sched_slot", "schedule_id", "slot_at", unique=True,
+              postgresql_where=text("kind = 'scheduled'"), sqlite_where=text("kind = 'scheduled'")),
+        Index("uq_bd_manual_inflight", "user_id", unique=True,
+              postgresql_where=text("kind = 'manual' AND status IN ('pending', 'sending')"),
+              sqlite_where=text("kind = 'manual' AND status IN ('pending', 'sending')")),
+        Index("ix_bd_retry", "status", "next_attempt_at"),
+        Index("ix_bd_lease", "status", "lease_expires_at"),
+        Index("ix_bd_user", "user_id"),
+    )
+
+    id: int | None = Field(default=None, sa_column=Column(
+        BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True))
+    kind: str = Field(sa_column=Column(Text, nullable=False))
+    schedule_id: int | None = Field(default=None, sa_column=Column(
+        Integer, ForeignKey("schedules.id", ondelete="RESTRICT"), nullable=True))
+    user_id: int = Field(sa_column=Column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False))
+    slot_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
+    idempotency_key: str = Field(sa_column=Column(Text, nullable=False, unique=True))
+    status: str = Field(sa_column=Column(Text, nullable=False))
+    attempts: int = Field(default=0, sa_column=Column(SmallInteger, nullable=False, server_default="0"))
+    next_attempt_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    lease_expires_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    claim_token: str | None = Field(default=None, sa_column=Column(String(32)))
+    outcome_reason: str | None = Field(default=None, sa_column=Column(Text))
+    http_status: int | None = Field(default=None, sa_column=Column(SmallInteger))
+    accepted_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False, server_default="1"))
+    created_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))

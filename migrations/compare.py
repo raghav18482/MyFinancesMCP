@@ -5,10 +5,10 @@ Alembic's tables are ignored. Read-only.
 """
 from __future__ import annotations
 
-from migrations.helpers import APP_TABLES
+from migrations.helpers import APP_TABLES, POST_BASELINE_TABLES
 
-#: db_identity is created by 0001a, after the baseline the comparison is about.
-BASELINE_TABLES = tuple(t for t in APP_TABLES if t != "db_identity")
+#: The tables the baseline is about: everything but what later revisions create.
+BASELINE_TABLES = tuple(t for t in APP_TABLES if t not in POST_BASELINE_TABLES)
 
 
 def schema_diff(conn_a, conn_b, tables: tuple[str, ...] = BASELINE_TABLES) -> list[str]:

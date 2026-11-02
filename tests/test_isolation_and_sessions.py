@@ -118,8 +118,8 @@ def test_manual_send_is_rate_limited_per_user():
 
     started = []
 
-    async def fake_run(claim, phone):
-        started.append((claim.user_id, claim.source))
+    async def fake_run(claim):
+        started.append((claim.user_id, claim.kind))
 
     with harness() as h, mock.patch.object(briefing, "_run_briefing_now_bg", fake_run):
         a, b = h.login("A"), h.login("B")
@@ -127,7 +127,7 @@ def test_manual_send_is_rate_limited_per_user():
         second = a.post("/api/briefing/send-now")
         assert second.status_code == 429, second.text
         assert b.post("/api/briefing/send-now").status_code == 200, "cooldowns are per user"
-    assert started == [(h.ids["A"], "web"), (h.ids["B"], "web")], started
+    assert started == [(h.ids["A"], "manual"), (h.ids["B"], "manual")], started
     print("ok  manual send-now: one per cooldown per user, a second gets 429")
 
 def test_holdings_positions_and_analytics_are_per_user():

@@ -48,8 +48,8 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Logout bumps this; cookies issued with an older value stop working.
     ("users", "session_version",
      "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0"),
-    # Scheduler leases (services/schedular/repository.py): who is running a
-    # schedule's current slot, since when, and until when that claim holds.
+    # The R5 scheduler's leases on schedules (superseded by the delivery
+    # ledger in R10; kept so older rows stay readable).
     ("schedules", "claimed_at",
      "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ"),
     ("schedules", "lease_expires_at",

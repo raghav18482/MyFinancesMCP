@@ -10,7 +10,7 @@ release lists in `db/schema_version.py`, and refuses to start otherwise.
 |---|---|---|---|
 | `0001_baseline` | R7 | The app's tables as production has them before Alembic. Production is *stamped* at it, never upgraded through it. | yes |
 | `0001a_db_identity` | R7 | `db_identity`: one guarded row labelling the database `production`, `rehearsal`, `development` or `test`. | yes |
-| `0002_delivery_ledger` | R10 (reserved) | `briefing_deliveries` | yes |
+| `0002_delivery_ledger` | R10 | `briefing_deliveries`: one row per briefing send, its states and lease (`services/schedular/ledger.py`) | yes |
 | `0003_broker_connections` | R11 (reserved) | `broker_connections`, new `users` columns | yes |
 | `0004_users_angel_nullable` | next phase (reserved) | Angel columns on `users` become nullable | no |
 
@@ -97,6 +97,29 @@ Production is never downgraded.
   ALEMBIC_PRODUCTION_RELEASE=<RELEASE_ID> alembic upgrade <TARGET_REVISION>
   ```
 - **Take a backup or Neon branch first** (R10, R11).
+
+## R10 rollout: the delivery ledger
+
+1. **Take a backup or Neon branch.**
+2. **Pre-deploy:**
+   ```bash
+   ALEMBIC_PRODUCTION_RELEASE=R10 MIGRATION_DATABASE_URL="$DIRECT_URL" alembic upgrade 0002_delivery_ledger
+   ```
+   This creates the table, its indexes and trigger. No existing row changes.
+3. **Deploy R10.** Its startup requires `0002_delivery_ledger`.
+4. **Verify (read-only):**
+   ```sql
+   SELECT status, count(*) FROM briefing_deliveries GROUP BY status;
+   ```
+   Within 3 days, no `pending` or `sending` row should be older than its
+   lease.
+
+Schedules the R5 scheduler left `running` during the overlap are reclaimed as
+`unknown`, never resent (`repository.reclaim_expired`).
+
+**Rollback:** redeploy R9. R7–R9 list `0002_delivery_ledger` as reserved and
+compatible, so they start on it and leave the table alone. R10 likewise lists
+`0003_broker_connections` for R11. Production is never downgraded.
 
 ## Optional hardening
 

@@ -20,6 +20,7 @@ from sqlmodel import select
 
 from db import get_session
 from db.models import (
+    BriefingDelivery,
     ChatThread,
     DecisionRecord,
     Log,
@@ -42,6 +43,7 @@ class DeletionReport:
 
     user_id: int
     threads: list[tuple[str, str]] = field(default_factory=list)  # (agent_type, adk_session_id)
+    deliveries: int = 0
     schedules: int = 0
     logs: int = 0
     risk_profiles: int = 0
@@ -77,6 +79,12 @@ def delete_user(user_id: int) -> DeletionReport:
         for t in db.exec(select(ChatThread).where(ChatThread.user_id == user_id)).all():
             report.threads.append((t.agent_type, t.adk_session_id))
             db.delete(t)
+
+        # Deliveries point at schedules and users (ON DELETE RESTRICT): first.
+        for row in db.exec(select(BriefingDelivery).where(BriefingDelivery.user_id == user_id)).all():
+            db.delete(row)
+            report.deliveries += 1
+        db.flush()
 
         schedule_ids = []
         for s in db.exec(select(Schedule).where(Schedule.user_id == user_id)).all():

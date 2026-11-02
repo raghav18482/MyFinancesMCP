@@ -10,12 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlmodel import select
 
 from db import get_session
-from db.models import Log, Schedule, User
-
-from services.realtime_feed import feed_relay
-
-from session_manager import sessions
-
+from db.models import Log, Schedule
 from web.dependencies import (
     broker_client,
     current_user,
@@ -42,7 +37,7 @@ def _next_run_utc_from_ist(time_ist: str) -> datetime:
     Timezone-aware on purpose. The ``schedules.next_run`` column rejects naive
     values ("Datetime values must have timezone information"), so returning a
     naive one made every schedule save fail with a 500. The scheduler's own
-    writer, ``repository.finish_schedule``, already stores aware UTC.
+    writer, the delivery ledger's claim, already stores aware UTC.
     """
     hour, minute = map(int, time_ist.split(":"))
     now_utc = datetime.now(timezone.utc)
@@ -166,67 +161,19 @@ def _start_manual_send(user_id: int):
     from services.schedular.briefing_delivery import start_manual_send
 
     with get_session() as db:
-        return start_manual_send(db, user_id)
+        return start_manual_send(user_id, bind=db.get_bind())
 
 
-async def _run_briefing_now_bg(claim, phone: str | None) -> None:
-    """Background task: full briefing pipeline without touching the schedule.
+async def _run_briefing_now_bg(claim) -> None:
+    """Background task: the same pipeline as a scheduled slot, for a manual claim.
 
-    ``claim`` comes from the atomic cooldown (:func:`_start_manual_send`); one
-    claim allows one send attempt, and an unknown outcome is never retried.
+    ``claim`` is a ``pending`` ledger row created with the atomic cooldown
+    (:func:`_start_manual_send`); it allows one send attempt, and neither an
+    unknown nor a not-sent outcome is retried.
     """
-    import time as _time
-    from functools import partial as _partial
-    from uuid import uuid4 as _uuid4
+    from services.schedular import job_executor
 
-    import anyio as _anyio
-    from db import decrypt_value as _dec
-    from services.schedular.briefing_delivery import send_briefing
-    from services.schedular.daily_briefing import generate_daily_briefing as _brief
-
-    user_id = claim.user_id
-    started = _time.perf_counter()
-    sid = f"manual-{user_id}-{_uuid4().hex[:8]}"
-    result = None
-    message = ""
-    try:
-        with get_session() as db:
-            user = db.get(User, user_id)
-            if not user or not user.is_active:
-                return
-            api_key = user.angel_api_key
-            client_id = user.angel_client_id
-            pw = _dec(user.angel_password_encrypted)
-            totp = _dec(user.angel_totp_secret_encrypted)
-
-        # Off the event loop: the login blocks for seconds.
-        await _anyio.to_thread.run_sync(
-            _partial(sessions.create_session, sid, api_key, client_id, pw, totp)
-        )
-        message = await _brief(sid)
-        result = await send_briefing(claim, phone, message)
-    except Exception:
-        # Before any send: login, briefing or data failed.
-        logger.exception("manual briefing failed before sending for user %s", user_id)
-    finally:
-        try:
-            feed_relay.stop_feed(sid)
-            sessions.remove_session(sid)
-        except Exception:
-            pass
-
-    duration_ms = int((_time.perf_counter() - started) * 1000)
-    if result is None:
-        status, text = "failed", "manual send: not sent (error before sending)"
-    else:
-        status = {"accepted": "success", "not_sent": "failed"}.get(result.outcome, "unknown")
-        text = f"manual send: {result.outcome} ({result.reason}), {len(message)} chars"
-    try:
-        with get_session() as db:
-            db.add(Log(user_id=user_id, status=status, message=text, duration_ms=duration_ms))
-            db.commit()
-    except Exception:
-        logger.exception("failed to persist manual send log for user %s", user_id)
+    await job_executor.run_one(claim)
 
 
 
@@ -244,7 +191,7 @@ async def api_briefing_send_now(request: Request):
             {"error": "A briefing was sent recently. Please wait a few minutes before sending another."},
             status_code=429,
         )
-    asyncio.create_task(_run_briefing_now_bg(claim, user.whatsapp_number))
+    asyncio.create_task(_run_briefing_now_bg(claim))
     return JSONResponse({"ok": True, "message": "Briefing started — check WhatsApp in ~30s"})
 
 

@@ -345,6 +345,19 @@ def test_whatsapp_is_sent_through_one_path():
         raise AssertionError("send_briefing accepted a non-claim")
 
 
+
+def test_no_code_claims_delivery():
+    """WhatsApp gives no delivery receipts here: the ledger's best outcome is
+    ``accepted``. No code may write or compare a ``delivered`` state."""
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and (node.value == "delivered" or "'delivered'" in node.value):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, offenders
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

@@ -168,8 +168,8 @@ def test_production_needs_the_release_token_and_the_exact_target():
         with mock.patch.dict(os.environ, {"ALEMBIC_PRODUCTION_RELEASE": schema_version.RELEASE_ID}):
             refused(lambda: upgrade(engine, "head"), "upgrade to exactly")
             refused(lambda: downgrade(engine, "0001_baseline"), "never run against the production")
-            upgrade(engine, schema_version.TARGET_REVISION)  # allowed (already there)
-        assert scalar(engine, "SELECT version_num FROM alembic_version") == "0001a_db_identity"
+            upgrade(engine, schema_version.TARGET_REVISION)  # allowed
+        assert scalar(engine, "SELECT version_num FROM alembic_version") == schema_version.TARGET_REVISION
 
 
 def test_production_environment_needs_the_direct_endpoint():
@@ -348,7 +348,7 @@ def test_production_startup_needs_a_listed_revision():
         assert scalar(engine, "SELECT to_regclass('app_instances') IS NOT NULL")
 
     with fresh_db() as (engine, _):
-        upgrade(engine, "0001a_db_identity", label="test")
+        upgrade(engine, schema_version.TARGET_REVISION, label="test")
         init_db(bind=engine, production=True)  # listed: starts
         for rev in ("0001_baseline", "9999_from_the_future"):
             with engine.begin() as c:
