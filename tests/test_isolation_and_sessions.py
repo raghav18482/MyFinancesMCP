@@ -109,6 +109,25 @@ def test_briefing_schedules_and_logs_are_private():
     print("ok  briefing schedules and logs are per user")
 
 
+def test_manual_send_is_rate_limited_per_user():
+    from unittest import mock
+
+    import web.routers.briefing as briefing
+
+    started = []
+
+    async def fake_run(claim, phone):
+        started.append((claim.user_id, claim.source))
+
+    with harness() as h, mock.patch.object(briefing, "_run_briefing_now_bg", fake_run):
+        a, b = h.login("A"), h.login("B")
+        assert a.post("/api/briefing/send-now").status_code == 200
+        second = a.post("/api/briefing/send-now")
+        assert second.status_code == 429, second.text
+        assert b.post("/api/briefing/send-now").status_code == 200, "cooldowns are per user"
+    assert started == [(h.ids["A"], "web"), (h.ids["B"], "web")], started
+    print("ok  manual send-now: one per cooldown per user, a second gets 429")
+
 def test_holdings_positions_and_analytics_are_per_user():
     import services.portfolio_service as portfolio_service
 

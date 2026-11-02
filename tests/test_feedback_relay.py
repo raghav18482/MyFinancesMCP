@@ -50,7 +50,7 @@ def app(env: dict[str, str] | None = None):
     with mock.patch.dict(os.environ, {**base, **(env or {})}, clear=True), \
             mock.patch.object(db, "get_session", lambda: Session(engine)), \
             mock.patch.object(feedback, "generate_reply", mocks["llm"]), \
-            mock.patch.object(whatsapp, "send", mocks["send"]), \
+            mock.patch.object(whatsapp, "_post", mocks["send"]), \
             mock.patch.object(whatsapp, "_normalise_phone", mocks["normalise"]):
         with TestClient(create_app()) as client:
             yield client, mocks, engine

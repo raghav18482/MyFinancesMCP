@@ -1,23 +1,27 @@
 """Per-schedule pipeline: decrypt -> session -> briefing -> WhatsApp -> log.
 
-Each call to :func:`run_one` corresponds to one row already claimed by
-:func:`services.schedular.repository.claim_due_schedules`, i.e. a row whose
-``status`` is already ``'running'``. The executor is therefore *not*
-responsible for concurrency control; its only job is to:
+Each call to :func:`run_one` handles one schedule this worker has claimed with
+a lease (:func:`services.schedular.repository.claim_next_due`). It:
 
-1. Load the user from the DB and decrypt their Angel credentials.
-2. Create a short-lived Angel session under an ephemeral ``session_id``.
-3. Run :func:`generate_daily_briefing` and send a WhatsApp message.
-4. Insert a row in ``logs`` and call ``finish_schedule(...)`` to arm the
-   next run.
-5. Always tear down the in-memory session in ``finally`` so credentials
-   never outlive the job.
+1. Skips the run, sending nothing, if it started more than three hours after
+   its slot (``repository.STALE_AFTER``): a morning briefing at night helps
+   nobody.
+2. Keeps the lease alive with a heartbeat while it works.
+3. Loads the user, logs in to Angel One (in a worker thread) and builds the
+   briefing.
+4. Sends it through :func:`services.schedular.briefing_delivery.send_briefing`,
+   which renews the lease once more first and refuses to send without it.
+5. Records the outcome in ``logs`` and finishes the schedule: ``done`` when
+   WhatsApp accepted it (or the run was skipped), ``failed`` when it was
+   certainly not sent, ``unknown`` when nobody can tell. Nothing is ever
+   resent; the schedule moves to its next slot.
+6. Always tears down the in-memory broker session.
 
-A failure here never escapes — exceptions are caught, logged, recorded in
-``logs``, and the schedule is marked ``failed`` (not abandoned).
+A failure here never escapes: it is caught, logged and recorded.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from functools import partial
@@ -28,6 +32,7 @@ import anyio
 from db import decrypt_value, get_session
 from db.models import Log, User
 from services.schedular import repository, whatsapp
+from services.schedular.briefing_delivery import ABORTED, ScheduleClaim, send_briefing
 from services.schedular.daily_briefing import generate_daily_briefing
 from services.schedular.repository import ClaimedSchedule
 from session_manager import sessions
@@ -35,6 +40,15 @@ from session_manager import sessions
 logger = logging.getLogger(__name__)
 
 _MAX_LOG_MESSAGE_CHARS = 500
+#: How often a running job renews its lease (well under repository.LEASE_SECONDS).
+HEARTBEAT_SECONDS = 60
+
+# delivery outcome -> (schedule status, log status)
+_OUTCOMES = {
+    whatsapp.ACCEPTED: ("done", "success"),
+    whatsapp.NOT_SENT: ("failed", "failed"),
+    whatsapp.UNKNOWN: ("unknown", "unknown"),
+}
 
 
 def _ms_since(started: float) -> int:
@@ -65,11 +79,49 @@ def _write_log(
         logger.exception("failed to persist log for schedule %s", claim.id)
 
 
+async def _finish(claim: ClaimedSchedule, status: str) -> None:
+    try:
+        await asyncio.to_thread(repository.finish_schedule, claim, status)
+    except Exception:
+        # The lease will lapse and the reaper will move the schedule on.
+        logger.exception("schedule %s: could not record %s", claim.id, status)
+
+
+async def _heartbeat(claim: ClaimedSchedule, lost: asyncio.Event) -> None:
+    """Renew the lease until cancelled; set ``lost`` the moment a renewal fails."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_SECONDS)
+        try:
+            ok = await asyncio.to_thread(repository.renew_lease, claim)
+        except Exception:
+            # A database hiccup: try again next beat. If the lease does lapse,
+            # the final renewal before sending fails and nothing is sent.
+            logger.warning("schedule %s: lease renewal errored; will retry", claim.id)
+            continue
+        if not ok:
+            lost.set()
+            return
+
+
 async def run_one(claim: ClaimedSchedule) -> None:
     """Execute one claimed schedule end-to-end. Catches all exceptions."""
     started = time.perf_counter()
+
+    if claim.lateness > repository.STALE_AFTER:
+        _write_log(
+            claim,
+            status="skipped_stale",
+            message=f"skipped: started {int(claim.lateness.total_seconds() // 60)} min after its slot",
+            duration_ms=0,
+        )
+        await _finish(claim, "done")
+        return
+
     sid = f"sched-{claim.id}-{uuid4().hex[:8]}"
     session_created = False
+    lost = asyncio.Event()
+    heartbeat = asyncio.create_task(_heartbeat(claim, lost))
+    result = None
 
     try:
         with get_session() as db:
@@ -93,46 +145,43 @@ async def run_one(claim: ClaimedSchedule) -> None:
         session_created = True
 
         message = await generate_daily_briefing(sid)
-        await whatsapp.send(phone, message)
+        if lost.is_set():
+            from services.schedular.briefing_delivery import DeliveryResult
 
-        duration = _ms_since(started)
-        _write_log(
-            claim,
-            status="success",
-            message=f"sent {len(message)} chars to {phone or '<unset>'}",
-            duration_ms=duration,
-        )
-        repository.finish_schedule(
-            claim.id, success=True, interval_minutes=claim.interval_minutes
-        )
-        logger.info(
-            "schedule %s ok in %dms (user_id=%s)",
-            claim.id,
-            duration,
-            claim.user_id,
-        )
+            result = DeliveryResult(ABORTED, "lease_lost")
+        else:
+            result = await send_briefing(ScheduleClaim(claim), phone, message)
 
     except Exception as exc:
-        duration = _ms_since(started)
-        logger.exception(
-            "schedule %s failed after %dms (user_id=%s)",
-            claim.id,
-            duration,
-            claim.user_id,
-        )
-        _write_log(
-            claim,
-            status="failed",
-            message=str(exc),
-            duration_ms=duration,
-        )
-        repository.finish_schedule(
-            claim.id, success=False, interval_minutes=claim.interval_minutes
-        )
+        # Before any send: login, briefing or data failed, so nothing went out.
+        logger.exception("schedule %s failed before sending (user_id=%s)", claim.id, claim.user_id)
+        _write_log(claim, status="failed", message=f"not sent: {exc}", duration_ms=_ms_since(started))
+        await _finish(claim, "failed")
+        return
 
     finally:
+        heartbeat.cancel()
         if session_created:
             try:
                 sessions.remove_session(sid)
             except Exception:
                 logger.exception("failed to remove ephemeral session %s", sid)
+
+    duration = _ms_since(started)
+    if result.outcome == ABORTED:
+        # Nothing was sent; the log says so. If the lease is still ours (the
+        # schedule was disabled or the user deactivated) the schedule moves on
+        # now; if it was lost, finishing fails and the reaper moves it on.
+        _write_log(claim, status="skipped", message=f"not sent: {result.reason}", duration_ms=duration)
+        await _finish(claim, "done")
+        return
+
+    status, log_status = _OUTCOMES[result.outcome]
+    _write_log(
+        claim,
+        status=log_status,
+        message=f"{result.outcome} ({result.reason}), {len(message)} chars",
+        duration_ms=duration,
+    )
+    await _finish(claim, status)
+    logger.info("schedule %s %s in %dms (user_id=%s)", claim.id, result.outcome, duration, claim.user_id)

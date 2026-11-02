@@ -50,6 +50,9 @@ class User(SQLModel, table=True):
     # what makes logout revoke every saved copy of a stateless cookie.
     session_version: int = Field(default=0)
 
+    # Last manual "send briefing now"; the cooldown is checked and set atomically.
+    last_manual_briefing_at: datetime | None = None
+
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -157,8 +160,13 @@ class Schedule(SQLModel, table=True):
     next_run: datetime = Field(index=True)
     last_run: datetime | None = None
     enabled: bool = Field(default=True, index=True)
+    # pending | running | done | failed (known not sent) | unknown (outcome lost)
     status: str = Field(default="pending", index=True)
     created_at: datetime = Field(default_factory=utcnow)
+    # Lease on the current run (services/schedular/repository.py).
+    claimed_at: datetime | None = None
+    lease_expires_at: datetime | None = None
+    claim_token: str | None = Field(default=None, max_length=32)
 
 
 class Log(SQLModel, table=True):

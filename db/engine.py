@@ -44,6 +44,17 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # Logout bumps this; cookies issued with an older value stop working.
     ("users", "session_version",
      "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0"),
+    # Scheduler leases (services/schedular/repository.py): who is running a
+    # schedule's current slot, since when, and until when that claim holds.
+    ("schedules", "claimed_at",
+     "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ"),
+    ("schedules", "lease_expires_at",
+     "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ"),
+    ("schedules", "claim_token",
+     "ALTER TABLE schedules ADD COLUMN IF NOT EXISTS claim_token VARCHAR(32)"),
+    # Manual "send now" cooldown, checked and set in one atomic UPDATE.
+    ("users", "last_manual_briefing_at",
+     "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_manual_briefing_at TIMESTAMPTZ"),
 )
 
 #: How long startup DDL may wait for a lock before giving up. An ALTER queued

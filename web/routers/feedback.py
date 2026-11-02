@@ -108,7 +108,9 @@ async def api_feedback(request: Request):
 
     try:
         reply = await feedback_service.generate_reply(feedback, name)
-        await whatsapp.send(normalised_phone, reply)
+        # Not a briefing, so not through briefing_delivery; one attempt per
+        # submission, and an unknown outcome is never retried.
+        await whatsapp._post(normalised_phone, reply)
     except Exception:
         logger.exception("Feedback WhatsApp send failed")
         return JSONResponse(

@@ -346,9 +346,11 @@ if __name__ == "__main__":
         print(message)
         print("=" * 60)
         if _phone:
-            from services.schedular.whatsapp import send as _wa_send
-            print(f"\nSending to {_phone} via WhatsApp...")
-            await _wa_send(_phone, message)
-            print("WhatsApp message sent.")
+            from services.schedular.briefing_delivery import cli_claim, send_briefing
+
+            claim = cli_claim()  # refused in production
+            print("\nSending via WhatsApp...")
+            result = await send_briefing(claim, _phone, message)
+            print(f"WhatsApp: {result.outcome} ({result.reason})")
 
     asyncio.run(_run())

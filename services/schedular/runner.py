@@ -41,17 +41,22 @@ async def check_and_run_jobs() -> None:
     limits. Cross-user concurrency can be added later by switching to
     ``asyncio.gather`` with a semaphore.
     """
+    import asyncio
+
     try:
-        claims = repository.claim_due_schedules(batch=_BATCH_SIZE)
+        await asyncio.to_thread(repository.reclaim_expired)
     except Exception:
-        logger.exception("scheduler tick: claim failed")
-        return
+        logger.exception("scheduler tick: reclaim failed")
 
-    if not claims:
-        return
-
-    logger.info("scheduler tick: claimed %d schedule(s)", len(claims))
-    for claim in claims:
+    # One claim at a time, so each run's lease starts when the run does.
+    for _ in range(_BATCH_SIZE):
+        try:
+            claim = await asyncio.to_thread(repository.claim_next_due)
+        except Exception:
+            logger.exception("scheduler tick: claim failed")
+            return
+        if claim is None:
+            return
         try:
             await job_executor.run_one(claim)
         except Exception:

@@ -278,6 +278,44 @@ def test_async_routes_resolve_the_session_off_the_event_loop():
                 offenders.append(f"{path.name}:{fn.name} reads the session without broker_client")
     assert not offenders, offenders
 
+
+def test_whatsapp_is_sent_through_one_path():
+    """Only briefing_delivery (claim-checked) and the feedback reply may reach
+    the raw WhatsApp sender, so every briefing goes through a lease or the
+    manual cooldown; and nothing may import the old ``send``."""
+    allowed = {"services/schedular/briefing_delivery.py", "web/routers/feedback.py",
+               "services/schedular/whatsapp.py"}
+    offenders = []
+    for path in _app_sources():
+        rel = path.relative_to(_REPO).as_posix()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("whatsapp"):
+                for a in node.names:
+                    if a.name in {"_post", "send"}:
+                        offenders.append(f"{rel}:{node.lineno} imports whatsapp.{a.name}")
+            if (isinstance(node, ast.Attribute) and node.attr == "_post"
+                    and isinstance(node.value, ast.Name) and node.value.id == "whatsapp"
+                    and rel not in allowed):
+                offenders.append(f"{rel}:{node.lineno} uses whatsapp._post")
+    assert not offenders, offenders
+
+    import inspect
+
+    from services.schedular import briefing_delivery, whatsapp
+
+    assert not hasattr(whatsapp, "send")
+    params = list(inspect.signature(briefing_delivery.send_briefing).parameters)
+    assert params[0] == "claim", params
+    import asyncio
+
+    try:
+        asyncio.run(briefing_delivery.send_briefing(object(), "0", "x"))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("send_briefing accepted a non-claim")
+
+
 if __name__ == "__main__":
     passed = 0
     for name, fn in sorted(globals().items()):

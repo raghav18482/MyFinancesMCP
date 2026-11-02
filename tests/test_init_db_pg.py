@@ -33,6 +33,7 @@ def _old_schema(engine) -> None:
     from sqlmodel import SQLModel
 
     import db.models  # noqa: F401
+    from db.engine import _COLUMN_MIGRATIONS
 
     with engine.begin() as c:
         c.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
@@ -40,8 +41,8 @@ def _old_schema(engine) -> None:
     with engine.begin() as c:
         for t in NEW_TABLES:
             c.execute(text(f"DROP TABLE {t}"))
-        c.execute(text("ALTER TABLE users DROP COLUMN app_password_hash, DROP COLUMN session_version"))
-        c.execute(text("ALTER TABLE schedules DROP COLUMN status"))
+        for table, column, _stmt in _COLUMN_MIGRATIONS:
+            c.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
         c.execute(text(
             "INSERT INTO users (id, whatsapp_number, angel_api_key, angel_client_id, "
             "angel_password_encrypted, angel_totp_secret_encrypted, is_active, created_at, updated_at) "
@@ -106,8 +107,10 @@ def test_upgrades_an_older_schema_and_keeps_data():
         logging.getLogger("db.engine").removeHandler(cap)
 
     assert set(NEW_TABLES) <= _tables(engine)
-    assert {"app_password_hash", "session_version"} <= _columns(engine, "users")
-    assert "status" in _columns(engine, "schedules")
+    from db.engine import _COLUMN_MIGRATIONS
+
+    for table, column, _stmt in _COLUMN_MIGRATIONS:
+        assert column in _columns(engine, table), (table, column)
     assert first and "users.app_password_hash" in first[0], first
     assert second == [], "a second run must not ALTER anything"
     assert _snapshot(engine) == before, "existing rows changed"

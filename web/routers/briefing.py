@@ -162,19 +162,33 @@ async def api_briefing_schedule_delete(request: Request):
 
 
 
-async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
-    """Background task: full briefing pipeline without touching next_run."""
+def _start_manual_send(user_id: int):
+    from services.schedular.briefing_delivery import start_manual_send
+
+    with get_session() as db:
+        return start_manual_send(db, user_id)
+
+
+async def _run_briefing_now_bg(claim, phone: str | None) -> None:
+    """Background task: full briefing pipeline without touching the schedule.
+
+    ``claim`` comes from the atomic cooldown (:func:`_start_manual_send`); one
+    claim allows one send attempt, and an unknown outcome is never retried.
+    """
     import time as _time
     from functools import partial as _partial
     from uuid import uuid4 as _uuid4
 
     import anyio as _anyio
     from db import decrypt_value as _dec
+    from services.schedular.briefing_delivery import send_briefing
     from services.schedular.daily_briefing import generate_daily_briefing as _brief
-    from services.schedular.whatsapp import send as _wa
 
+    user_id = claim.user_id
     started = _time.perf_counter()
     sid = f"manual-{user_id}-{_uuid4().hex[:8]}"
+    result = None
+    message = ""
     try:
         with get_session() as db:
             user = db.get(User, user_id)
@@ -190,32 +204,29 @@ async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
             _partial(sessions.create_session, sid, api_key, client_id, pw, totp)
         )
         message = await _brief(sid)
-        await _wa(phone, message)
-        duration_ms = int((_time.perf_counter() - started) * 1000)
-        with get_session() as db:
-            db.add(Log(
-                user_id=user_id,
-                status="success",
-                message=f"manual send · {len(message)} chars to {phone or '<unset>'}",
-                duration_ms=duration_ms,
-            ))
-            db.commit()
+        result = await send_briefing(claim, phone, message)
     except Exception:
-        duration_ms = int((_time.perf_counter() - started) * 1000)
-        logger.exception("manual briefing send failed for user %s", user_id)
-        try:
-            with get_session() as db:
-                db.add(Log(user_id=user_id, status="failed",
-                           message="manual send error", duration_ms=duration_ms))
-                db.commit()
-        except Exception:
-            pass
+        # Before any send: login, briefing or data failed.
+        logger.exception("manual briefing failed before sending for user %s", user_id)
     finally:
         try:
             feed_relay.stop_feed(sid)
             sessions.remove_session(sid)
         except Exception:
             pass
+
+    duration_ms = int((_time.perf_counter() - started) * 1000)
+    if result is None:
+        status, text = "failed", "manual send: not sent (error before sending)"
+    else:
+        status = {"accepted": "success", "not_sent": "failed"}.get(result.outcome, "unknown")
+        text = f"manual send: {result.outcome} ({result.reason}), {len(message)} chars"
+    try:
+        with get_session() as db:
+            db.add(Log(user_id=user_id, status=status, message=text, duration_ms=duration_ms))
+            db.commit()
+    except Exception:
+        logger.exception("failed to persist manual send log for user %s", user_id)
 
 
 
@@ -227,7 +238,13 @@ async def api_briefing_send_now(request: Request):
     user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered for premium"}, status_code=403)
-    asyncio.create_task(_run_briefing_now_bg(user.id, user.whatsapp_number))
+    claim = await asyncio.to_thread(_start_manual_send, user.id)
+    if claim is None:
+        return JSONResponse(
+            {"error": "A briefing was sent recently. Please wait a few minutes before sending another."},
+            status_code=429,
+        )
+    asyncio.create_task(_run_briefing_now_bg(claim, user.whatsapp_number))
     return JSONResponse({"ok": True, "message": "Briefing started — check WhatsApp in ~30s"})
 
 
