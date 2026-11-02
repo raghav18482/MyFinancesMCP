@@ -4,6 +4,8 @@ Public surface kept tiny on purpose:
 - ``engine`` / ``get_session`` / ``init_db``
 - model classes (``User``, ``Schedule``, ``Log``)
 - ``encrypt_value`` / ``decrypt_value`` — reversible, for broker credentials
+- ``sign_token`` / ``unsign_token`` — deprecated (R8), removed in R9; tokens
+  are ``db.crypto.seal_token`` / ``open_token``
 - ``hash_password`` / ``verify_password`` — one-way, for the app's own login
 """
 from __future__ import annotations

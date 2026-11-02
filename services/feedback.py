@@ -1,13 +1,14 @@
 """Landing-page feedback → AI reply → WhatsApp delivery.
 
 Security model (see plan):
-    The landing page is server-rendered and embeds a Fernet-signed token minted
-    with ``ENCRYPTION_KEY`` (a server-only secret). The ``POST /api/feedback``
-    endpoint requires that token back. Because the token is
+    The landing page is server-rendered and embeds a token sealed with a token
+    key (``db.crypto.seal_token``, audience ``feedback``; a server-only
+    secret). The ``POST /api/feedback`` endpoint requires that token back.
+    Because the token is
 
       1. short-lived (Fernet ttl, see ``_TOKEN_TTL_SEC``),
       2. single-use (its nonce is consumed on first acceptance), and
-      3. unforgeable without ``ENCRYPTION_KEY``,
+      3. unforgeable without the token key, and useless for any other audience,
 
     a curl copied from the browser's network tab stops working after one use or
     after it expires, and an attacker cannot mint fresh tokens on their own.
@@ -24,7 +25,7 @@ from uuid import uuid4
 
 from openai import APIError, AuthenticationError
 
-from db import sign_token, unsign_token
+from db.crypto import open_token, seal_token
 from services.ai_service import _make_client
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,9 @@ FEEDBACK_MODEL = os.environ.get(
 PROJECT_URL = "agentfolio.in"
 _CLOSING_LINE = f"Manage your portfolio smartly → {PROJECT_URL}"
 
-_TOKEN_PURPOSE = "feedback"
+_TOKEN_AUDIENCE = "feedback"
+#: The previous release's tokens carried this instead of an audience (R8 only).
+_LEGACY_PURPOSE = "feedback"
 _TOKEN_TTL_SEC = 600  # 10 minutes
 _RATE_LIMIT_MAX = 3  # max accepted submissions per IP per window
 _RATE_LIMIT_WINDOW_SEC = 600  # 10 minutes
@@ -151,18 +154,18 @@ def _prune_nonces(now: float) -> None:
 
 def issue_feedback_token() -> str:
     """Mint a single-use, time-limited token to embed in the landing page."""
-    return sign_token({"purpose": _TOKEN_PURPOSE, "nonce": uuid4().hex})
+    return seal_token({"nonce": uuid4().hex}, audience=_TOKEN_AUDIENCE)
 
 
 def consume_feedback_token(token: str) -> None:
     """Validate and consume a feedback token. Raises :class:`FeedbackError`."""
     try:
-        payload = unsign_token(token, max_age=_TOKEN_TTL_SEC)
+        payload = open_token(
+            token, audience=_TOKEN_AUDIENCE, max_age=_TOKEN_TTL_SEC,
+            legacy=lambda p: p.get("purpose") == _LEGACY_PURPOSE,
+        )
     except Exception:
         raise FeedbackError("This form expired. Please refresh and try again.", 403)
-
-    if payload.get("purpose") != _TOKEN_PURPOSE:
-        raise FeedbackError("Invalid request.", 403)
 
     nonce = payload.get("nonce")
     if not nonce or not isinstance(nonce, str):

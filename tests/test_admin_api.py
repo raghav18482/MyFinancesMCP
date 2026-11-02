@@ -9,6 +9,8 @@ import sys
 import time
 from unittest import mock
 
+from cryptography.fernet import Fernet
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _security_harness import USERS, harness  # noqa: E402
@@ -149,7 +151,8 @@ def test_production_does_not_mount_without_the_flag():
 
     prod = {
         "APP_ENV": "production", "ALLOWED_HOSTS": "testserver", "SESSION_SECRET": "s" * 40,
-        "ENCRYPTION_KEY": "x", "PUBLIC_BASE_URL": "https://testserver", "ADMIN_API_KEY": KEY,
+        "ENCRYPTION_KEY": Fernet.generate_key().decode(), "TOKEN_KEYS": "t1:" + Fernet.generate_key().decode(),
+        "PUBLIC_BASE_URL": "https://testserver", "ADMIN_API_KEY": KEY,
     }
     # Without a key header a mounted admin route answers 422 (header missing);
     # an unmounted one does not exist at all: 404.

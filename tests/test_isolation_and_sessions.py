@@ -18,6 +18,8 @@ import os
 import sys
 import threading
 
+from cryptography.fernet import Fernet
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _security_harness import PASSWORD, USERS, FakeBroker, harness, run_all  # noqa: E402
@@ -301,8 +303,9 @@ def test_production_refuses_insecure_configuration():
     from web.app import create_app
 
     keys = ("APP_ENV", "SESSION_SECRET", "ALLOWED_HOSTS", "PUBLIC_BASE_URL", "ENCRYPTION_KEY",
-            "SESSION_COOKIE_SECURE", "RENDER")
+            "SESSION_COOKIE_SECURE", "RENDER", "TOKEN_KEYS")
     saved = {k: os.environ.get(k) for k in keys}
+    token_keys = "t1:" + Fernet.generate_key().decode()
 
     def setenv(**kv):
         for k in keys:
@@ -310,6 +313,7 @@ def test_production_refuses_insecure_configuration():
         for k, v in saved.items():
             if k == "ENCRYPTION_KEY" and v:
                 os.environ[k] = v
+        os.environ["TOKEN_KEYS"] = token_keys
         os.environ.update({k: v for k, v in kv.items() if v is not None})
 
     try:

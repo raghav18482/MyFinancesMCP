@@ -8,6 +8,8 @@ import os
 import sys
 from unittest import mock
 
+from cryptography.fernet import Fernet
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from web import client_ip as cip  # noqa: E402
@@ -157,8 +159,8 @@ def test_production_startup_stops_on_a_bad_client_ip_mode():
     from web import security_config
 
     env = {"APP_ENV": "production", "SESSION_SECRET": "s" * 40, "ALLOWED_HOSTS": "example.com",
-           "PUBLIC_BASE_URL": "https://example.com", "ENCRYPTION_KEY": "k" * 44,
-           "CLIENT_IP_MODE": "render_lst"}
+           "PUBLIC_BASE_URL": "https://example.com", "ENCRYPTION_KEY": Fernet.generate_key().decode(),
+           "TOKEN_KEYS": "t1:" + Fernet.generate_key().decode(), "CLIENT_IP_MODE": "render_lst"}
     with mock.patch.dict(os.environ, env):
         try:
             security_config.validate_production_config()

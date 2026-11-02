@@ -106,6 +106,12 @@ def validate_production_config() -> None:
     public_base_url()
     if not os.environ.get("ENCRYPTION_KEY", "").strip():
         raise InsecureConfiguration("ENCRYPTION_KEY must be set in production")
+    from db.crypto import KeyConfigError, validate_key_config
+
+    try:
+        validate_key_config(production=True)
+    except KeyConfigError as e:
+        raise InsecureConfiguration(str(e)) from None
     from web import client_ip
 
     try:
