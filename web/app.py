@@ -23,7 +23,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from adminApi import admin_router
-from web import security_config
+from web import client_ip, security_config
 from web.routers import all_routers
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,7 @@ def create_app() -> FastAPI:
     if security_config.admin_api_enabled():
         app.include_router(admin_router)
     security_config.log_admin_status()
+    client_ip.log_status()
     for router in all_routers:
         app.include_router(router)
 

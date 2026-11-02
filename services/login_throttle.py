@@ -33,6 +33,11 @@ _WINDOW_SEC = 15 * 60  # attempts older than this stop counting
 _MAX_PER_IDENTIFIER = 5
 _MAX_PER_IP = 20
 
+#: Above this many keys a map is swept of keys with no attempt in the window.
+#: Keys still inside the window are never evicted: dropping one would let a
+#: flood of new keys reset someone's count.
+_PRUNE_ABOVE = 10_000
+
 _lock = threading.Lock()
 _by_identifier: dict[str, list[float]] = {}
 _by_ip: dict[str, list[float]] = {}
@@ -89,6 +94,9 @@ def check(identifier: str, client_ip: str | None) -> None:
         if client_ip is not None:
             ip_hits.append(now)
             _by_ip[client_ip] = ip_hits
+        for store in (_by_identifier, _by_ip):
+            if len(store) > _PRUNE_ABOVE:
+                _prune(store, now)
 
 
 def clear(identifier: str, client_ip: str | None) -> None:
@@ -123,6 +131,12 @@ def check_global(name: str, cap: int) -> None:
             raise TooManyAttempts(retry_after)
         hits.append(now)
         _by_global[name] = hits
+
+
+def _prune(store: dict[str, list[float]], now: float) -> None:
+    """Drop keys whose newest attempt has left the window. Caller holds ``_lock``."""
+    for key in [k for k, v in store.items() if not v or now - v[-1] >= _WINDOW_SEC]:
+        del store[key]
 
 
 def _fresh(store: dict[str, list[float]], key: str, now: float) -> list[float]:

@@ -106,6 +106,12 @@ def validate_production_config() -> None:
     public_base_url()
     if not os.environ.get("ENCRYPTION_KEY", "").strip():
         raise InsecureConfiguration("ENCRYPTION_KEY must be set in production")
+    from web import client_ip
+
+    try:
+        client_ip.validate_config(production=True)
+    except ValueError as e:
+        raise InsecureConfiguration(str(e)) from None
     if not os.environ.get("ADMIN_API_KEY", "").strip():
         logger.warning("ADMIN_API_KEY is not set; the admin API refuses every request")
 

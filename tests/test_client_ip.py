@@ -1,4 +1,4 @@
-"""Client IP trust (web/client_ip.py), its use in throttles, and /__diag/ip.
+"""Client IP trust (web/client_ip.py), its startup checks, and its use in throttles.
 
 Run directly: ``python tests/test_client_ip.py``.
 """
@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -123,39 +122,115 @@ def test_oauth_registration_map_is_bounded():
     oauth_provider.reset_rate_limits()
 
 
-def _diag(env, k="tok", headers=None):
+def test_the_chosen_entry_must_be_an_ip_address():
+    with _mode("render_last"):
+        for junk in ("unknown", "203.0.113.7:443", "<script>", "203.0.113.999", "_hidden"):
+            assert cip.trusted_client_ip(_h(f"{VISITOR}, {junk}"), PROXY) is None, junk
+        assert cip.trusted_client_ip(_h("2001:DB8::1"), PROXY) == "2001:db8::1"
+    with _mode("render_first"):
+        assert cip.trusted_client_ip(_h(f"unknown, {VISITOR}"), PROXY) is None
+    with _mode("edge_secret", EDGE_AUTH_SECRET="e" * 40):
+        assert cip.trusted_client_ip(_h(f"junk, {PROXY}", **{"x-edge-auth": "e" * 40})) is None
+
+
+def test_production_refuses_a_mistyped_mode_or_a_weak_edge_secret():
+    for env in ({"CLIENT_IP_MODE": "render-last"},
+                {"CLIENT_IP_MODE": "edge_secret"},
+                {"CLIENT_IP_MODE": "edge_secret", "EDGE_AUTH_SECRET": "x" * 31}):
+        with mock.patch.dict(os.environ, env):
+            try:
+                cip.validate_config(production=True)
+            except ValueError as e:
+                assert "x" * 31 not in str(e)
+            else:
+                raise AssertionError(f"production accepted {env}")
+            cip.validate_config(production=False)  # outside production: log and use shadow
+    for env in ({}, {"CLIENT_IP_MODE": "shadow"}, {"CLIENT_IP_MODE": " Render_Last "},
+                {"CLIENT_IP_MODE": "edge_secret", "EDGE_AUTH_SECRET": "x" * 32}):
+        with mock.patch.dict(os.environ, env):
+            if not env:
+                os.environ.pop("CLIENT_IP_MODE", None)
+            cip.validate_config(production=True)
+
+
+def test_production_startup_stops_on_a_bad_client_ip_mode():
+    from web import security_config
+
+    env = {"APP_ENV": "production", "SESSION_SECRET": "s" * 40, "ALLOWED_HOSTS": "example.com",
+           "PUBLIC_BASE_URL": "https://example.com", "ENCRYPTION_KEY": "k" * 44,
+           "CLIENT_IP_MODE": "render_lst"}
+    with mock.patch.dict(os.environ, env):
+        try:
+            security_config.validate_production_config()
+        except security_config.InsecureConfiguration as e:
+            assert "CLIENT_IP_MODE" in str(e)
+        else:
+            raise AssertionError("production started with an unknown CLIENT_IP_MODE")
+        os.environ["CLIENT_IP_MODE"] = "render_last"
+        security_config.validate_production_config()
+
+
+def _login_sweep(mode, attempts):
+    """``attempts`` logins for different numbers from one address, each forging
+    a fresh leftmost entry. Returns the status codes."""
+    from _security_harness import harness
+
+    codes = []
+    with _mode(mode), harness() as h:
+        client = h.client()
+        for i in range(attempts):
+            res = client.post(
+                "/api/auth/login",
+                json={"country_code": "91", "whatsapp_number": f"90000{i:05d}",
+                      "app_password": "wrong-password-123"},
+                headers={"X-Forwarded-For": f"10.9.{i // 256}.{i % 256}, {VISITOR}"},
+            )
+            codes.append(res.status_code)
+    return codes
+
+
+def test_enforced_mode_caps_one_address_however_the_header_is_forged():
+    from services import login_throttle as lt
+
+    codes = _login_sweep("render_last", lt._MAX_PER_IP + 1)
+    assert 429 not in codes[:-1], codes
+    assert codes[-1] == 429, codes
+
+
+def test_shadow_mode_never_limits_by_address():
+    from services import login_throttle as lt
+
+    codes = _login_sweep("shadow", lt._MAX_PER_IP + 5)
+    assert 429 not in codes, codes
+
+
+def test_throttle_sweeps_only_expired_keys():
+    from services import login_throttle as lt
+
+    lt._by_identifier.clear()
+    lt._by_ip.clear()
+    with mock.patch.object(lt, "_PRUNE_ABOVE", 50):
+        old = lt.time.time() - lt._WINDOW_SEC - 1
+        for i in range(60):
+            lt._by_ip[f"10.0.0.{i}"] = [old]
+        lt._by_ip["10.1.1.1"] = [lt.time.time()] * 3
+        lt.check("+910000000099", "10.2.2.2")
+    assert set(lt._by_ip) == {"10.1.1.1", "10.2.2.2"}, sorted(lt._by_ip)
+    assert len(lt._by_ip["10.1.1.1"]) == 3, "a live count must survive the sweep"
+    lt._by_identifier.clear()
+    lt._by_ip.clear()
+
+
+def test_the_diagnostic_endpoint_is_gone():
     from fastapi.testclient import TestClient
 
     from web.app import create_app
 
-    with mock.patch.dict(os.environ, env):
-        for key in ("IP_DIAG_TOKEN", "IP_DIAG_UNTIL"):
-            if key not in env:
-                os.environ.pop(key, None)
+    with mock.patch.dict(os.environ, {"IP_DIAG_TOKEN": "tok", "IP_DIAG_UNTIL": "2999-01-01T00:00:00Z"}):
         with TestClient(create_app()) as client:
-            return client.get("/__diag/ip", params={"k": k}, headers=headers or {})
-
-
-def test_diag_is_off_by_default_expired_or_too_far_ahead():
-    now = datetime.now(timezone.utc)
-    assert _diag({}).status_code == 404
-    assert _diag({"IP_DIAG_TOKEN": "tok"}).status_code == 404
-    past = (now - timedelta(minutes=1)).isoformat()
-    assert _diag({"IP_DIAG_TOKEN": "tok", "IP_DIAG_UNTIL": past}).status_code == 404
-    far = (now + timedelta(hours=3)).isoformat()
-    assert _diag({"IP_DIAG_TOKEN": "tok", "IP_DIAG_UNTIL": far}).status_code == 404
-    naive = (now + timedelta(minutes=30)).replace(tzinfo=None).isoformat()
-    assert _diag({"IP_DIAG_TOKEN": "tok", "IP_DIAG_UNTIL": naive}).status_code == 404
-
-
-def test_diag_needs_the_token_and_reports_the_chain():
-    until = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
-    env = {"IP_DIAG_TOKEN": "tok", "IP_DIAG_UNTIL": until}
-    assert _diag(env, k="nope").status_code == 404
-    res = _diag(env, headers={"X-Forwarded-For": f"{FORGED}, {VISITOR}"})
-    assert res.status_code == 200, res.text
-    assert res.json()["x_forwarded_for"] == [FORGED, VISITOR]
-    assert res.headers["cache-control"] == "no-store"
+            assert client.get("/__diag/ip", params={"k": "tok"}).status_code in (404, 405)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert not os.path.exists(os.path.join(root, "web", "routers", "ip_diag.py"))
 
 
 if __name__ == "__main__":
