@@ -14,8 +14,10 @@ from services.portfolio_service import get_portfolio_cached
 
 from web.dependencies import (
     ADK_TRADING_CHAT_SESSION_KEY,
+    current_app_user,
     ensure_adk_chat_session_id,
     current_user,
+    page_redirect,
     require_login,
     session_id,
     template_context,
@@ -33,7 +35,7 @@ router = APIRouter()
 async def dashboard(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
 
     ctx = template_context(request, "dashboard")
     try:
@@ -106,7 +108,7 @@ async def dashboard(request: Request):
 async def positions_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
 
     ctx = template_context(request, "positions")
     pos_list = []
@@ -125,7 +127,7 @@ async def positions_page(request: Request):
 async def orders_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
 
     ctx = template_context(request, "orders")
     order_list = []
@@ -150,7 +152,7 @@ async def orders_page(request: Request):
 async def analytics_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
     return templates.TemplateResponse(request, "analytics.html", template_context(request, "analytics"))
 
 
@@ -159,7 +161,7 @@ async def analytics_page(request: Request):
 async def research_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
     ctx = template_context(request, "research")
     # The AI summary card decrypts the saved OpenRouter key with the client id
     # as the passphrase, the same way the dashboard does.
@@ -171,8 +173,8 @@ async def research_page(request: Request):
 @router.get("/learn", response_class=HTMLResponse)
 async def learn_page(request: Request):
     """Glossary of every fundamental metric, rendered from data/metric_glossary.json."""
-    client = require_login(request)
-    if client is None:
+    # Learning needs a signed-in user, not a broker.
+    if current_app_user(request) is None:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(request, "learn.html", template_context(request, "learn"))
 
@@ -182,7 +184,7 @@ async def learn_page(request: Request):
 async def sectors_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
     return templates.TemplateResponse(request, "sectors.html", template_context(request, "sectors"))
 
 
@@ -191,7 +193,7 @@ async def sectors_page(request: Request):
 async def news_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
     return templates.TemplateResponse(request, "news.html", template_context(request, "news"))
 
 
@@ -200,7 +202,7 @@ async def news_page(request: Request):
 async def agent_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
     ensure_adk_chat_session_id(request)
     return templates.TemplateResponse(request, "agent.html", template_context(request, "agent"))
 
@@ -210,7 +212,7 @@ async def agent_page(request: Request):
 async def trading_page(request: Request):
     client = require_login(request)
     if client is None:
-        return RedirectResponse("/login", status_code=302)
+        return page_redirect(request)
     sid = session_id(request)
     ctx = template_context(request, "trading")
 

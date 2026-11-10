@@ -8,6 +8,15 @@ from SmartApi.smartConnect import SmartConnect
 logger = logging.getLogger(__name__)
 
 
+class BrokerAuthRejected(RuntimeError):
+    """Angel One answered the login and refused it: the credentials are wrong.
+
+    Distinct from a plain ``RuntimeError`` (the broker could not be reached, or
+    errored), because only this one says the stored credentials should stop
+    being used. Subclasses ``RuntimeError`` so existing handlers still catch it.
+    """
+
+
 class AngelOneClient:
     """Read-only Angel One SmartAPI client: portfolio, orders/trades history, market data."""
 
@@ -40,6 +49,7 @@ class AngelOneClient:
         totp = pyotp.TOTP(self.totp_secret)
 
         last_error = None
+        rejected = False  # did the last attempt get an answer that said no?
         for attempt in range(5):
             try:
                 totp_code = totp.now()
@@ -53,13 +63,18 @@ class AngelOneClient:
                     logger.info("Angel One session established for %s", self.client_id)
                     return
                 last_error = data.get("message", "Unknown login error")
+                rejected = True
             except Exception as e:
                 last_error = str(e)
+                rejected = False
 
             if attempt < 4:
                 time.sleep(2)
 
-        raise RuntimeError(f"Failed to authenticate after 5 attempts: {last_error}")
+        message = f"Failed to authenticate after 5 attempts: {last_error}"
+        if rejected:
+            raise BrokerAuthRejected(message)
+        raise RuntimeError(message)
 
     @property
     def feed_token(self) -> Optional[str]:

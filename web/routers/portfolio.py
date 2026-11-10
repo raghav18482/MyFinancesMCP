@@ -7,7 +7,7 @@ import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 
@@ -22,7 +22,7 @@ from services.portfolio_service import build_portfolio_data, compute_beta, get_p
 
 
 from web.dependencies import (
-    require_login,
+    require_brokerage,
     session_id,
 )
 from web.view_models import order_rows, position_rows, trade_rows
@@ -37,10 +37,7 @@ router = APIRouter()
 
 
 @router.get("/api/portfolio/analytics")
-async def api_portfolio_analytics(request: Request):
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_portfolio_analytics(request: Request, client=Depends(require_brokerage)):
     sid = session_id(request)
     return JSONResponse(get_portfolio_cached(sid, client))
 
@@ -54,11 +51,8 @@ async def api_portfolio_analytics(request: Request):
 # separate error banners on the old Orders page.
 
 
-async def _broker_rows(request: Request, fetch, to_rows, label: str):
+async def _broker_rows(client, fetch, to_rows, label: str):
     """Rows from one broker call, or the error response to send instead."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         return to_rows(await asyncio.to_thread(fetch, client))
     except Exception as e:
@@ -67,8 +61,8 @@ async def _broker_rows(request: Request, fetch, to_rows, label: str):
 
 
 @router.get("/api/portfolio/positions")
-async def api_portfolio_positions(request: Request):
-    rows = await _broker_rows(request, lambda c: c.get_positions(), position_rows, "Positions")
+async def api_portfolio_positions(request: Request, client=Depends(require_brokerage)):
+    rows = await _broker_rows(client, lambda c: c.get_positions(), position_rows, "Positions")
     if isinstance(rows, JSONResponse):
         return rows
     return JSONResponse({
@@ -78,16 +72,16 @@ async def api_portfolio_positions(request: Request):
 
 
 @router.get("/api/portfolio/orders")
-async def api_portfolio_orders(request: Request):
-    rows = await _broker_rows(request, lambda c: c.get_order_book(), order_rows, "Order book")
+async def api_portfolio_orders(request: Request, client=Depends(require_brokerage)):
+    rows = await _broker_rows(client, lambda c: c.get_order_book(), order_rows, "Order book")
     if isinstance(rows, JSONResponse):
         return rows
     return JSONResponse({"orders": [asdict(r) for r in rows]})
 
 
 @router.get("/api/portfolio/trades")
-async def api_portfolio_trades(request: Request):
-    rows = await _broker_rows(request, lambda c: c.get_trade_book(), trade_rows, "Trade book")
+async def api_portfolio_trades(request: Request, client=Depends(require_brokerage)):
+    rows = await _broker_rows(client, lambda c: c.get_trade_book(), trade_rows, "Trade book")
     if isinstance(rows, JSONResponse):
         return rows
     return JSONResponse({"trades": [asdict(r) for r in rows]})
@@ -101,10 +95,8 @@ async def api_portfolio_candles(
     exchange: str = Query("NSE"),
     interval: str = Query("ONE_DAY"),
     days: int = Query(90),
+    client=Depends(require_brokerage),
 ):
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         sr = search_scrip_cached(client, exchange, scrip_search_key(symbol))
@@ -138,11 +130,9 @@ async def api_portfolio_predict(
     symbol: str = Query(...),
     exchange: str = Query("NSE"),
     days: int = Query(365),
+    client=Depends(require_brokerage),
 ):
     """Predict price direction for a stock across multiple timeframes (up to 1 year)."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         sr = search_scrip_cached(client, exchange, scrip_search_key(symbol))
@@ -179,11 +169,8 @@ async def api_portfolio_predict(
 
 
 @router.get("/api/portfolio/beta")
-async def api_portfolio_beta(request: Request, days: int = Query(90)):
+async def api_portfolio_beta(request: Request, days: int = Query(90), client=Depends(require_brokerage)):
     """Compute portfolio beta vs NIFTY 50 using daily returns."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         portfolio = build_portfolio_data(client)

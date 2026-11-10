@@ -10,7 +10,16 @@ from __future__ import annotations
 
 from .crypto import decrypt_value, encrypt_value, sign_token, unsign_token
 from .engine import DATABASE_URL, engine, get_session, init_db
-from .models import ChatThread, Log, McpToken, RiskProfile, Schedule, User
+from .models import (
+    BROKERAGE_PROVIDER,
+    BrokerageStatus,
+    ChatThread,
+    Log,
+    McpToken,
+    RiskProfile,
+    Schedule,
+    User,
+)
 from .passwords import (
     MIN_PASSWORD_CHARS,
     hash_password,
@@ -24,6 +33,8 @@ __all__ = [
     "get_session",
     "init_db",
     "User",
+    "BrokerageStatus",
+    "BROKERAGE_PROVIDER",
     "Schedule",
     "Log",
     "RiskProfile",

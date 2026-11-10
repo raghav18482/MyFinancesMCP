@@ -164,8 +164,10 @@ flowchart TB
 
 ### Session flows
 
-- **Web login:** Browser posts Angel credentials → server creates an `AngelOneClient` in memory and stores an opaque **`sid`** in a signed session cookie.
-- **Daily briefing:** Scheduler ticks every minute → queries `schedules` for rows where `next_run <= now()` → claims them with `FOR UPDATE SKIP LOCKED` → for each claimed schedule: decrypts credentials from `users`, creates an ephemeral Angel session, generates the briefing, sends WhatsApp, writes to `logs`, and arms `next_run`.
+- **Registration:** a WhatsApp number and app password create a `users` row with `brokerage_status = not_connected` and every Angel One column NULL. Learning is open from there. Angel One credentials can be supplied at the same time, or later through `POST /api/brokerage/register`.
+- **Web login:** WhatsApp number + app password → the server verifies the scrypt hash and writes `uid`/`uv` to a signed session cookie. No broker call. Login works whether or not a broker is connected, and whether or not Angel One is up.
+- **Brokerage access:** every endpoint that reads the Angel One account depends on `require_brokerage` (`web/dependencies.py`). It answers 401 when signed out, 403 `brokerage_not_connected` / `brokerage_reauth_required` when there is no usable link, and 503 `brokerage_unavailable` when Angel One cannot be reached. Otherwise it builds the `AngelOneClient` from the encrypted credentials and records its **`sid`** in the cookie. If Angel One rejects stored credentials, the link becomes `expired` and the user reconnects.
+- **Daily briefing:** Scheduler ticks every minute → queries `schedules` for rows where `next_run <= now()` → claims them with `FOR UPDATE SKIP LOCKED` → for each claimed schedule: skips users whose broker is not `connected`, decrypts credentials from `users`, creates an ephemeral Angel session, generates the briefing, sends WhatsApp, writes to `logs`, and arms `next_run`.
 - **MCP:** Read-only. Each request carries `Authorization: Bearer <token>`: either an OAuth 2.1 access token (claude.ai custom connectors and other OAuth clients; PKCE S256, Dynamic Client Registration, consent at `/oauth/consent`, tokens hashed and bound to the `/mcp/mcp` resource) or a personal access token created on `/connect`. The user is derived from the verified token and their broker session is rebuilt from their encrypted stored credentials; no credentials pass through tools.
 
 ## Getting Your Angel One API Credentials
@@ -201,7 +203,32 @@ pip install -r requirements.txt
 
 ### 3. Set up Postgres
 
-The scheduler and admin API require a Postgres database. The easiest option for development is a free [Neon](https://neon.tech) database. Tables are created automatically on first startup via `init_db()`.
+The scheduler and admin API require a Postgres database. The easiest option for development is a free [Neon](https://neon.tech) database. The schema is created and migrated automatically on startup by `init_db()` (see [Database migrations](#database-migrations)).
+
+### Database migrations
+
+The schema is managed by Alembic (`alembic.ini`, `migrations/versions/`). On every start, `init_db()` brings the database to the head revision inside one transaction, under a Postgres advisory lock:
+
+| Database state | What happens |
+|---|---|
+| Empty | Tables created from the models, stamped at head |
+| Created before Alembic (no `alembic_version`) | The old additive ALTERs run, the database is stamped at `20261109_01_baseline`, then upgraded |
+| Already versioned | Upgraded to head (a no-op when current) |
+| At a revision this release does not know (e.g. the `staging` branch's history) | Startup refuses, with nothing changed |
+
+In production a migration failure stops the app from starting. A schema the code does not match would break every request. Set `DB_AUTO_MIGRATE=0` to run migrations yourself instead (`alembic upgrade head`; `alembic current` shows where a database is).
+
+**Deploying the optional-brokerage release** (`20261109_02_broker_nullable`, `20261109_03_brokerage_status`):
+
+1. Back up the database first (a Neon branch or snapshot).
+2. Check that production has never been migrated by another branch: `SELECT version_num FROM alembic_version;` must fail (no table) or return a `20261109_*` revision. If it returns `0001_baseline` … `0003_broker_connections`, stop: that is the `staging` history, and the two need reconciling first.
+3. Deploy the backend. The startup log shows `init_db: stamped 20261109_01_baseline and upgraded to head`.
+4. Verify: `SELECT brokerage_status, count(*) FROM users GROUP BY 1;`. Every row with all four Angel One credentials is `connected`; the rest are `not_connected`. Existing IDs, password hashes and credentials are untouched.
+5. Then deploy the React app. It expects the new session shape, with a nullable `client_id`.
+
+Rolling back the code is safe while every user still has broker credentials. Once phone-only users exist, `alembic downgrade 20261109_01_baseline` refuses rather than delete them.
+
+Migration tests: `python tests/test_migrations.py`. They run on SQLite always, and on Postgres too when `MIGRATION_TEST_PG_URL` points at a server where they may create and drop a throwaway database.
 
 ### 4. Configure environment variables
 

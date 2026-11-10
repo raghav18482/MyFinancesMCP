@@ -5,20 +5,20 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlmodel import select
 
 from db import get_session
-from db.models import Log, Schedule, User
+from db.models import Log, Schedule
 
 from services.realtime_feed import feed_relay
 
 from session_manager import sessions
 
 from web.dependencies import (
-    current_client,
     current_user,
+    require_brokerage,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,10 +78,7 @@ def _schedule_to_dict(s: Schedule) -> dict:
 
 
 @router.get("/api/briefing/schedule")
-async def api_briefing_schedule_get(request: Request):
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_briefing_schedule_get(request: Request, client=Depends(require_brokerage)):
     user = current_user(request)
     if not user:
         return JSONResponse({"exists": False})
@@ -93,10 +90,7 @@ async def api_briefing_schedule_get(request: Request):
 
 
 @router.post("/api/briefing/schedule")
-async def api_briefing_schedule_save(request: Request):
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_briefing_schedule_save(request: Request, client=Depends(require_brokerage)):
     user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered for premium"}, status_code=403)
@@ -139,10 +133,7 @@ async def api_briefing_schedule_save(request: Request):
 
 
 @router.delete("/api/briefing/schedule")
-async def api_briefing_schedule_delete(request: Request):
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_briefing_schedule_delete(request: Request, client=Depends(require_brokerage)):
     user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered"}, status_code=403)
@@ -166,23 +157,21 @@ async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
     """Background task: full briefing pipeline without touching next_run."""
     import time as _time
     from uuid import uuid4 as _uuid4
-    from db import decrypt_value as _dec
+    from adminApi import service as _users
     from services.schedular.daily_briefing import generate_daily_briefing as _brief
     from services.schedular.whatsapp import send as _wa
 
     started = _time.perf_counter()
     sid = f"manual-{user_id}-{_uuid4().hex[:8]}"
     try:
-        with get_session() as db:
-            user = db.get(User, user_id)
-            if not user or not user.is_active:
-                return
-            api_key = user.angel_api_key
-            client_id = user.angel_client_id
-            pw = _dec(user.angel_password_encrypted)
-            totp = _dec(user.angel_totp_secret_encrypted)
+        # None unless the user is active and their broker link is connected.
+        creds = _users.credentials_for_user(user_id)
+        if creds is None:
+            return
 
-        sessions.create_session(sid, api_key, client_id, pw, totp)
+        sessions.create_session(
+            sid, creds.api_key, creds.client_id, creds.password, creds.totp_secret
+        )
         message = await _brief(sid)
         await _wa(phone, message)
         duration_ms = int((_time.perf_counter() - started) * 1000)
@@ -214,10 +203,7 @@ async def _run_briefing_now_bg(user_id: int, phone: str | None) -> None:
 
 
 @router.post("/api/briefing/send-now")
-async def api_briefing_send_now(request: Request):
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_briefing_send_now(request: Request, client=Depends(require_brokerage)):
     user = current_user(request)
     if not user:
         return JSONResponse({"error": "Not registered for premium"}, status_code=403)
@@ -227,10 +213,7 @@ async def api_briefing_send_now(request: Request):
 
 
 @router.get("/api/briefing/logs")
-async def api_briefing_logs(request: Request):
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_briefing_logs(request: Request, client=Depends(require_brokerage)):
     user = current_user(request)
     if not user:
         return JSONResponse({"logs": []})

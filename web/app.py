@@ -17,11 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 from starlette.types import Scope
 
 from adminApi import admin_router
 from web import security_config
+from web.dependencies import BrokerageAccessError
 from web.routers import all_routers
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,16 @@ def create_app() -> FastAPI:
 
     app.mount("/static/data", RevalidatingStaticFiles(directory=os.path.join(_dir, "data")), name="data")
     app.mount("/static", RevalidatingStaticFiles(directory=os.path.join(_frontend_dir, "static")), name="static")
+
+    @app.exception_handler(BrokerageAccessError)
+    async def _brokerage_access_error(_request, exc: BrokerageAccessError):
+        # ``error`` for the SPA's parser, ``detail`` as FastAPI's own errors
+        # name it, ``code`` so a client can tell connect / reconnect / retry apart.
+        return JSONResponse(
+            {"error": exc.message, "detail": exc.message, "code": exc.code},
+            status_code=exc.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
 
     app.include_router(admin_router)
     for router in all_routers:

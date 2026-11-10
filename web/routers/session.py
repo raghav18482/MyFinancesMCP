@@ -2,15 +2,17 @@
 
 The server-rendered pages learn this from :func:`web.dependencies.template_context`
 on every render. A single-page app renders once, so it asks here instead, and
-uses the answer for route guards, the premium gate, and the passphrase that
-unlocks the OpenRouter key it keeps in ``localStorage``.
+uses the answer for route guards, the brokerage and premium gates, and the
+passphrase that unlocks the OpenRouter key it keeps in ``localStorage``.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from web.dependencies import current_client, current_user
+from adminApi import service as admin_service
+from web.auth_flow import account_payload
+from web.dependencies import current_app_user
 
 router = APIRouter()
 
@@ -25,22 +27,24 @@ async def api_session_bootstrap(request: Request):
     Anonymous is a 200, not a 401: it is an answer, not a failure, and the
     client needs to tell it apart from a request that did fail.
 
-    Like every logged-in page, this goes through :func:`current_client`, so a
-    cookie whose broker session lapsed is reconnected here rather than bounced.
+    Signed in means a valid cookie for an active user — with or without a
+    broker. Nothing here contacts Angel One, so the app loads even when the
+    broker is down; ``brokerage_status`` says whether brokerage pages will work.
     """
-    client = current_client(request)
-    if client is None:
+    user = current_app_user(request)
+    if user is None:
         return JSONResponse({"authenticated": False}, headers=_NO_STORE)
 
-    user = current_user(request)
-    premium = bool(user and user.is_active)
+    connected = admin_service.is_connected(user)
     return JSONResponse(
         {
             "authenticated": True,
-            "client_id": client.client_id,
+            **account_payload(user),
+            # Premium (WhatsApp briefings) runs on the broker link, so it is
+            # exactly "connected" now that every signed-in user has a row.
             "premium": {
-                "registered": premium,
-                "whatsapp_number": user.whatsapp_number if premium else None,
+                "registered": connected,
+                "whatsapp_number": user.whatsapp_number if connected else None,
             },
         },
         headers=_NO_STORE,

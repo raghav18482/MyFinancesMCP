@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 
@@ -17,7 +17,7 @@ from services.news_service import (
 
 
 from web.dependencies import (
-    require_login,
+    require_brokerage,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,8 @@ router = APIRouter()
 async def api_news_portfolio(
     request: Request,
     period: str = Query("7d"),
+    client=Depends(require_brokerage),
 ):
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
     period = normalize_news_period(period)
     try:
         result = await asyncio.to_thread(build_portfolio_sector_news, client, period)
@@ -69,15 +67,12 @@ async def api_news_search(
 
 
 @router.post("/api/news/sentiment")
-async def api_news_sentiment(request: Request):
+async def api_news_sentiment(request: Request, client=Depends(require_brokerage)):
     """
     Run FinBERT sentiment analysis on portfolio news.
     Body: {"sectors": [{"name": str, "invested": float, "news": [...]}]}
     Returns same structure with sentiment added per article and per sector.
     """
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         body = await request.json()

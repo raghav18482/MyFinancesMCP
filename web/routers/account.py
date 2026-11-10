@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from services import account_deletion, login_throttle
 from web import auth_flow, country_codes
-from web.dependencies import client_ip, current_client, current_user
+from web.dependencies import client_ip, current_app_user
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,10 @@ async def api_account_delete(request: Request):
     A wrong password is a 400 naming the field, not a 401: the session is
     still valid, and a 401 would sign the app out.
     """
-    client = current_client(request)
-    if client is None:
+    # Any signed-in user, broker or not: an account must be deletable even if
+    # it never connected one, or its broker link has expired.
+    user = current_app_user(request)
+    if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         body = await request.json()
@@ -39,12 +41,6 @@ async def api_account_delete(request: Request):
         body = None
     if not isinstance(body, dict):
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    user = current_user(request)
-    if user is None:
-        # Nothing stored for this session: there is nothing to delete.
-        auth_flow.logout(request)
-        return JSONResponse({"ok": True, "deleted": False})
     if not user.app_password_hash:
         return JSONResponse(
             {

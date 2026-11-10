@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 
@@ -12,8 +12,8 @@ from adminApi import service as admin_service
 
 from web import country_codes
 from web.dependencies import (
-    current_client,
     current_user,
+    require_brokerage,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,10 +26,7 @@ router = APIRouter()
 
 
 @router.get("/api/premium/status")
-async def api_premium_status(request: Request):
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_premium_status(request: Request, client=Depends(require_brokerage)):
     user = current_user(request)
     if user and user.is_active:
         return JSONResponse({
@@ -42,7 +39,7 @@ async def api_premium_status(request: Request):
 
 
 @router.post("/api/premium/register")
-async def api_premium_register(request: Request):
+async def api_premium_register(request: Request, client=Depends(require_brokerage)):
     """Register the logged-in browser session for premium (WhatsApp briefings).
 
     Credentials are taken from the in-memory ``AngelOneClient`` for this session
@@ -52,11 +49,11 @@ async def api_premium_register(request: Request):
     because ``base_url`` is derived from the client's ``Host`` header, a request
     with ``Host: attacker.tld`` made the server send the user's plaintext PIN,
     TOTP secret and ``ADMIN_API_KEY`` to that host. Keep this call in-process.
-    """
-    client = current_client(request)
-    if not client:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
+    Since registration and broker connection split, every connected user
+    already has an active row, so this answers 409 for them; it stays for
+    clients that still call it.
+    """
     try:
         body = await request.json()
     except Exception:

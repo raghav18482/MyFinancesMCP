@@ -22,7 +22,8 @@ import logging
 import time
 from uuid import uuid4
 
-from db import decrypt_value, get_session
+from adminApi import service as admin_service
+from db import get_session
 from db.models import Log, User
 from services.schedular import repository, whatsapp
 from services.schedular.daily_briefing import generate_daily_briefing
@@ -76,13 +77,29 @@ async def run_one(claim: ClaimedSchedule) -> None:
             if not user.is_active:
                 raise RuntimeError(f"user {claim.user_id} is inactive")
 
-            api_key = user.angel_api_key
-            client_id = user.angel_client_id
             phone = user.whatsapp_number
-            password = decrypt_value(user.angel_password_encrypted)
-            totp_secret = decrypt_value(user.angel_totp_secret_encrypted)
 
-        sessions.create_session(sid, api_key, client_id, password, totp_secret)
+        # None unless the broker link is connected: a user who never connected
+        # one, disconnected it, or whose credentials were rejected gets no
+        # briefing until they reconnect. Not a failure of this job.
+        creds = admin_service.credentials_for_user(claim.user_id)
+        if creds is None:
+            _write_log(
+                claim,
+                status="skipped",
+                message="brokerage not connected",
+                duration_ms=_ms_since(started),
+            )
+            repository.finish_schedule(
+                claim.id, success=False, interval_minutes=claim.interval_minutes
+            )
+            logger.info("schedule %s skipped: user_id=%s has no connected broker",
+                        claim.id, claim.user_id)
+            return
+
+        sessions.create_session(
+            sid, creds.api_key, creds.client_id, creds.password, creds.totp_secret
+        )
         session_created = True
 
         message = await generate_daily_briefing(sid)

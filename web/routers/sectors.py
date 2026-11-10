@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 
@@ -16,7 +16,7 @@ from services.portfolio_service import build_portfolio_data
 
 
 from web.dependencies import (
-    require_login,
+    require_brokerage,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,8 @@ router = APIRouter()
 
 
 @router.get("/api/sectors/overview")
-async def api_sectors_overview(request: Request):
+async def api_sectors_overview(request: Request, client=Depends(require_brokerage)):
     """Get sector-level analysis for the user's portfolio."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         portfolio = build_portfolio_data(client)
@@ -47,11 +44,8 @@ async def api_sectors_overview(request: Request):
 
 
 @router.get("/api/sectors/breadth")
-async def api_sectors_breadth(request: Request):
+async def api_sectors_breadth(request: Request, client=Depends(require_brokerage)):
     """Get market breadth indicators."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         result = await asyncio.to_thread(get_market_breadth)

@@ -46,6 +46,8 @@ from mcp.types import ToolAnnotations
 
 from adminApi import service as admin_service
 from agents.readonly_guard import FORBIDDEN_TOOL_RE
+from angel_client import BrokerAuthRejected
+from db.models import BrokerageStatus
 from services import mcp_tokens, oauth_provider
 from services.broker_service import (
     calculate_symbol_pnl,
@@ -237,6 +239,14 @@ def _require_client(ctx: Context = None) -> ReadOnlyBroker:
     state = admin_service.session_state(user_id)
     if state is None or not state.is_active:
         raise NotAuthorized("This account is not active.")
+    if state.brokerage_status != BrokerageStatus.CONNECTED:
+        # A token outlives the broker link it was issued under; never serve
+        # from one that is not connected now.
+        sessions.remove_session(mcp_tokens.mcp_session_key(user_id))
+        raise NotAuthorized(
+            "No brokerage account is connected. Connect (or reconnect) your "
+            "Angel One account in the web app to use these tools."
+        )
 
     key = mcp_tokens.mcp_session_key(user_id)
 
@@ -248,11 +258,19 @@ def _require_client(ctx: Context = None) -> ReadOnlyBroker:
             return sessions.create_session(
                 key, creds.api_key, creds.client_id, creds.password, creds.totp_secret
             )
+        except BrokerAuthRejected:
+            logger.warning("MCP: Angel One rejected stored credentials for user id=%s", user_id)
+            admin_service.set_brokerage_status(
+                user_id, BrokerageStatus.EXPIRED, only_if=(BrokerageStatus.CONNECTED,)
+            )
+            raise NotAuthorized(
+                "Angel One rejected your saved credentials. Reconnect your Angel One "
+                "account in the web app."
+            ) from None
         except Exception:
             logger.exception("MCP: Angel One login failed for user id=%s", user_id)
             raise RuntimeError(
-                "Could not connect to Angel One with your saved credentials. "
-                "Re-enroll in the web app if they have changed."
+                "Could not connect to Angel One right now. Please try again shortly."
             ) from None
 
     client = sessions.get_or_create(key, _build)
