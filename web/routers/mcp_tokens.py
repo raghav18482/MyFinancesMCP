@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from db.passwords import verify_password
 from services import login_throttle, mcp_tokens
-from web.dependencies import client_ip, current_user
+from web.dependencies import client_ip, current_app_user, require_brokerage
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +25,21 @@ _NO_STORE = {"Cache-Control": "no-store"}
 
 @router.get("/api/mcp/tokens")
 async def api_mcp_tokens_list(request: Request):
-    user = current_user(request)
+    # Any signed-in user may see (and revoke) their tokens, connected or not —
+    # someone who just disconnected their broker may well want to tidy up.
+    user = current_app_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
     return JSONResponse({"tokens": mcp_tokens.list_for_user(user.id)}, headers=_NO_STORE)
 
 
 @router.post("/api/mcp/tokens")
-async def api_mcp_tokens_create(request: Request):
-    """Create a token. The raw value is in this response and nowhere else, ever."""
-    user = current_user(request)
+async def api_mcp_tokens_create(request: Request, _client=Depends(require_brokerage)):
+    """Create a token. The raw value is in this response and nowhere else, ever.
+
+    Needs a connected broker: the MCP endpoint serves portfolio data only.
+    """
+    user = current_app_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
     try:
@@ -84,7 +89,7 @@ async def api_mcp_tokens_create(request: Request):
 
 @router.delete("/api/mcp/tokens/{token_id}")
 async def api_mcp_tokens_revoke(request: Request, token_id: int):
-    user = current_user(request)
+    user = current_app_user(request)
     if user is None:
         return JSONResponse({"error": "Not authenticated"}, status_code=401, headers=_NO_STORE)
     if not mcp_tokens.revoke(user.id, token_id):

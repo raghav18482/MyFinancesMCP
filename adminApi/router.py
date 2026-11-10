@@ -93,10 +93,11 @@ class ScheduleUpdateRequest(BaseModel):
 # ── Response schemas ─────────────────────────────────────────────────────────
 
 class UserResponse(BaseModel):
+    # No credential of any kind, the API key included: see service.public_view.
     id: int
     whatsapp_number: Optional[str]
-    angel_api_key: str
-    angel_client_id: str
+    angel_client_id: Optional[str]
+    brokerage_status: str
     is_active: bool
     created_at: datetime
     updated_at: datetime

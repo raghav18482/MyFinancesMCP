@@ -5,7 +5,7 @@ import json
 import asyncio
 import logging
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 
@@ -18,7 +18,7 @@ from services.market_data import (
 
 
 from web.dependencies import (
-    require_login,
+    require_brokerage,
     session_id,
 )
 
@@ -70,6 +70,7 @@ async def api_market_stream(
     symbols: str = Query(..., description="Comma-separated trading symbols"),
     tokens: str = Query("", description="Optional comma-separated symboltokens"),
     exchange: str = Query("NSE"),
+    client=Depends(require_brokerage),
 ):
     """
     Stream live price ticks to the browser over Server-Sent Events.
@@ -80,9 +81,6 @@ async def api_market_stream(
     URL. Ticks come from the Angel WebSocket feed where available and from
     REST polling only for tokens the feed is not delivering.
     """
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     sid = session_id(request)
     requested = [s.strip() for s in symbols.split(",") if s.strip()][:_MAX_STREAM_SYMBOLS]

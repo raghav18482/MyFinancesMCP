@@ -1,4 +1,4 @@
-"""JSON twins of the login, enrollment and logout forms, for the React app.
+"""JSON twins of the login, registration and logout forms, for the React app.
 
 The flows live in :mod:`web.auth_flow`; this module only translates between
 JSON and :class:`~web.auth_flow.AuthFlowError`. Every error body has the shape
@@ -8,6 +8,7 @@ to highlight when the failure belongs to exactly one.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Request
@@ -36,6 +37,11 @@ def _text(body: dict, key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _number(body: dict) -> str:
+    """The login identifier. ``phone_number`` is accepted as an alias."""
+    return _text(body, "whatsapp_number") or _text(body, "phone_number")
+
+
 def _flow_error(e: auth_flow.AuthFlowError) -> JSONResponse:
     content: dict[str, str] = {"error": e.message}
     if e.field:
@@ -45,6 +51,9 @@ def _flow_error(e: auth_flow.AuthFlowError) -> JSONResponse:
 
 
 _INVALID_BODY = {"error": "Invalid JSON body"}
+
+# Auth-bearing answers: never let a browser or proxy reuse one.
+_NO_STORE = {"Cache-Control": "no-store"}
 
 
 @router.get("/api/auth/config")
@@ -64,40 +73,54 @@ async def api_auth_login(request: Request):
         return JSONResponse(_INVALID_BODY, status_code=400)
 
     try:
-        client = auth_flow.login(
+        user = auth_flow.login(
             request,
             _text(body, "country_code"),
-            _text(body, "whatsapp_number"),
-            _text(body, "app_password"),
+            _number(body),
+            _text(body, "app_password") or _text(body, "password"),
         )
     except auth_flow.AuthFlowError as e:
         return _flow_error(e)
 
-    return JSONResponse({"ok": True, "client_id": client.client_id})
+    return JSONResponse({"ok": True, **auth_flow.account_payload(user)}, headers=_NO_STORE)
 
 
 @router.post("/api/auth/enroll")
 async def api_auth_enroll(request: Request):
+    """Register. Phone number and app password are required; the four Angel
+    One fields are optional, all together or not at all (see
+    :func:`web.auth_flow.enroll`).
+
+    ``password`` here is the Angel One PIN, as it always has been on this
+    endpoint; the app's own password is ``app_password``.
+    """
     body = await _json_object(request)
     if body is None:
         return JSONResponse(_INVALID_BODY, status_code=400)
 
+    app_password = _text(body, "app_password")
     try:
-        view = auth_flow.enroll(
+        # The Angel One login inside sleeps between retries; keep it off the event loop.
+        await asyncio.to_thread(
+            auth_flow.enroll,
             request,
             api_key=_text(body, "api_key"),
             client_id=_text(body, "client_id"),
             password=_text(body, "password"),
             totp_secret=_text(body, "totp_secret"),
             country_code=_text(body, "country_code"),
-            whatsapp_number=_text(body, "whatsapp_number"),
-            app_password=_text(body, "app_password"),
-            app_password_confirm=_text(body, "app_password_confirm"),
+            whatsapp_number=_number(body),
+            app_password=app_password,
+            # Optional for API callers: the confirmation is a form concern.
+            app_password_confirm=_text(body, "app_password_confirm") if "app_password_confirm" in body else app_password,
         )
     except auth_flow.AuthFlowError as e:
         return _flow_error(e)
 
-    return JSONResponse({"ok": True, "client_id": view["angel_client_id"]})
+    user = auth_flow.current_app_user(request)
+    if user is None:  # pragma: no cover - enroll always leaves the request signed in
+        return JSONResponse({"error": "Registration failed. Please try again."}, status_code=500)
+    return JSONResponse({"ok": True, **auth_flow.account_payload(user)}, headers=_NO_STORE)
 
 
 @router.post("/api/auth/logout")

@@ -1,13 +1,14 @@
 """SQLModel tables: ``users`` (with encrypted creds), ``schedules``, ``logs``.
 
-Schema is intentionally small. New columns can be added column-by-column as
-the scheduler grows; full Alembic migrations should be introduced the day the
-schema first changes after this commit.
+Schema changes are Alembic revisions under ``migrations/versions``; see
+``db.engine.init_db`` for how a database is brought to the current revision.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import StrEnum
 
+from sqlalchemy import CheckConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -23,17 +24,54 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class BrokerageStatus(StrEnum):
+    """Where a user's broker link stands. Stored in ``users.brokerage_status``.
+
+    Only ``connected`` unlocks brokerage features. ``pending`` is reserved for a
+    multi-step provider flow; Angel One's login is a single synchronous call,
+    so nothing writes it today.
+    """
+
+    NOT_CONNECTED = "not_connected"
+    PENDING = "pending"
+    CONNECTED = "connected"
+    EXPIRED = "expired"  # stored credentials were rejected by the broker
+    DISCONNECTED = "disconnected"  # the user unlinked; credentials were wiped
+    FAILED = "failed"  # the last attempt to connect was rejected
+
+
+#: The only broker integrated. Derived for API responses, not stored.
+BROKERAGE_PROVIDER = "angel_one"
+
+_BROKERAGE_STATUS_CHECK = "brokerage_status IN ({})".format(
+    ",".join(f"'{s.value}'" for s in BrokerageStatus)
+)
+
+
 class User(SQLModel, table=True):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(_BROKERAGE_STATUS_CHECK, name="ck_users_brokerage_status"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     whatsapp_number: str | None = Field(default=None, index=True, unique=True)
 
-    angel_api_key: str
-    angel_client_id: str = Field(index=True, unique=True)
-    angel_password_encrypted: str
-    angel_totp_secret_encrypted: str
-    angel_access_token: str | None = None
+    # Angel One credentials. All NULL for a user who signed up with a phone
+    # number and password only and has not connected a broker; all set once
+    # ``brokerage_status`` is ``connected``. The API key is Fernet-encrypted
+    # when written by this release; rows written earlier hold it in plaintext,
+    # which ``adminApi.service`` reads transparently.
+    angel_api_key: str | None = None
+    angel_client_id: str | None = Field(default=None, index=True, unique=True)
+    angel_password_encrypted: str | None = None
+    angel_totp_secret_encrypted: str | None = None
+    angel_access_token: str | None = None  # legacy, never written or read
+
+    brokerage_status: str = Field(
+        default=BrokerageStatus.NOT_CONNECTED.value,
+        sa_column_kwargs={"server_default": BrokerageStatus.NOT_CONNECTED.value},
+    )
 
     # scrypt hash of the password used to log into *this* app, from
     # ``db.passwords``. One-way on purpose: unlike the Angel fields above, the

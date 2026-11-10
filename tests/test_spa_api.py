@@ -90,7 +90,7 @@ class Harness:
         self.http = client
         self.service = service
         self.live = live  # sid -> FakeAngelClient, the in-memory broker sessions
-        self.broker = broker  # {"accepts": bool}
+        self.broker = broker  # {"accepts": bool, "reachable": bool}
 
     def bootstrap(self) -> dict:
         res = self.http.get("/api/session/bootstrap")
@@ -130,12 +130,16 @@ def harness():
     def factory():
         return Session(engine)
 
+    from angel_client import BrokerAuthRejected
+
     live: dict[str, FakeAngelClient] = {}
-    broker = {"accepts": True}
+    broker = {"accepts": True, "reachable": True}
 
     def create_session(sid, api_key, client_id, password, totp_secret):
+        if not broker["reachable"]:
+            raise RuntimeError("Connection reset by peer")
         if not broker["accepts"]:
-            raise RuntimeError("Invalid totp")
+            raise BrokerAuthRejected("Invalid totp")
         live[sid] = FakeAngelClient(api_key, client_id, password, totp_secret)
         return live[sid]
 
@@ -204,7 +208,10 @@ def test_enroll_signs_in_and_bootstrap_reports_the_user():
     with harness() as h:
         res = h.http.post("/api/auth/enroll", json=ENROLL)
         assert res.status_code == 200, res.text
-        assert res.json() == {"ok": True, "client_id": "AB1234"}
+        body = res.json()
+        assert body["ok"] is True and body["client_id"] == "AB1234"
+        assert body["brokerage_status"] == "connected"
+        assert body["available_features"] == ["learning", "brokerage"]
 
         me = h.bootstrap()
 
@@ -268,8 +275,14 @@ def test_login_then_logout_round_trip():
             "app_password": GOOD_PASSWORD,
         })
         assert res.status_code == 200, res.text
-        assert res.json() == {"ok": True, "client_id": "AB1234"}
+        body = res.json()
+        assert body["ok"] is True and body["client_id"] == "AB1234"
+        assert body["phone_number"] == NUMBER and body["brokerage_status"] == "connected"
         assert h.bootstrap()["authenticated"] is True
+        # The broker session is built on the first brokerage request, not at login.
+        assert not h.live
+        assert h.http.get("/api/portfolio/positions").status_code == 200
+        assert h.live
 
         res = h.http.post("/api/auth/logout")
         assert res.json() == {"ok": True}
@@ -316,7 +329,10 @@ def test_login_is_throttled_with_retry_after():
     print("ok  repeated failures are throttled with a 429 and Retry-After")
 
 
-def test_login_reports_a_broker_rejection_separately():
+def test_stale_broker_credentials_no_longer_block_login():
+    """Login never contacts the broker. Credentials Angel One now rejects are
+    found on the first brokerage request, which marks the link expired and
+    answers 403 — the user stays signed in and is asked to reconnect."""
     with harness() as h:
         h.enrol_row()
         h.broker["accepts"] = False
@@ -324,10 +340,17 @@ def test_login_reports_a_broker_rejection_separately():
             "country_code": "91", "whatsapp_number": "9876543210",
             "app_password": GOOD_PASSWORD,
         })
+        assert res.status_code == 200, res.text
 
-    assert res.status_code == 502, res.text
-    assert "Angel One rejected the stored credentials" in res.json()["error"]
-    print("ok  a right password with stale broker credentials is a distinct 502")
+        res = h.http.get("/api/portfolio/positions")
+        assert res.status_code == 403, res.text
+        assert res.json()["code"] == "brokerage_reauth_required"
+        me = h.bootstrap()
+
+    assert me["authenticated"] is True, "a broker rejection must not sign the user out"
+    assert me["brokerage_status"] == "expired"
+    assert me["available_features"] == ["learning"]
+    print("ok  stale broker credentials: login works, brokerage answers 403 and the link expires")
 
 
 def test_malformed_bodies_are_refused():

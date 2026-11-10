@@ -61,6 +61,8 @@ torch==2.14.0
 
 # ── Persistence and scheduling ─────────────────────────────────────────────
 sqlmodel==0.0.47
+# Schema migrations (migrations/, alembic.ini). db.engine.init_db runs them on startup.
+alembic==1.20.1
 psycopg[binary]==3.3.6
 cryptography==50.0.1
 apscheduler==3.11.3

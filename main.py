@@ -69,6 +69,10 @@ async def _lifespan(_app: Starlette):
 
         init_db()
     except Exception as e:
+        # In production a schema the code does not match breaks every request,
+        # so refuse to start. Locally, carry on without a database.
+        if security_config.is_production():
+            raise
         logger.warning("init_db skipped: %s", e)
 
     scheduler_enabled = os.environ.get("SCHEDULER_ENABLED") == "1"

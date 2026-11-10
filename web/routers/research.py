@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 
@@ -27,7 +27,7 @@ from services.market_data import (
 
 
 from web.dependencies import (
-    require_login,
+    require_brokerage,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,11 +81,9 @@ def _yahoo_unavailable(fundamentals: dict) -> JSONResponse:
 async def api_research_fundamental(
     request: Request,
     symbol: str = Query(...),
+    client=Depends(require_brokerage),
 ):
     """Fetch fundamental analysis for a single stock."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         result = await asyncio.to_thread(get_stock_fundamentals, symbol)
@@ -99,7 +97,7 @@ async def api_research_fundamental(
 
 
 @router.post("/api/research/fundamental/summary")
-async def api_research_fundamental_summary(request: Request):
+async def api_research_fundamental_summary(request: Request, client=Depends(require_brokerage)):
     """Plain-English LLM summary of one stock's fundamentals, for beginners.
 
     The 0-100 score itself is computed in Python and already present on
@@ -108,9 +106,6 @@ async def api_research_fundamental_summary(request: Request):
     with the deployment's own ``OPENROUTER_API_KEY``; callers supply no key and
     cannot choose the model.
     """
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         body = await request.json()
@@ -162,11 +157,9 @@ async def api_research_technical(
     symbol: str = Query(...),
     exchange: str = Query("NSE"),
     days: int = Query(365),
+    client=Depends(require_brokerage),
 ):
     """Fetch technical indicators for a single stock using Angel One candle data."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         sr = search_scrip_cached(client, exchange, scrip_search_key(symbol))
@@ -207,16 +200,13 @@ async def api_research_technical(
 
 
 @router.get("/api/research/peers")
-async def api_research_peers(request: Request, symbol: str = Query(...)):
+async def api_research_peers(request: Request, symbol: str = Query(...), client=Depends(require_brokerage)):
     """Valuation and quality percentiles against the stock's NSE industry peers.
 
     Complements ``/api/research/fundamental``, which grades against absolute
     bands: that says whether a P/E of 28 is high, this says whether it is high
     *for this industry*.
     """
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         result = await asyncio.to_thread(get_peer_comparison, symbol)
@@ -227,11 +217,8 @@ async def api_research_peers(request: Request, symbol: str = Query(...)):
 
 
 @router.get("/api/research/estimates")
-async def api_research_estimates(request: Request, symbol: str = Query(...)):
+async def api_research_estimates(request: Request, symbol: str = Query(...), client=Depends(require_brokerage)):
     """Consensus estimates, revision momentum, surprise history and next result date."""
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         result = await asyncio.to_thread(get_estimates, symbol)
@@ -246,6 +233,7 @@ async def api_research_ownership(
     request: Request,
     symbol: str = Query(...),
     days: int = Query(90),
+    client=Depends(require_brokerage),
 ):
     """Delivery trend, bulk and block deals, and insider holding.
 
@@ -253,9 +241,6 @@ async def api_research_ownership(
     omitted: no free source supplies it for NSE tickers, and an absent section
     reads as "nothing to report" when it should read as "not known".
     """
-    client = require_login(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
 
     try:
         result = await asyncio.to_thread(get_ownership, symbol, lookback_days=days)

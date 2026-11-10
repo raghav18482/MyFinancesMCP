@@ -1,7 +1,20 @@
 """Request-scoped helpers shared by every router.
 
-Session lookup, the login guard, template context and premium-user resolution
+Session lookup, the login guards, template context and premium-user resolution
 live here so no router has to reach into another router for them.
+
+Two levels of access
+--------------------
+- **App user** (:func:`current_app_user`, :func:`require_app_user`): a signed
+  cookie whose session version still matches an active row. Enough for the
+  account, session and brokerage-connection endpoints. No broker is involved.
+- **Brokerage** (:func:`current_client`, :func:`require_brokerage`): an app user
+  whose ``brokerage_status`` is ``connected``, plus a live Angel One session
+  built from the stored credentials. Every endpoint that shows portfolio, market
+  or research data needs this.
+
+A user without a working broker link is still signed in: they get a 403 that
+says what to do, never a 401 that would sign them out.
 """
 from __future__ import annotations
 
@@ -14,8 +27,9 @@ from fastapi import Request
 from sqlmodel import select
 
 from adminApi import service as admin_service
+from angel_client import BrokerAuthRejected
 from db import get_session
-from db.models import User
+from db.models import BrokerageStatus, User
 from session_manager import sessions
 
 logger = logging.getLogger(__name__)
@@ -109,14 +123,62 @@ def _verified_state(request: Request):
 
 
 
+class BrokerageAccessError(Exception):
+    """Why a request may not use brokerage features, as an HTTP answer.
+
+    Raised by :func:`require_brokerage` and turned into JSON by the handler in
+    :mod:`web.app`: ``{"error", "detail", "code"}``. ``error`` is what the SPA
+    reads, ``detail`` mirrors FastAPI's own errors, and ``code`` lets a client
+    tell "connect a broker" from "reconnect it" from "try again later".
+    """
+
+    def __init__(self, status_code: int, code: str, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+def _not_authenticated() -> BrokerageAccessError:
+    # A fresh instance per raise: a shared one would accumulate tracebacks.
+    return BrokerageAccessError(401, "not_authenticated", "Not authenticated")
+
+CONNECT_BROKERAGE_MESSAGE = "Please connect your brokerage account to access this feature."
+
+
+def _brokerage_error(status: str) -> BrokerageAccessError:
+    if status in (BrokerageStatus.EXPIRED, BrokerageStatus.FAILED, BrokerageStatus.DISCONNECTED):
+        return BrokerageAccessError(
+            403,
+            "brokerage_reauth_required",
+            "Your brokerage connection needs attention. Reconnect your Angel One "
+            "account to access this feature.",
+        )
+    return BrokerageAccessError(403, "brokerage_not_connected", CONNECT_BROKERAGE_MESSAGE)
+
+
+def _drop_broker_session(request: Request) -> None:
+    """Release this request's broker session but keep the user signed in."""
+    from web.session_cleanup import release_session_resources
+
+    sid = request.session.pop("sid", None)
+    if sid:
+        release_session_resources(sid)
+        sessions.remove_session(sid)
+
+
 def current_client(request: Request):
     """The live broker client for this request, rebuilding it if it has expired.
+
+    ``None`` when the request may not use the broker. Callers that need to say
+    *why* use :func:`require_brokerage` instead.
 
     Every call re-checks the cookie against the database (:func:`_verified_state`):
     a logged-out (version bumped), deactivated or deleted user gets ``None``
     here even if their in-memory broker session is still alive, and that
-    session is torn down. The live client must also belong to the user the
-    cookie names.
+    session is torn down. A signed-in user whose broker is not ``connected``
+    also gets ``None`` — but stays signed in: only their broker session goes.
+    The live client must also belong to the user the cookie names.
 
     If the cookie is valid but the 8-hour broker session lapsed (or the server
     restarted), the session is rebuilt from the stored credentials, once per
@@ -124,23 +186,40 @@ def current_client(request: Request):
     within the cookie's lifetime, the cookie alone is enough to read the
     account. ``SESSION_COOKIE_MAX_AGE_SEC`` in :mod:`web.app` bounds that, and
     logging out revokes every copy of the cookie.
+
+    A rebuild that Angel One *rejects* marks the link ``expired`` so the user is
+    asked to reconnect; one that fails for any other reason (the broker is down)
+    changes nothing and is reported as unavailable.
     """
+    try:
+        return _client_or_error(request)
+    except BrokerageAccessError:
+        return None
+
+
+def _client_or_error(request: Request):
     state = _verified_state(request)
     if state is None:
         if request.session.get("sid") or request.session.get("uid"):
             end_web_session(request)
-        return None
+        raise _not_authenticated()
+
+    if state.brokerage_status != BrokerageStatus.CONNECTED or not state.angel_client_id:
+        _drop_broker_session(request)
+        raise _brokerage_error(state.brokerage_status)
 
     sid = session_id(request)
     if sid:
         client = sessions.get_client(sid)
         if client is not None:
             if client.client_id != state.angel_client_id:
-                logger.error("Session %s does not belong to user id=%s; ending it",
-                             sid[:8], state.user_id)
-                end_web_session(request)
-                return None
-            return client
+                # Normal after a reconnect to a different account; never serve
+                # the old account's session for the new link.
+                logger.warning("Session %s does not match user id=%s's broker link; dropping it",
+                               sid[:8], state.user_id)
+                _drop_broker_session(request)
+            else:
+                return client
 
     with sessions.key_lock(f"web-rebuild-{state.user_id}"):
         with _recent_rebuilds_lock:
@@ -155,21 +234,33 @@ def current_client(request: Request):
             creds = admin_service.credentials_for_user(state.user_id)
         except Exception:
             logger.exception("Session rebuild: could not read credentials for uid=%s", state.user_id)
-            creds = None
+            raise BrokerageAccessError(
+                503, "brokerage_unavailable",
+                "Your stored brokerage credentials could not be read. Please try again later.",
+            ) from None
 
         if creds is None:
-            end_web_session(request)
-            return None
+            # Raced with a disconnect, or the row lost its link.
+            raise _brokerage_error(BrokerageStatus.NOT_CONNECTED)
 
         try:
             new_sid, client = start_session(request, creds)
+        except BrokerAuthRejected:
+            # Angel One refused the stored credentials (PIN or TOTP changed). Stop
+            # using them until the user reconnects; without this, every page load
+            # would retry a login that sleeps through 5 attempts before failing.
+            logger.warning("Session rebuild: Angel One rejected stored credentials for uid=%s",
+                           state.user_id)
+            admin_service.set_brokerage_status(
+                state.user_id, BrokerageStatus.EXPIRED, only_if=(BrokerageStatus.CONNECTED,)
+            )
+            raise _brokerage_error(BrokerageStatus.EXPIRED) from None
         except Exception:
-            # Angel One is down or the stored credentials have gone stale. Ending
-            # the session matters more than it looks: without it, every page load
-            # would retry a login that sleeps through 5 attempts before giving up.
             logger.exception("Session rebuild: Angel One login failed for uid=%s", state.user_id)
-            end_web_session(request)
-            return None
+            raise BrokerageAccessError(
+                503, "brokerage_unavailable",
+                "Angel One could not be reached. Please try again in a few minutes.",
+            ) from None
 
         with _recent_rebuilds_lock:
             _recent_rebuilds[state.user_id] = (new_sid, time.time())
@@ -179,12 +270,34 @@ def current_client(request: Request):
 
 
 
+def current_app_user(request: Request) -> User | None:
+    """The signed-in, active ``User`` for this request, broker or not; else None.
+
+    Identity comes from the verified cookie (``uid`` plus a matching session
+    version) — never from request parameters. No broker session is built or
+    required, so this is cheap and works for users who never connected one.
+    """
+    state = _verified_state(request)
+    if state is None:
+        if request.session.get("sid") or request.session.get("uid"):
+            end_web_session(request)
+        return None
+    try:
+        with get_session() as s:
+            user = s.get(User, state.user_id)
+    except Exception:
+        logger.exception("User lookup failed for uid=%s", state.user_id)
+        return None
+    return user if (user and user.is_active) else None
+
+
 def current_user(request: Request) -> User | None:
-    """The signed-in, active ``User`` for this request, or None.
+    """The signed-in, active, broker-connected ``User`` for this request, or None.
 
     Identity comes from the verified cookie (``uid`` plus a matching session
     version) — never from request parameters — and the live broker session must
-    belong to the same user. This is what every user-owned resource is keyed on.
+    belong to the same user. This is what every brokerage resource is keyed on;
+    for anything a user without a broker may do, use :func:`current_app_user`.
     """
     if current_client(request) is None:
         return None
@@ -217,9 +330,27 @@ def ensure_adk_chat_session_id(request: Request, key: str = ADK_CHAT_SESSION_KEY
 def template_context(request: Request, active: str = "") -> dict:
     return {
         "request": request,
-        "logged_in": current_client(request) is not None,
+        "logged_in": current_app_user(request) is not None,
         "active": active,
     }
+
+
+#: Where a signed-in user without a usable broker link is sent from a
+#: server-rendered page. The React app is served at ``web.app.SPA_MOUNT_PATH``.
+CONNECT_BROKERAGE_PAGE = "/app/connect-brokerage"
+
+
+def page_redirect(request: Request):
+    """Where a server-rendered page sends someone who may not see it.
+
+    Signed out goes to the login form; signed in without a connected broker
+    goes to connect one — not back to login, which would loop.
+    """
+    from fastapi.responses import RedirectResponse
+
+    if current_app_user(request) is None:
+        return RedirectResponse("/login", status_code=302)
+    return RedirectResponse(CONNECT_BROKERAGE_PAGE, status_code=302)
 
 
 
@@ -255,12 +386,32 @@ def client_ip(request: Request) -> str:
 
 
 def require_login(request: Request):
-    """The broker client for a logged-in request, or ``None``.
+    """The broker client for a logged-in, connected request, or ``None``.
 
-    Goes through :func:`current_client`, so a user whose 8-hour broker session
-    lapsed mid-visit is reconnected instead of being bounced to the login form.
+    Kept for the server-rendered pages, which redirect rather than answer JSON.
+    API endpoints use :func:`require_brokerage`, which says why access failed.
     """
     return current_client(request)
+
+
+def require_app_user(request: Request) -> User:
+    """FastAPI dependency: the signed-in user, or a 401. No broker needed."""
+    user = current_app_user(request)
+    if user is None:
+        raise _not_authenticated()
+    return user
+
+
+def require_brokerage(request: Request):
+    """FastAPI dependency: the live broker client, or the reason there is none.
+
+    401 when not signed in; 403 ``brokerage_not_connected`` or
+    ``brokerage_reauth_required`` when signed in without a usable broker link;
+    503 ``brokerage_unavailable`` when Angel One cannot be reached. Use it as
+    ``client = Depends(require_brokerage)`` on every endpoint that touches
+    portfolio, market or research data.
+    """
+    return _client_or_error(request)
 
 
 

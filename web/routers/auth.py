@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from db.passwords import MIN_PASSWORD_CHARS
 from services import feedback as feedback_service
 from web import auth_flow, country_codes
-from web.dependencies import current_client, template_context
+from web.dependencies import current_app_user, template_context
 from web.templating import templates
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ router = APIRouter()
 
 @router.get("/", response_class=HTMLResponse)
 async def landing(request: Request):
-    if current_client(request):
+    if current_app_user(request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = template_context(request)
     try:
@@ -83,7 +83,7 @@ def _phone_context(ctx: dict, dial_code: str = "", national_number: str = "") ->
 
 @router.get("/enroll", response_class=HTMLResponse)
 async def enroll_page(request: Request):
-    if current_client(request):
+    if current_app_user(request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = template_context(request, "enroll")
     ctx["min_password_chars"] = MIN_PASSWORD_CHARS
@@ -141,7 +141,7 @@ async def enroll_submit(
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    if current_client(request):
+    if current_app_user(request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = _phone_context(template_context(request))
     return templates.TemplateResponse(request, "login.html", ctx)

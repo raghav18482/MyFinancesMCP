@@ -270,18 +270,23 @@ def _enrol(service, **overrides):
     return service.create_user(**kwargs)
 
 
-def test_login_returns_the_decrypted_credentials():
+def test_login_returns_the_user_and_credentials_decrypt_for_rebuilds():
+    """Login checks the app password only; the broker credentials are read,
+    decrypted, on the separate rebuild path."""
     def check(service):
         view = _enrol(service)
-        creds = service.credentials_for_login("+919876543210", GOOD_PASSWORD)
+        user = service.authenticate_app_user("+919876543210", GOOD_PASSWORD)
 
-        assert creds is not None, "the right password did not log in"
-        assert creds.user_id == view["id"]
-        assert creds.api_key == "APIKEY123"
+        assert user is not None, "the right password did not log in"
+        assert user.id == view["id"]
+        assert user.brokerage_status == "connected"
+
+        creds = service.credentials_for_user(view["id"])
+        assert creds.api_key == "APIKEY123", "the API key must come back decrypted"
         assert creds.client_id == "AB1234"
         assert creds.password == "4321", "the PIN must come back decrypted"
         assert creds.totp_secret == "JBSWY3DPEHPK3PXP"
-        print("ok  login returns the four credentials, decrypted")
+        print("ok  login returns the user; the four credentials decrypt for a rebuild")
 
     _with_service(check)
 
@@ -300,6 +305,7 @@ def test_stored_row_holds_no_plaintext_secrets():
 
         assert row.angel_password_encrypted != "4321"
         assert row.angel_totp_secret_encrypted != "JBSWY3DPEHPK3PXP"
+        assert row.angel_api_key != "APIKEY123", "the API key is encrypted at rest too"
         assert GOOD_PASSWORD not in (row.app_password_hash or "")
         assert row.app_password_hash.startswith("scrypt$")
         print("ok  the stored row holds no plaintext PIN, TOTP secret or password")
@@ -311,10 +317,10 @@ def test_login_is_refused_for_every_kind_of_miss():
     def check(service):
         _enrol(service)
 
-        assert service.credentials_for_login("+919876543210", WRONG_PASSWORD) is None
-        assert service.credentials_for_login("+910000000000", GOOD_PASSWORD) is None
-        assert service.credentials_for_login("", GOOD_PASSWORD) is None
-        assert service.credentials_for_login("+919876543210", "") is None
+        assert service.authenticate_app_user("+919876543210", WRONG_PASSWORD) is None
+        assert service.authenticate_app_user("+910000000000", GOOD_PASSWORD) is None
+        assert service.authenticate_app_user("", GOOD_PASSWORD) is None
+        assert service.authenticate_app_user("+919876543210", "") is None
         print("ok  wrong password, unknown number and blanks are all refused")
 
     _with_service(check)
@@ -325,8 +331,8 @@ def test_premium_row_without_an_app_password_cannot_log_in():
     fail closed rather than letting anyone in with any password."""
     def check(service):
         _enrol(service, app_password=None)
-        assert service.credentials_for_login("+919876543210", GOOD_PASSWORD) is None
-        assert service.credentials_for_login("+919876543210", "") is None
+        assert service.authenticate_app_user("+919876543210", GOOD_PASSWORD) is None
+        assert service.authenticate_app_user("+919876543210", "") is None
         print("ok  a row with no app password cannot be logged into")
 
     _with_service(check)
@@ -337,11 +343,11 @@ def test_re_enrolling_sets_a_password_on_an_existing_row():
     credentials, then patches an app password in."""
     def check(service):
         view = _enrol(service, app_password=None)
-        assert service.credentials_for_login("+919876543210", GOOD_PASSWORD) is None
+        assert service.authenticate_app_user("+919876543210", GOOD_PASSWORD) is None
 
         service.update_user(view["id"], app_password=GOOD_PASSWORD)
-        creds = service.credentials_for_login("+919876543210", GOOD_PASSWORD)
-        assert creds is not None and creds.user_id == view["id"]
+        user = service.authenticate_app_user("+919876543210", GOOD_PASSWORD)
+        assert user is not None and user.id == view["id"]
         print("ok  re-enrolling sets a password on an existing row")
 
     _with_service(check)
@@ -352,7 +358,7 @@ def test_deactivated_user_cannot_log_in():
         view = _enrol(service)
         service.deactivate_user(view["id"])
 
-        assert service.credentials_for_login("+919876543210", GOOD_PASSWORD) is None
+        assert service.authenticate_app_user("+919876543210", GOOD_PASSWORD) is None
         assert service.credentials_for_user(view["id"]) is None
         print("ok  a deactivated user cannot log in or be rebuilt from a cookie")
 

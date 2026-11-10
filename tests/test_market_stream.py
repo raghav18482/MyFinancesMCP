@@ -37,9 +37,18 @@ class _FakeClient:
         return {"status": True, "data": []}
 
 
+_current = {"client": None}
+
+
 def _authenticate_as(client):
-    market.require_login = lambda request: client
+    """Stand in for ``Depends(require_brokerage)``, which FastAPI resolves
+    before the handler runs; calling the handler directly means passing it."""
+    _current["client"] = client
     market.session_id = lambda request: "sess-test"
+
+
+def _stream(**kwargs):
+    return market.api_market_stream(client=_current["client"], **kwargs)
 
 
 async def _read_frames(response, count, timeout=10.0):
@@ -65,20 +74,30 @@ def _parse(frame):
 
 
 def test_requires_authentication():
-    async def run():
-        market.require_login = lambda request: None
-        resp = await market.api_market_stream(
-            request=object(), symbols="RELIANCE", tokens="", exchange="NSE"
-        )
-        assert resp.status_code == 401
+    """The route resolves ``require_brokerage`` before running, and that
+    refuses a request with no signed-in user."""
+    import inspect
 
-    asyncio.run(run())
+    from web.dependencies import BrokerageAccessError, require_brokerage
+
+    param = inspect.signature(market.api_market_stream).parameters["client"]
+    assert param.default.dependency is require_brokerage
+
+    class _Anon:
+        session: dict = {}
+
+    try:
+        require_brokerage(_Anon())
+    except BrokerageAccessError as e:
+        assert e.status_code == 401
+    else:
+        raise AssertionError("an anonymous request was given a broker client")
 
 
 def test_rejects_empty_symbol_list():
     async def run():
         _authenticate_as(_FakeClient())
-        resp = await market.api_market_stream(
+        resp = await _stream(
             request=object(), symbols="", tokens="", exchange="NSE"
         )
         assert resp.status_code == 400
@@ -89,7 +108,7 @@ def test_rejects_empty_symbol_list():
 def test_unresolvable_symbol_returns_404():
     async def run():
         _authenticate_as(_FakeClient())
-        resp = await market.api_market_stream(
+        resp = await _stream(
             request=object(), symbols="NOSUCHSYM", tokens="", exchange="NSE"
         )
         assert resp.status_code == 404
@@ -100,7 +119,7 @@ def test_unresolvable_symbol_returns_404():
 def test_sse_headers_disable_buffering():
     async def run():
         _authenticate_as(_FakeClient())
-        resp = await market.api_market_stream(
+        resp = await _stream(
             request=object(), symbols="RELIANCE", tokens="2885", exchange="NSE"
         )
         assert resp.media_type == "text/event-stream"
@@ -116,7 +135,7 @@ def test_sse_headers_disable_buffering():
 def test_handshake_then_tick_frames():
     async def run():
         _authenticate_as(_FakeClient())
-        resp = await market.api_market_stream(
+        resp = await _stream(
             request=object(), symbols="RELIANCE", tokens="2885", exchange="NSE"
         )
         frames = await _read_frames(resp, 4)
@@ -140,7 +159,7 @@ def test_symbol_count_is_capped():
     async def run():
         _authenticate_as(_FakeClient())
         n = 30
-        resp = await market.api_market_stream(
+        resp = await _stream(
             request=object(),
             symbols=",".join(f"SYM{i}" for i in range(n)),
             tokens=",".join(str(1000 + i) for i in range(n)),

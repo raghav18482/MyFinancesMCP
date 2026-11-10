@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 
@@ -16,8 +16,8 @@ from services.risk_profile import risk_profiles, build_profile_from_dict, load_p
 from services.trade_proposals import proposal_store
 
 from web.dependencies import (
-    current_client,
     current_user,
+    require_brokerage,
     session_id,
 )
 
@@ -31,11 +31,8 @@ router = APIRouter()
 
 
 @router.get("/api/trading/profile")
-async def api_trading_profile_get(request: Request):
-    client = current_client(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    # Read after current_client, which may have rebuilt the session under a new sid.
+async def api_trading_profile_get(request: Request, client=Depends(require_brokerage)):
+    # Read after require_brokerage, which may have rebuilt the session under a new sid.
     sid = session_id(request)
     profile = risk_profiles.get(sid)
     if profile is None:
@@ -51,11 +48,8 @@ async def api_trading_profile_get(request: Request):
 
 
 @router.post("/api/trading/profile")
-async def api_trading_profile_set(request: Request):
-    client = current_client(request)
-    if client is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
-    # Read after current_client, which may have rebuilt the session under a new sid.
+async def api_trading_profile_set(request: Request, client=Depends(require_brokerage)):
+    # Read after require_brokerage, which may have rebuilt the session under a new sid.
     sid = session_id(request)
     try:
         body = await request.json()
@@ -74,9 +68,7 @@ async def api_trading_profile_set(request: Request):
 
 
 @router.get("/api/trading/proposals")
-async def api_trading_proposals(request: Request):
-    if current_client(request) is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_trading_proposals(request: Request, _client=Depends(require_brokerage)):
     sid = session_id(request)
     proposals = proposal_store.list_for_session(sid)
     return JSONResponse({
@@ -88,14 +80,12 @@ async def api_trading_proposals(request: Request):
 
 
 @router.get("/api/trading/compliance")
-async def api_trading_compliance(request: Request):
+async def api_trading_compliance(request: Request, _client=Depends(require_brokerage)):
     """Which mandate ruleset is in force, and whether it is still the template.
 
     Surfaced so the UI can warn that the shipped limits are placeholders rather
     than letting them look authoritative.
     """
-    if current_client(request) is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
         return JSONResponse(compliance.ruleset_info())
     except Exception as e:
@@ -104,14 +94,12 @@ async def api_trading_compliance(request: Request):
 
 
 @router.get("/api/trading/decisions")
-async def api_trading_decisions(request: Request):
+async def api_trading_decisions(request: Request, _client=Depends(require_brokerage)):
     """The signed-in user's own decision records, newest first.
 
     Only rows owned by this user are returned. Records with unknown ownership
     are never shown to anyone here; there is no admin audit view.
     """
-    if current_client(request) is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
     user = current_user(request)
     if user is None:
         return JSONResponse({"decisions": []})
@@ -130,9 +118,7 @@ async def api_trading_decisions(request: Request):
 
 
 @router.post("/api/trading/proposals/{proposal_id}/reject")
-async def api_trading_reject(request: Request, proposal_id: str):
-    if current_client(request) is None:
-        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+async def api_trading_reject(request: Request, proposal_id: str, _client=Depends(require_brokerage)):
     sid = session_id(request)
     try:
         proposal = proposal_store.reject(sid, proposal_id)

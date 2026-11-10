@@ -244,6 +244,8 @@ def test_logout_releases_runners_and_caches():
 
     with harness() as h:
         a = h.login("A")
+        # Login no longer opens a broker session; the first brokerage request does.
+        assert a.get("/api/portfolio/positions").status_code == 200
         (sid,) = _live_sids()
         registry._runners[(sid, "finance", False)] = object()
         portfolio_service._portfolio_cache[sid] = (0.0, {"owner": "AA1111"})
